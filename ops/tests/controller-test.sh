@@ -84,7 +84,8 @@ controller="$repo_root/ops/deploy-controller.sh"
 sha1="$(git -C "$work" rev-parse HEAD)"
 PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" "$controller" deploy "$sha1"
 [[ "$(readlink "$app_root/current")" == "$app_root/releases/$sha1" ]]
-[[ -L "$app_root/current" && -f "$app_root/shared/backups"/*.tar.gz ]]
+[[ -L "$app_root/current" ]]
+find "$app_root/shared/backups" -maxdepth 1 -type f -name '*.tar.gz' -print -quit | grep -q .
 PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" "$controller" deploy "$sha1"
 
 printf 'second\n' >"$work/marker"
