@@ -1,0 +1,30 @@
+{
+	email {$SSL_EMAIL:dev@example.invalid}
+	log {
+		level INFO
+		format json
+	}
+}
+
+(common_proxy) {
+	encode zstd gzip
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+}
+
+{$NEW_API_SITE:http://newapi.localhost} {
+	import common_proxy
+	reverse_proxy new-api:3000 {
+		flush_interval -1
+	}
+}
+
+{$CLIPROXY_SITE:http://cpa.localhost} {
+	import common_proxy
+	reverse_proxy cliproxy:8317 {
+		flush_interval -1
+	}
+}

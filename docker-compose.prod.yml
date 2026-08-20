@@ -1,0 +1,42 @@
+services:
+  caddy:
+    ports:
+      - "80:80"
+      - "443:443/tcp"
+      - "443:443/udp"
+    environment:
+      NEW_API_SITE: ${NEW_API_SITE:?NEW_API_SITE must be set in .env.production}
+      CLIPROXY_SITE: ${CLIPROXY_SITE:?CLIPROXY_SITE must be set in .env.production}
+      SSL_EMAIL: ${SSL_EMAIL:?SSL_EMAIL must be set in .env.production}
+
+  new-api:
+    environment:
+      SESSION_SECRET: ${NEW_API_SESSION_SECRET:?NEW_API_SESSION_SECRET must be set in .env.production}
+      SESSION_COOKIE_SECURE: "true"
+      SESSION_COOKIE_TRUSTED_URL: ${SESSION_COOKIE_TRUSTED_URL:?SESSION_COOKIE_TRUSTED_URL must be set in .env.production}
+
+  cliproxy:
+    environment:
+      MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?CLIPROXY_MANAGEMENT_KEY must be set in .env.production}
+    ports:
+      - "127.0.0.1:8085:8085"
+      - "127.0.0.1:1455:1455"
+      - "127.0.0.1:54545:54545"
+      - "127.0.0.1:51121:51121"
+
+configs:
+  cliproxy_config_seed:
+    content: |
+      host: ""
+      port: 8317
+      auth-dir: "/runtime/auths"
+      api-keys:
+        - "${CLIPROXY_API_KEY:?CLIPROXY_API_KEY must be set in .env.production}"
+      debug: false
+      remote-management:
+        allow-remote: true
+        secret-key: "${CLIPROXY_MANAGEMENT_KEY:?CLIPROXY_MANAGEMENT_KEY must be set in .env.production}"
+        disable-control-panel: false
+      logging-to-file: true
+      logs-max-total-size-mb: 100
+      error-logs-max-files: 10

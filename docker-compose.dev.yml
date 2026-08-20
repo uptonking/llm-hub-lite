@@ -1,0 +1,15 @@
+services:
+  caddy:
+    ports:
+      - "127.0.0.1:${DEV_HTTP_PORT:-4080}:80"
+    environment:
+      NEW_API_SITE: http://newapi.localhost
+      CLIPROXY_SITE: http://cpa.localhost
+      SSL_EMAIL: dev@example.invalid
+
+  cliproxy:
+    ports:
+      - "127.0.0.1:8085:8085"
+      - "127.0.0.1:1455:1455"
+      - "127.0.0.1:54545:54545"
+      - "127.0.0.1:51121:51121"
