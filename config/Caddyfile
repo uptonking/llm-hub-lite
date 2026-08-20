@@ -28,3 +28,8 @@
 		flush_interval -1
 	}
 }
+
+{$WOODPECKER_SITE:http://ci.localhost} {
+	import common_proxy
+	reverse_proxy woodpecker-server:8000
+}

@@ -36,20 +36,32 @@ read_env_value() {
 }
 
 if [[ "$mode" == prod ]]; then
-  for key in DOMAIN_NAME SSL_EMAIL NEW_API_SITE CLIPROXY_SITE SESSION_COOKIE_TRUSTED_URL DATA_ROOT NEW_API_SESSION_SECRET CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY; do
+  for key in DOMAIN_NAME SSL_EMAIL NEW_API_SITE CLIPROXY_SITE WOODPECKER_SITE SESSION_COOKIE_TRUSTED_URL DATA_ROOT NEW_API_SESSION_SECRET CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY; do
     value="$(read_env_value "$key")"
     if [[ -z "$value" || "$value" == replace-with-* || "$value" == example.com || "$value" == admin@example.com || "$value" == ./data/dev || "$value" == https://newapi.example.com || "$value" == https://cpa.example.com || "$value" == https://newapi.localhost || "$value" == https://cpa.localhost || "$value" == https://*example.invalid ]]; then
       printf '%s must be set to a real value in %s\n' "$key" "$env_file" >&2
       exit 1
     fi
   done
-  for key in NEW_API_SITE CLIPROXY_SITE SESSION_COOKIE_TRUSTED_URL; do
+  for key in NEW_API_SITE CLIPROXY_SITE WOODPECKER_SITE SESSION_COOKIE_TRUSTED_URL; do
     value="$(read_env_value "$key")"
     if [[ "$value" != https://* ]]; then
       printf '%s must start with https:// in %s\n' "$key" "$env_file" >&2
       exit 1
     fi
   done
+  for key in CADDY_IMAGE NEW_API_IMAGE CLIPROXY_IMAGE; do
+    value="$(read_env_value "$key")"
+    if [[ ! "$value" =~ @sha256:[0-9a-f]{64}$ ]]; then
+      printf '%s must use an immutable sha256 digest in %s\n' "$key" "$env_file" >&2
+      exit 1
+    fi
+  done
+  data_root="$(read_env_value DATA_ROOT)"
+  if [[ "$data_root" != /* ]]; then
+    printf 'DATA_ROOT must be an absolute path in %s\n' "$env_file" >&2
+    exit 1
+  fi
 fi
 
 compose=(docker compose --env-file "$env_file" -f "$script_dir/docker-compose.yml" -f "$script_dir/$overlay")

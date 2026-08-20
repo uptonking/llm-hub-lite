@@ -1,0 +1,27 @@
+when:
+  - event: push
+    branch: main
+
+labels:
+  target: production
+  repo: uptonking/llm-hub-lite
+
+concurrency:
+  limit: 1
+  group: production
+
+steps:
+  - name: validate
+    image: llm-hub-lite/deploy-runner:0.1.0
+    commands:
+      - docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+
+  - name: deploy
+    image: llm-hub-lite/deploy-runner:0.1.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite
+      - /etc/llm-hub-lite/deploy.env:/etc/llm-hub-lite/deploy.env:ro
+      - /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro
+    commands:
+      - /usr/local/bin/deploy-controller deploy "$CI_COMMIT_SHA"

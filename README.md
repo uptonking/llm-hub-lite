@@ -11,9 +11,9 @@ The same stack supports HTTP-only local development and automatic HTTPS.
 | New API | LLM aggregation, relay, and administration | 3000 |
 | CLIProxyAPI | OpenAI/Gemini/Claude/Codex-compatible proxy | 8317 |
 
-New API uses SQLite by default. Its database is stored under the selected `DATA_ROOT` (development defaults to `data/dev`, production to `data/prod`). 
+New API uses SQLite by default. Its database is stored under the selected `DATA_ROOT` (development defaults to `data/dev`; production should use an absolute shared path such as `/opt/apps/llm-hub-lite/shared/data/prod`).
 
-Development and production use separate runtime roots (`data/dev` and `data/prod`). This prevents a local database, certificate cache, or CLIProxy credential file from being reused accidentally.
+Development and production use separate runtime roots. Production keeps its runtime root and environment file outside Git release directories, preventing a local database, certificate cache, or CLIProxy credential file from being reused accidentally.
 
 The application containers are never published directly. Caddy is the only public entry point. CLIProxyAPI's OAuth callback listeners are bound to the server loopback interface and are not internet-facing.
 
@@ -21,7 +21,7 @@ The application containers are never published directly. Caddy is the only publi
 
 - Docker Engine and Docker Compose v2
 - A Docker network named `shared_network` (the helper script creates it when absent)
-- For production: DNS records for `newapi.<your-domain>` and `cpa.<your-domain>` pointing to the server
+- For production: DNS records for `newapi.<your-domain>`, `cpa.<your-domain>`, and optionally `ci.<your-domain>` pointing to the server
 
 ## Local development
 
@@ -57,10 +57,11 @@ Set the complete HTTPS site addresses in the production environment file:
 
 - `NEW_API_SITE=https://newapi.<DOMAIN_NAME>` -> New API
 - `CLIPROXY_SITE=https://cpa.<DOMAIN_NAME>` -> CLIProxyAPI
+- `WOODPECKER_SITE=https://ci.<DOMAIN_NAME>` -> Woodpecker, when enabled
 
-Caddy stores ACME certificates and state under `data/prod/caddy`. Keep that directory in backups. `SSL_EMAIL`, `NEW_API_SESSION_SECRET`, `CLIPROXY_API_KEY`, `CLIPROXY_MANAGEMENT_KEY`, `NEW_API_SITE`, `CLIPROXY_SITE`, `SESSION_COOKIE_TRUSTED_URL`, and `DATA_ROOT` are required by the production helper. Production site and trusted-origin values must use `https://`.
+Caddy stores ACME certificates and state under the configured production data root. Keep that directory in backups. `SSL_EMAIL`, `NEW_API_SESSION_SECRET`, `CLIPROXY_API_KEY`, `CLIPROXY_MANAGEMENT_KEY`, `NEW_API_SITE`, `CLIPROXY_SITE`, `WOODPECKER_SITE`, `SESSION_COOKIE_TRUSTED_URL`, and `DATA_ROOT` are required by the production helper. Production site and trusted-origin values must use `https://`, and `DATA_ROOT` must be absolute.
 
-The CLIProxyAPI management panel is protected by its management key. The latest CLIProxyAPI also writes management changes back to its configuration, so the generated runtime config is persisted at `data/prod/cliproxy/config.yaml`. `CLIPROXY_MANAGEMENT_KEY` is supplied through the upstream `MANAGEMENT_PASSWORD` environment override and therefore takes effect after container recreation. `CLIPROXY_API_KEY` seeds a new config only; rotate it later through the management API or replace the persisted config only after taking a backup.
+The CLIProxyAPI management panel is protected by its management key. The latest CLIProxyAPI also writes management changes back to its configuration, so the generated runtime config is persisted under `${DATA_ROOT}/cliproxy/config.yaml`. `CLIPROXY_MANAGEMENT_KEY` is supplied through the upstream `MANAGEMENT_PASSWORD` environment override and therefore takes effect after container recreation. `CLIPROXY_API_KEY` seeds a new config only; rotate it later through the management API or replace the persisted config only after taking a backup.
 
 ## CLIProxyAPI OAuth
 
@@ -98,15 +99,69 @@ The mode argument is always explicit:
 ./restart-docker.sh dev
 ```
 
-Images default to the latest upstream tags. Override `CADDY_IMAGE`, `NEW_API_IMAGE`, or `CLIPROXY_IMAGE` in the selected environment file when a specific image reference is required.
+Development images may use upstream tags. Production should set `CADDY_IMAGE`, `NEW_API_IMAGE`, and `CLIPROXY_IMAGE` to approved versioned references or immutable digests. Production validation rejects `:latest`; `update-docker.sh` remains a manual image-upgrade helper and is not called by the Woodpecker source deployment workflow.
+
+## Woodpecker deployment
+
+The repository includes a non-secret Woodpecker workflow in `.woodpecker/deploy.yml`. It deploys only successful `push` events on `main`, serializes production deployments, and passes the exact commit SHA to a VPS-side release controller. Pull requests are validated by GitHub Actions in `.github/workflows/validate.yml` and never receive production access.
+
+The Woodpecker control plane is a separate Compose project under `ops/woodpecker`. It is exposed through the existing Caddy instance at `WOODPECKER_SITE`, persists its database under `/opt/platform/woodpecker`, and uses a dedicated agent labelled `target=production` and `repo=uptonking/llm-hub-lite`.
+
+The production Woodpecker project must have pull-request and fork events disabled and must be marked trusted before the deployment workflow can mount the Docker socket. Docker socket access is root-equivalent on the VPS, so the agent must not run unrelated repositories.
+
+The first VPS installation is reproducible and interactive. Create a GitHub
+OAuth App first with callback URL `https://ci.aichorage.de/authorize`, then run
+the bootstrap script as root on the VPS:
+
+```bash
+scp ops/bootstrap-vps.sh root@166.88.160.139:/root/llm-hub-lite-bootstrap.sh
+ssh -t root@166.88.160.139 /root/llm-hub-lite-bootstrap.sh
+```
+
+The script prompts for OAuth credentials without echoing the secret, generates
+application and agent credentials, enables the firewall, installs the
+controller, performs the initial exact-SHA deployment, and starts Woodpecker.
+It preserves existing host environment files on repeated runs. Production
+credentials live only under `/opt/apps/llm-hub-lite/shared` and
+`/opt/platform/woodpecker`; they are never copied into Git releases.
+
+After bootstrap, activate `uptonking/llm-hub-lite`, disable pull-request and
+fork events, and mark only this repository trusted. Releases are stored under
+`/opt/apps/llm-hub-lite/releases/<commit-sha>` with `current` and `previous`
+symlinks.
+
+The controller performs Compose/Caddy validation, backs up persistent data,
+starts the candidate release, and runs remote smoke checks. A failed deployment
+remains available for inspection and is not automatically reverted. Roll back
+through the audited manual Woodpecker workflow and set `ROLLBACK_TARGET` to
+`previous` or an existing full commit SHA. The CLI equivalent is:
+
+```bash
+woodpecker-cli pipeline start uptonking/llm-hub-lite last \
+  --param ROLLBACK_TARGET=previous
+```
+
+SSH rollback remains an emergency recovery path only. Normal operation is
+GitHub push -> Woodpecker -> deployment controller.
+
+Woodpecker upgrades are explicit and backed up first:
+
+```bash
+ops/woodpecker/manage.sh upgrade
+```
+
+Change only reviewed digest pins in `/opt/platform/woodpecker/.env` or the
+application production environment. Never replace production pins with mutable
+tags.
 
 ## Persistence and backups
 
 Back up these paths:
 
-- `data/dev/new-api` or `data/prod/new-api` - SQLite database and New API data
-- `data/dev/cliproxy` or `data/prod/cliproxy` - writable CLIProxyAPI configuration, auth files, logs, and plugins
-- `data/dev/caddy` or `data/prod/caddy`, plus the matching `caddy-config` directory - certificates and Caddy state
+- the selected runtime root's `new-api` directory - SQLite database and New API data
+- the selected runtime root's `cliproxy` directory - writable CLIProxyAPI configuration, auth files, logs, and plugins
+- the selected runtime root's `caddy` and `caddy-config` directories - certificates and Caddy state
+- `/opt/platform/woodpecker/data` - Woodpecker's SQLite database and repository state
 
 Existing data under the old top-level `data/` directory is not migrated automatically; back it up and copy it deliberately if it is needed.
 

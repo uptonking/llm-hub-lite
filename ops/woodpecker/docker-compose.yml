@@ -1,0 +1,52 @@
+name: woodpecker
+
+services:
+  woodpecker-server:
+    image: ${WOODPECKER_SERVER_IMAGE:?WOODPECKER_SERVER_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    expose:
+      - "8000"
+      - "9000"
+    volumes:
+      - ${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker/data}:/var/lib/woodpecker
+    environment:
+      WOODPECKER_OPEN: ${WOODPECKER_OPEN:-false}
+      WOODPECKER_ADMIN: ${WOODPECKER_ADMIN:?WOODPECKER_ADMIN must be set}
+      WOODPECKER_HOST: ${WOODPECKER_HOST:?WOODPECKER_HOST must be set}
+      WOODPECKER_GITHUB: "true"
+      WOODPECKER_GITHUB_CLIENT: ${WOODPECKER_GITHUB_CLIENT:?WOODPECKER_GITHUB_CLIENT must be set}
+      WOODPECKER_GITHUB_SECRET: ${WOODPECKER_GITHUB_SECRET:?WOODPECKER_GITHUB_SECRET must be set}
+      WOODPECKER_AGENT_SECRET: ${WOODPECKER_AGENT_SECRET:?WOODPECKER_AGENT_SECRET must be set}
+      WOODPECKER_REPO_OWNERS: ${WOODPECKER_REPO_OWNERS:?WOODPECKER_REPO_OWNERS must be set}
+      WOODPECKER_SERVER_ADDR: 0.0.0.0:8000
+      WOODPECKER_GRPC_ADDR: 0.0.0.0:9000
+      WOODPECKER_LOG_LEVEL: ${WOODPECKER_LOG_LEVEL:-info}
+    networks:
+      - woodpecker
+      - shared_network
+
+  woodpecker-agent:
+    image: ${WOODPECKER_AGENT_IMAGE:?WOODPECKER_AGENT_IMAGE must be digest-pinned}
+    command: agent
+    restart: unless-stopped
+    depends_on:
+      woodpecker-server:
+        condition: service_started
+    volumes:
+      - ${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker/agent}:/etc/woodpecker
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WOODPECKER_SERVER: woodpecker-server:9000
+      WOODPECKER_AGENT_SECRET: ${WOODPECKER_AGENT_SECRET:?WOODPECKER_AGENT_SECRET must be set}
+      WOODPECKER_MAX_WORKFLOWS: ${WOODPECKER_MAX_WORKFLOWS:-1}
+      WOODPECKER_AGENT_LABELS: ${WOODPECKER_AGENT_LABELS:?WOODPECKER_AGENT_LABELS must be set}
+      WOODPECKER_LOG_LEVEL: ${WOODPECKER_LOG_LEVEL:-info}
+    networks:
+      - woodpecker
+
+networks:
+  woodpecker:
+    driver: bridge
+  shared_network:
+    name: ${SHARED_NETWORK_NAME:-shared_network}
+    external: true

@@ -1,0 +1,45 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check shell syntax
+        run: bash -n stack.sh restart-docker.sh update-docker.sh caddy-reload.sh ops/deploy-controller.sh
+
+      - name: Validate Compose model
+        run: >-
+          docker compose
+          --env-file .env.production.example
+          -f docker-compose.yml
+          -f docker-compose.prod.yml
+          config --quiet
+
+      - name: Validate Caddyfile
+        run: >-
+          docker run --rm
+          --env-file .env.production.example
+          -v "$PWD/config:/etc/caddy:ro"
+          caddy:2.10.0@sha256:133b5eb7ef9d42e34756ba206b06d84f4e3eb308044e268e182c2747083f09de
+          caddy
+          validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Lint Woodpecker workflow
+        run: >-
+          docker run --rm
+          -v "$PWD:/work:ro"
+          -w /work
+          woodpeckerci/woodpecker-cli:v3.17.0@sha256:c9710c0ed05d1ac57124cde5c7743166a9449892fc8a6adcc818976f63468d32
+          lint .woodpecker

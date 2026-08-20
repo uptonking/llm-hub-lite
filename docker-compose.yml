@@ -3,11 +3,12 @@ name: llm-hub-lite
 services:
   caddy:
     image: ${CADDY_IMAGE:-caddy:latest}
-    pull_policy: always
+    pull_policy: missing
     restart: unless-stopped
     environment:
       NEW_API_SITE: ${NEW_API_SITE:-http://newapi.localhost}
       CLIPROXY_SITE: ${CLIPROXY_SITE:-http://cpa.localhost}
+      WOODPECKER_SITE: ${WOODPECKER_SITE:-http://ci.localhost}
       SSL_EMAIL: ${SSL_EMAIL:-dev@example.invalid}
     volumes:
       - ${DATA_ROOT:-./data/dev}/caddy:/data
