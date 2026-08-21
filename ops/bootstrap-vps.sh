@@ -35,7 +35,9 @@ docker compose version >/dev/null 2>&1 || die 'Docker Compose v2 is required'
 [[ "$MAIN_BRANCH" =~ ^[A-Za-z0-9._/-]+$ && "$MAIN_BRANCH" != *..* ]] || die 'MAIN_BRANCH contains unsafe characters'
 
 install -d -o root -g root -m 700 "$APP_ROOT/shared/data/prod" "$APP_ROOT/shared/logs" \
-  "$APP_ROOT/releases" "$PLATFORM_ROOT/data" "$PLATFORM_ROOT/agent" "$SOURCE_ROOT"
+  "$APP_ROOT/releases" "$PLATFORM_ROOT/agent" "$SOURCE_ROOT"
+# The distroless server image runs as woodpecker (UID/GID 1000).
+install -d -o 1000 -g 1000 -m 700 "$PLATFORM_ROOT/data"
 
 if [[ ! -d "$SOURCE_ROOT/.git" ]]; then
   rmdir "$SOURCE_ROOT" 2>/dev/null || true
