@@ -5,8 +5,7 @@ date
 mode="${1:-prod}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "$mode" == prod && -x /usr/local/bin/platformctl ]]; then
-  /usr/local/bin/platformctl backup pre-upgrade
-  exec /usr/local/bin/platformctl recover
+  exec /usr/local/bin/platformctl upgrade
 fi
 cd "$script_dir"
 mkdir -p bak

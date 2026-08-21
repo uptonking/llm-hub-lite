@@ -197,6 +197,10 @@ ordering, health-gated Compose startup, and bounded retries make a VPS reboot
 reconcile the complete platform automatically. `platform-health.timer` checks
 and repairs drift every 15 minutes. `platformctl status` and
 `platformctl recover` are the primary diagnostics/recovery commands.
+`restart-docker.sh prod` performs this non-disruptive reconciliation;
+`update-docker.sh prod` creates a pre-upgrade snapshot, pulls the reviewed
+digest pins, and reconciles the platform. Use `platformctl restart <project>`
+only when an intentional container restart or recreation is required.
 
 Existing data under the old top-level `data/` directory is not migrated automatically; back it up and copy it deliberately if it is needed.
 
