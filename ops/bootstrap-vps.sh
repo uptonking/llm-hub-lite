@@ -75,18 +75,8 @@ image_env="$CONFIG_ROOT/images.env"
 restic_password="$CONFIG_ROOT/restic-password"
 beszel_credentials="$CONFIG_ROOT/beszel-initial-credentials"
 production_env="$APP_ROOT/shared/.env.prod"
-legacy_production_env="$APP_ROOT/shared/.env.production"
 woodpecker_env="$WOODPECKER_ROOT/.env"
 beszel_env="$BESZEL_ROOT/.env"
-
-if [[ -f "$legacy_production_env" ]]; then
-  if [[ -f "$production_env" ]]; then
-    cmp -s "$legacy_production_env" "$production_env" || die 'both .env.production and .env.prod exist with different contents'
-    rm -f -- "$legacy_production_env"
-  else
-    mv "$legacy_production_env" "$production_env"
-  fi
-fi
 
 if [[ ! -f "$production_env" ]]; then
   {
@@ -170,8 +160,6 @@ for script in deploy-controller platformctl backup-platform restore-platform con
   install -o root -g root -m 700 "$SOURCE_ROOT/ops/$script.sh" "/usr/local/bin/$script"
 done
 
-systemctl disable platform-app.service platform-beszel.service platform-woodpecker.service >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/platform-app.service /etc/systemd/system/platform-beszel.service /etc/systemd/system/platform-woodpecker.service
 install -o root -g root -m 644 "$SOURCE_ROOT"/ops/systemd/* /etc/systemd/system/
 
 cat >"$deploy_env" <<EOF

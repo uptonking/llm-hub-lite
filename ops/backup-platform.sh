@@ -20,10 +20,11 @@ export RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD_FILE="$PASSWORD_FILE"
 if [[ ! -f "$REPO/config" ]]; then restic init >/dev/null; fi
 
 check_space() {
-  local available total percent_guard required
-  available="$(df --output=avail -B1 "$REPO" | tail -n1 | tr -d ' ')"
-  total="$(df --output=size -B1 "$REPO" | tail -n1 | tr -d ' ')"
-  [[ "$available" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] || { printf 'unable to determine backup free space\n' >&2; return 1; }
+  local available available_kb total total_kb percent_guard required
+  read -r total_kb available_kb < <(df -Pk "$REPO" | awk 'NR == 2 { print $2, $4 }')
+  [[ "$available_kb" =~ ^[0-9]+$ && "$total_kb" =~ ^[0-9]+$ ]] || { printf 'unable to determine backup free space\n' >&2; return 1; }
+  available=$((available_kb * 1024))
+  total=$((total_kb * 1024))
   percent_guard=$((total * MIN_FREE_PERCENT / 100))
   required="$MIN_FREE_BYTES"
   (( percent_guard > required )) && required="$percent_guard"

@@ -52,6 +52,11 @@ read_env_value() {
   sed -n "s/^${key}=//p" "$env_file" | tail -n 1
 }
 
+read_image_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "$image_env_file" | tail -n 1
+}
+
 if [[ "$mode" == prod ]]; then
   for key in DOMAIN_NAME SSL_EMAIL NEW_API_SITE CLIPROXY_SITE WOODPECKER_SITE BESZEL_SITE SESSION_COOKIE_TRUSTED_URL DATA_ROOT NEW_API_SESSION_SECRET CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY; do
     value="$(read_env_value "$key")"
@@ -68,9 +73,9 @@ if [[ "$mode" == prod ]]; then
     fi
   done
   for key in CADDY_IMAGE NEW_API_IMAGE CLIPROXY_IMAGE; do
-    value="$(read_env_value "$key")"
+    value="$(read_image_value "$key")"
     if [[ ! "$value" =~ @sha256:[0-9a-f]{64}$ ]]; then
-      printf '%s must use an immutable sha256 digest in %s\n' "$key" "$env_file" >&2
+      printf '%s must use an immutable sha256 digest in %s\n' "$key" "$image_env_file" >&2
       exit 1
     fi
   done
@@ -104,9 +109,7 @@ case "$action" in
     if ! docker network inspect "$network_name" >/dev/null 2>&1; then
       docker network create "$network_name" >/dev/null
     fi
-    if [[ "$action" == restart ]]; then
-      "${compose[@]}" up -d --wait "$@"
-    elif [[ "$action" == up ]]; then
+    if [[ "$action" == up ]]; then
       "${compose[@]}" up -d --wait "$@"
     else
       "${compose[@]}" "$action" "$@"

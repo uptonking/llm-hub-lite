@@ -79,9 +79,9 @@ ssh -t root@166.88.160.139 /root/llm-hub-lite-bootstrap.sh
 ```
 
 Bootstrap is idempotent. It preserves credentials and persistent data, installs
-a checksum-pinned Docker Compose binary, migrates `.env.production` to
-`.env.prod` once when necessary, installs systemd recovery/timers, enrolls
-Beszel, and performs a verified backup.
+a checksum-pinned Docker Compose binary, installs systemd recovery/timers,
+enrolls Beszel, and performs a verified backup. This beta stack intentionally
+has no compatibility layer for legacy filenames or service units.
 
 ## Production operations
 

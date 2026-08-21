@@ -28,6 +28,11 @@ jobs:
       - name: Run platform controller tests
         run: ops/tests/platformctl-test.sh
 
+      - name: Run stack and backup tests
+        run: |
+          ops/tests/stack-test.sh
+          ops/tests/backup-test.sh
+
       - name: Validate Compose model
         run: >-
           docker compose
