@@ -101,9 +101,12 @@ backup_call_log="$tmp/backup-calls.log"
 fail_marker="$tmp/fail-smoke-once"
 export BACKUP_SCRIPT="$fake_bin/backup-platform" BACKUP_CALL_LOG="$backup_call_log" FAIL_MARKER="$fail_marker"
 sha1="$(git -C "$work" rev-parse HEAD)"
+mkdir -p "$app_root/shared/runtime"
+printf 'legacy compose file\n' >"$app_root/shared/runtime/docker-compose.yml"
 PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" STACK_CALL_LOG="$stack_call_log" "$controller" deploy "$sha1"
 [[ "$(readlink "$app_root/current")" == "$app_root/releases/$sha1" ]]
 [[ -L "$app_root/current" ]]
+[[ ! -e "$app_root/shared/runtime/docker-compose.yml" ]]
 grep -q "^$app_root/releases/$sha1|prod validate$" "$stack_call_log"
 grep -q "^$app_root/shared/runtime|prod up --wait --wait-timeout 180$" "$stack_call_log"
 grep -q "^$app_root/shared/runtime|prod reload$" "$stack_call_log"

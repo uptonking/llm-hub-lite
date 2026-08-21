@@ -215,6 +215,7 @@ stage_runtime() {
   [[ -d "$release_dir/config" ]] || die "release is missing Caddy config directory"
 
   mkdir -p "$runtime_config"
+  rm -f -- "$runtime_dir/docker-compose.yml"
   install -m 700 "$release_dir/stack.sh" "$runtime_dir/stack.sh"
   install -m 600 "$release_dir/docker-compose.base.yml" "$runtime_dir/docker-compose.base.yml"
   install -m 600 "$release_dir/docker-compose.prod.yml" "$runtime_dir/docker-compose.prod.yml"

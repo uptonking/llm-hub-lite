@@ -177,6 +177,7 @@ chmod 600 "$deploy_env"
 docker build --pull=false -t llm-hub-lite/deploy-runner:0.2.0 "$SOURCE_ROOT/ops/deploy-runner"
 if [[ "$BOOTSTRAP_SKIP_APP_DEPLOY" == 1 ]]; then
   install -d -m 700 "$APP_ROOT/shared/runtime/config"
+  rm -f -- "$APP_ROOT/shared/runtime/docker-compose.yml"
   install -m 700 "$SOURCE_ROOT/stack.sh" "$APP_ROOT/shared/runtime/stack.sh"
   install -m 600 "$SOURCE_ROOT/docker-compose.base.yml" "$APP_ROOT/shared/runtime/docker-compose.base.yml"
   install -m 600 "$SOURCE_ROOT/docker-compose.prod.yml" "$APP_ROOT/shared/runtime/docker-compose.prod.yml"
