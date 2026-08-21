@@ -13,6 +13,7 @@ sample-**/
 .env.local.*
 .env.development
 .env.production
+.env.prod
 .env.dev
 
 .husky/_

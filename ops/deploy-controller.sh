@@ -17,9 +17,9 @@ source "$config_file"
 : "${APP_ROOT:=/opt/apps/llm-hub-lite}"
 : "${REPO_URL:?REPO_URL must be set in $config_file}"
 : "${MAIN_BRANCH:=main}"
-: "${ENV_FILE:=$APP_ROOT/shared/.env.production}"
+: "${ENV_FILE:=$APP_ROOT/shared/.env.prod}"
+: "${IMAGE_ENV_FILE:=/etc/llm-hub-lite/images.env}"
 : "${RETAIN_RELEASES:=5}"
-: "${BACKUP_RETENTION:=10}"
 : "${DEPLOY_LOG:=$APP_ROOT/shared/logs/deploy.log}"
 : "${PLATFORM_LOCK_FILE:=$APP_ROOT/shared/platform.lock}"
 
@@ -51,6 +51,7 @@ validate_path() {
 
 validate_path APP_ROOT "$APP_ROOT"
 validate_path ENV_FILE "$ENV_FILE"
+validate_path IMAGE_ENV_FILE "$IMAGE_ENV_FILE"
 validate_path DEPLOY_LOG "$DEPLOY_LOG"
 case "$ENV_FILE" in
   "$APP_ROOT"/shared/*) ;;
@@ -63,19 +64,17 @@ esac
 [[ "$MAIN_BRANCH" =~ ^[A-Za-z0-9._/-]+$ && "$MAIN_BRANCH" != *..* ]] || \
   die "MAIN_BRANCH contains unsafe characters"
 [[ "$RETAIN_RELEASES" =~ ^[1-9][0-9]*$ ]] || die "RETAIN_RELEASES must be a positive integer"
-[[ "$BACKUP_RETENTION" =~ ^[1-9][0-9]*$ ]] || die "BACKUP_RETENTION must be a positive integer"
 
 shared_root="$APP_ROOT/shared"
 releases_dir="$APP_ROOT/releases"
 mirror_dir="$shared_root/mirror.git"
-backup_dir="$shared_root/backups"
 runtime_dir="$shared_root/runtime"
 current_link="$APP_ROOT/current"
 previous_link="$APP_ROOT/previous"
 lock_file="$PLATFORM_LOCK_FILE"
 status_file="$shared_root/deploy-status.env"
 
-mkdir -p "$shared_root/logs" "$releases_dir" "$backup_dir"
+mkdir -p "$shared_root/logs" "$releases_dir"
 mkdir -p "$(dirname "$DEPLOY_LOG")"
 exec > >(tee -a "$DEPLOY_LOG") 2>&1
 
@@ -128,7 +127,8 @@ verify_target() {
 }
 
 prepare_release() {
-  local sha="$1" release_dir="$releases_dir/$sha"
+  local sha="$1" release_dir
+  release_dir="$releases_dir/$sha"
   if [[ -e "$release_dir" ]]; then
     [[ -e "$release_dir/.git" ]] || die "release path exists but is not a Git worktree: $release_dir"
     [[ "$(git -C "$release_dir" rev-parse HEAD)" == "$sha" ]] || die "release worktree has the wrong commit"
@@ -140,6 +140,7 @@ prepare_release() {
 
 validate_production_env() {
   [[ -f "$ENV_FILE" ]] || die "missing production environment file: $ENV_FILE"
+  [[ -f "$IMAGE_ENV_FILE" ]] || die "missing production image manifest: $IMAGE_ENV_FILE"
   local data_root
   data_root="$(dotenv_value "$ENV_FILE" DATA_ROOT)"
   validate_path DATA_ROOT "$data_root"
@@ -150,8 +151,8 @@ validate_production_env() {
   mkdir -p "$data_root"
   local image key
   for key in CADDY_IMAGE NEW_API_IMAGE CLIPROXY_IMAGE; do
-    image="$(dotenv_value "$ENV_FILE" "$key")"
-    [[ -n "$image" ]] || die "$key is missing from $ENV_FILE"
+    image="$(dotenv_value "$IMAGE_ENV_FILE" "$key")"
+    [[ -n "$image" ]] || die "$key is missing from $IMAGE_ENV_FILE"
     [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] || \
       die "$key must use an immutable sha256 digest"
   done
@@ -160,10 +161,10 @@ validate_production_env() {
 validate_release() {
   local release_dir="$1"
   validate_production_env
-  STACK_ENV_FILE="$ENV_FILE" "$release_dir/stack.sh" prod validate
+  STACK_ENV_FILE="$ENV_FILE" STACK_IMAGE_ENV_FILE="$IMAGE_ENV_FILE" "$release_dir/stack.sh" prod validate
 
   local caddy_image new_api_site cliproxy_site woodpecker_site beszel_site ssl_email
-  caddy_image="$(dotenv_value "$ENV_FILE" CADDY_IMAGE)"
+  caddy_image="$(dotenv_value "$IMAGE_ENV_FILE" CADDY_IMAGE)"
   new_api_site="$(dotenv_value "$ENV_FILE" NEW_API_SITE)"
   cliproxy_site="$(dotenv_value "$ENV_FILE" CLIPROXY_SITE)"
   woodpecker_site="$(dotenv_value "$ENV_FILE" WOODPECKER_SITE)"
@@ -200,40 +201,22 @@ record_status() {
 }
 
 backup_shared_data() {
-  local data_root backup_file relative_root
-  data_root="$(dotenv_value "$ENV_FILE" DATA_ROOT)"
-  relative_root="${data_root#/}"
-  backup_file="$backup_dir/$(date -u '+%Y%m%dT%H%M%SZ').$$.tar.gz"
-
-  log "Creating persistent-data backup: $backup_file"
-  [[ -d "$data_root" ]] || die "DATA_ROOT does not exist: $data_root"
-  tar -czf "$backup_file" -C / "$relative_root" 2>&1 || \
-    die "persistent-data backup failed"
-
-  local -a backups=()
-  while IFS= read -r path; do
-    [[ -n "$path" ]] && backups+=("$path")
-  done < <(ls -1dt "$backup_dir"/*.tar.gz 2>/dev/null || true)
-  local index=0 path
-  for path in "${backups[@]}"; do
-    index=$((index + 1))
-    if (( index > BACKUP_RETENTION )); then
-      rm -f -- "$path"
-    fi
-  done
+  log "Creating verified Restic snapshot"
+  PLATFORM_LOCK_HELD=1 "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" snapshot "${1:-pre-deploy}" || \
+    die "verified persistent-data backup failed"
 }
 
 stage_runtime() {
   local release_dir="$1" runtime_config="$runtime_dir/config"
   local required
-  for required in stack.sh docker-compose.yml docker-compose.prod.yml; do
+  for required in stack.sh docker-compose.base.yml docker-compose.prod.yml; do
     [[ -f "$release_dir/$required" ]] || die "release is missing runtime file: $required"
   done
   [[ -d "$release_dir/config" ]] || die "release is missing Caddy config directory"
 
   mkdir -p "$runtime_config"
   install -m 700 "$release_dir/stack.sh" "$runtime_dir/stack.sh"
-  install -m 600 "$release_dir/docker-compose.yml" "$runtime_dir/docker-compose.yml"
+  install -m 600 "$release_dir/docker-compose.base.yml" "$runtime_dir/docker-compose.base.yml"
   install -m 600 "$release_dir/docker-compose.prod.yml" "$runtime_dir/docker-compose.prod.yml"
 
   # Keep the bind-mount source stable between releases. Caddy continues serving
@@ -245,9 +228,9 @@ stage_runtime() {
 compose_up() {
   local release_dir="$1"
   stage_runtime "$release_dir"
-  STACK_ENV_FILE="$ENV_FILE" "$runtime_dir/stack.sh" prod up \
+  STACK_ENV_FILE="$ENV_FILE" STACK_IMAGE_ENV_FILE="$IMAGE_ENV_FILE" "$runtime_dir/stack.sh" prod up \
     --wait --wait-timeout 180
-  STACK_ENV_FILE="$ENV_FILE" "$runtime_dir/stack.sh" prod reload
+  STACK_ENV_FILE="$ENV_FILE" STACK_IMAGE_ENV_FILE="$IMAGE_ENV_FILE" "$runtime_dir/stack.sh" prod reload
 }
 
 smoke_check() {
@@ -318,7 +301,17 @@ deploy() {
     log "Deployment succeeded: $sha"
   else
     record_status failed "$sha" "$old_current"
-    log "Deployment failed; current points to $release_dir and previous points to $old_current"
+    if [[ -n "$old_current" ]]; then
+      log "Deployment failed; automatically restoring $old_current"
+      atomic_link "$old_current" "$current_link"
+      if compose_up "$old_current" && smoke_check; then
+        record_status rolled_back "$sha" "$old_current"
+        log "Automatic rollback succeeded; failed release retained at $release_dir"
+      else
+        record_status rollback_failed "$sha" "$old_current"
+        log "ERROR: automatic rollback failed"
+      fi
+    fi
     return 1
   fi
 }
@@ -339,7 +332,7 @@ rollback() {
   exec 9>"$lock_file"
   flock -w 300 9 || die "timed out waiting for another platform operation"
   validate_release "$release_dir"
-  backup_shared_data
+  backup_shared_data pre-rollback
   old_current="$(readlink "$current_link" 2>/dev/null || true)"
   [[ -n "$old_current" ]] && atomic_link "$old_current" "$previous_link"
   atomic_link "$release_dir" "$current_link"

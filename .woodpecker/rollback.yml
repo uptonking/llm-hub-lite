@@ -12,11 +12,17 @@ concurrency:
 
 steps:
   - name: rollback
-    image: llm-hub-lite/deploy-runner:0.1.0
+    image: llm-hub-lite/deploy-runner:0.2.0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite
+      - /opt/platform:/opt/platform
+      - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite
+      - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite
       - /etc/llm-hub-lite/deploy.env:/etc/llm-hub-lite/deploy.env:ro
+      - /etc/llm-hub-lite/images.env:/etc/llm-hub-lite/images.env:ro
+      - /etc/llm-hub-lite/restic-password:/etc/llm-hub-lite/restic-password:ro
       - /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro
+      - /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro
     commands:
       - /usr/local/bin/deploy-controller rollback "$${ROLLBACK_TARGET:-previous}"

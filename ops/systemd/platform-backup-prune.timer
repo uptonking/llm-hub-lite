@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily llm-hub-lite Restic retention and prune
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=10min
+Persistent=true
+Unit=platform-backup-prune.service
+
+[Install]
+WantedBy=timers.target

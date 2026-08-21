@@ -1,8 +1,8 @@
 [Unit]
 Description=Reconcile and validate the llm-hub-lite platform
-After=platform.target
+After=platform.target platform-recovery.service
 
 [Service]
 Type=oneshot
-TimeoutStartSec=900
-ExecStart=/usr/local/bin/platformctl recover
+TimeoutStartSec=420
+ExecStart=/usr/local/bin/platformctl recover --quiet

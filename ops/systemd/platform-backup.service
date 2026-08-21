@@ -5,4 +5,4 @@ After=platform.target
 [Service]
 Type=oneshot
 TimeoutStartSec=900
-ExecStart=/usr/local/bin/platformctl backup scheduled
+ExecStart=/usr/local/bin/platformctl backup snapshot scheduled

@@ -21,7 +21,7 @@ Thank you for your interest in improving these self-hosted Docker projects. Cont
 3. Make your changes and keep commits scoped and meaningful.
 4. Run any relevant validation steps:
    - `docker compose config` to ensure the compose file remains valid.
-   - Custom scripts (like `./backup.sh` or `./update-docker.sh`) if the changes affect them.
+   - Platform scripts and systemd units if the changes affect deployment or recovery.
 5. Update documentation when behaviour or configuration changes.
 6. Open a pull request against the `main` branch and describe the change, the motivation, and how you verified it.
 
@@ -31,7 +31,7 @@ Thank you for your interest in improving these self-hosted Docker projects. Cont
 - [ ] Scripts remain executable where necessary (`chmod +x`).
 - [ ] README (or other docs) updated when user-facing behaviour changes.
 - [ ] Tests or validation steps noted in the pull request description.
-- [ ] No secrets committed (use `.env.dev`/`.env.production` locally and commit only their example templates).
+- [ ] No secrets committed (use `.env.dev`/`.env.prod` locally and commit only their example templates).
 
 ## Code Style and Standards
 

@@ -2,9 +2,11 @@
 
 The hub is proxied by the application Caddy instance at `BESZEL_APP_URL` and
 stores all state outside application releases. The agent uses an outbound,
-mutually authenticated WebSocket connection, host networking for accurate host
-network statistics, and a read-only Docker socket. It deliberately does not
-publish port 45876 and does not expose host systemd/D-Bus by default.
+mutually authenticated WebSocket connection and host networking for accurate
+host network statistics. Docker metrics pass through a loopback-only socket
+proxy that permits container read endpoints; the agent does not mount the real
+Docker socket. Port 45876 is not public. A read-only system D-Bus mount enables
+visibility into Docker, containerd, SSH, and platform systemd units.
 
 The VPS bootstrap starts the hub, creates a native password-authenticated first
 account, obtains a persistent universal token, writes the hub public key and
@@ -16,4 +18,8 @@ system or universal token and place them in the configured secret files.
 
 `platformctl start beszel` starts only the hub until both secret files exist,
 which makes first boot and recovery safe. Once both files are present it starts
-the hub and agent and waits for their native health checks.
+the hub, socket proxy, and agent and waits for their native health checks.
+
+Bootstrap also configures baseline status, CPU, memory, and disk alerts. Set
+`BESZEL_HEARTBEAT_URL` in the root-only Beszel environment to an external
+dead-man endpoint if complete VPS outage notification is required.

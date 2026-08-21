@@ -4,6 +4,16 @@ services:
   woodpecker-server:
     image: ${WOODPECKER_SERVER_IMAGE:?WOODPECKER_SERVER_IMAGE must be digest-pinned}
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: ci
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
     expose:
       - "8000"
       - "9000"
@@ -39,6 +49,16 @@ services:
     image: ${WOODPECKER_AGENT_IMAGE:?WOODPECKER_AGENT_IMAGE must be digest-pinned}
     command: agent
     restart: unless-stopped
+    init: true
+    stop_grace_period: 2m
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: ci
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
     depends_on:
       woodpecker-server:
         condition: service_healthy

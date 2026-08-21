@@ -5,21 +5,21 @@ services:
       - "443:443/tcp"
       - "443:443/udp"
     environment:
-      NEW_API_SITE: ${NEW_API_SITE:?NEW_API_SITE must be set in .env.production}
-      CLIPROXY_SITE: ${CLIPROXY_SITE:?CLIPROXY_SITE must be set in .env.production}
-      WOODPECKER_SITE: ${WOODPECKER_SITE:?WOODPECKER_SITE must be set in .env.production}
-      BESZEL_SITE: ${BESZEL_SITE:?BESZEL_SITE must be set in .env.production}
-      SSL_EMAIL: ${SSL_EMAIL:?SSL_EMAIL must be set in .env.production}
+      NEW_API_SITE: ${NEW_API_SITE:?NEW_API_SITE must be set in .env.prod}
+      CLIPROXY_SITE: ${CLIPROXY_SITE:?CLIPROXY_SITE must be set in .env.prod}
+      WOODPECKER_SITE: ${WOODPECKER_SITE:?WOODPECKER_SITE must be set in .env.prod}
+      BESZEL_SITE: ${BESZEL_SITE:?BESZEL_SITE must be set in .env.prod}
+      SSL_EMAIL: ${SSL_EMAIL:?SSL_EMAIL must be set in .env.prod}
 
   new-api:
     environment:
-      SESSION_SECRET: ${NEW_API_SESSION_SECRET:?NEW_API_SESSION_SECRET must be set in .env.production}
+      SESSION_SECRET: ${NEW_API_SESSION_SECRET:?NEW_API_SESSION_SECRET must be set in .env.prod}
       SESSION_COOKIE_SECURE: "true"
-      SESSION_COOKIE_TRUSTED_URL: ${SESSION_COOKIE_TRUSTED_URL:?SESSION_COOKIE_TRUSTED_URL must be set in .env.production}
+      SESSION_COOKIE_TRUSTED_URL: ${SESSION_COOKIE_TRUSTED_URL:?SESSION_COOKIE_TRUSTED_URL must be set in .env.prod}
 
   cliproxy:
     environment:
-      MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?CLIPROXY_MANAGEMENT_KEY must be set in .env.production}
+      MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?CLIPROXY_MANAGEMENT_KEY must be set in .env.prod}
     ports:
       - "127.0.0.1:8085:8085"
       - "127.0.0.1:1455:1455"
@@ -33,11 +33,11 @@ configs:
       port: 8317
       auth-dir: "/runtime/auths"
       api-keys:
-        - "${CLIPROXY_API_KEY:?CLIPROXY_API_KEY must be set in .env.production}"
+        - "${CLIPROXY_API_KEY:?CLIPROXY_API_KEY must be set in .env.prod}"
       debug: false
       remote-management:
         allow-remote: true
-        secret-key: "${CLIPROXY_MANAGEMENT_KEY:?CLIPROXY_MANAGEMENT_KEY must be set in .env.production}"
+        secret-key: "${CLIPROXY_MANAGEMENT_KEY:?CLIPROXY_MANAGEMENT_KEY must be set in .env.prod}"
         disable-control-panel: false
       logging-to-file: true
       logs-max-total-size-mb: 100

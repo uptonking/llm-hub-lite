@@ -13,7 +13,8 @@ case "$mode" in
     overlay="docker-compose.dev.yml"
     ;;
   prod)
-    env_file="${STACK_ENV_FILE:-.env.production}"
+    env_file="${STACK_ENV_FILE:-.env.prod}"
+    image_env_file="${STACK_IMAGE_ENV_FILE:-ops/images.prod.env}"
     overlay="docker-compose.prod.yml"
     ;;
   *)
@@ -28,6 +29,22 @@ fi
 if [[ ! -f "$env_file" ]]; then
   printf 'Missing %s. Copy the matching environment example first.\n' "$env_file" >&2
   exit 1
+fi
+
+compose_bin=(docker compose)
+if [[ -n "${PLATFORM_COMPOSE_BIN:-}" ]]; then
+  compose_bin=("$PLATFORM_COMPOSE_BIN")
+elif [[ -x /usr/local/bin/platform-compose ]]; then
+  compose_bin=(/usr/local/bin/platform-compose)
+fi
+
+compose_env_args=(--env-file "$env_file")
+if [[ "$mode" == prod ]]; then
+  if [[ "$image_env_file" != /* ]]; then
+    image_env_file="$script_dir/$image_env_file"
+  fi
+  [[ -f "$image_env_file" ]] || { printf 'Missing production image manifest: %s\n' "$image_env_file" >&2; exit 1; }
+  compose_env_args+=(--env-file "$image_env_file")
 fi
 
 read_env_value() {
@@ -64,7 +81,7 @@ if [[ "$mode" == prod ]]; then
   fi
 fi
 
-compose=(docker compose --env-file "$env_file" -f "$script_dir/docker-compose.yml" -f "$script_dir/$overlay")
+compose=("${compose_bin[@]}" "${compose_env_args[@]}" -f "$script_dir/docker-compose.base.yml" -f "$script_dir/$overlay")
 
 case "$action" in
   validate)

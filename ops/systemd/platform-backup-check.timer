@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly llm-hub-lite Restic repository check
+
+[Timer]
+OnCalendar=Sun *-*-* 04:15:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=platform-backup-check.service
+
+[Install]
+WantedBy=timers.target

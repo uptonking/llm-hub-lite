@@ -5,6 +5,16 @@ services:
     image: ${CADDY_IMAGE:-caddy:latest}
     pull_policy: missing
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: edge
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
     environment:
       NEW_API_SITE: ${NEW_API_SITE:-http://newapi.localhost}
       CLIPROXY_SITE: ${CLIPROXY_SITE:-http://cpa.localhost}
@@ -21,8 +31,8 @@ services:
       cliproxy:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
-      interval: 60s
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
@@ -34,6 +44,16 @@ services:
     image: ${NEW_API_IMAGE:-calciumion/new-api:latest}
     # pull_policy: always
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: application
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
     command: ["--log-dir", "/app/logs"]
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -57,6 +77,16 @@ services:
     image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:latest}
     # pull_policy: always
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: application
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
     environment:
       MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:-local-development-management-key}
     working_dir: /CLIProxyAPI

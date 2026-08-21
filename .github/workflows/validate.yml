@@ -17,23 +17,35 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Check shell syntax
-        run: bash -n stack.sh restart-docker.sh update-docker.sh caddy-reload.sh ops/*.sh ops/woodpecker/manage.sh ops/tests/controller-test.sh
+        run: bash -n stack.sh ops/*.sh ops/tests/*.sh
+
+      - name: Lint shell scripts
+        run: shellcheck stack.sh ops/*.sh ops/tests/*.sh
 
       - name: Run deployment controller tests
         run: ops/tests/controller-test.sh
 
+      - name: Run platform controller tests
+        run: ops/tests/platformctl-test.sh
+
       - name: Validate Compose model
         run: >-
           docker compose
-          --env-file .env.production.example
-          -f docker-compose.yml
+          --env-file .env.prod.example
+          --env-file ops/images.prod.env
+          -f docker-compose.base.yml
           -f docker-compose.prod.yml
           config --quiet
+
+      - name: Validate platform Compose models
+        run: |
+          docker compose --env-file ops/woodpecker/.env.example --env-file ops/images.prod.env -f ops/woodpecker/docker-compose.yml config --quiet
+          docker compose --env-file ops/beszel/.env.example --env-file ops/images.prod.env -f ops/beszel/docker-compose.yml config --quiet
 
       - name: Validate Caddyfile
         run: >-
           docker run --rm
-          --env-file .env.production.example
+          --env-file .env.prod.example
           -v "$PWD/config:/etc/caddy:ro"
           caddy:2.10.0@sha256:133b5eb7ef9d42e34756ba206b06d84f4e3eb308044e268e182c2747083f09de
           caddy

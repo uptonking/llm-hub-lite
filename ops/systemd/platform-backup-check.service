@@ -1,0 +1,8 @@
+[Unit]
+Description=Check the llm-hub-lite Restic repository
+After=platform.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=3600
+ExecStart=/usr/local/bin/platformctl backup check
