@@ -108,6 +108,9 @@ if [[ ! -f "$woodpecker_env" ]]; then
     printf 'WOODPECKER_REPO_OWNERS=uptonking\n'
     printf 'WOODPECKER_AGENT_LABELS=target=production,repo=uptonking/llm-hub-lite\n'
     printf 'WOODPECKER_MAX_WORKFLOWS=1\n'
+    printf 'WOODPECKER_DATABASE_MAX_CONNECTIONS=1\n'
+    printf 'WOODPECKER_DATABASE_IDLE_CONNECTIONS=1\n'
+    printf 'WOODPECKER_FORCE_IGNORE_SERVICE_FAILURE=false\n'
     printf 'SHARED_NETWORK_NAME=shared_network\n'
   } >"$woodpecker_env"
   chmod 600 "$woodpecker_env"
