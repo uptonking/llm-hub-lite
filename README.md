@@ -131,10 +131,15 @@ fork events, and mark only this repository trusted. Releases are stored under
 symlinks.
 
 The controller performs Compose/Caddy validation, backs up persistent data,
-starts the candidate release, and runs remote smoke checks. A failed deployment
-remains available for inspection and is not automatically reverted. Roll back
-through the audited manual Woodpecker workflow and set `ROLLBACK_TARGET` to
-`previous` or an existing full commit SHA. The CLI equivalent is:
+stages reviewed runtime files under `/opt/apps/llm-hub-lite/shared/runtime`,
+reconciles the stack from that stable path, reloads Caddy, and runs remote smoke
+checks. The stable path prevents Docker Compose from recreating unchanged
+containers only because the Git release path changed. The first deployment
+after adopting this layout recreates the stack once to migrate Compose metadata.
+
+A failed deployment remains available for inspection and is not automatically
+reverted. Roll back through the audited manual Woodpecker workflow and set
+`ROLLBACK_TARGET` to `previous` or an existing full commit SHA. The CLI equivalent is:
 
 ```bash
 woodpecker-cli pipeline start uptonking/llm-hub-lite last \

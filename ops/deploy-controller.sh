@@ -68,6 +68,7 @@ shared_root="$APP_ROOT/shared"
 releases_dir="$APP_ROOT/releases"
 mirror_dir="$shared_root/mirror.git"
 backup_dir="$shared_root/backups"
+runtime_dir="$shared_root/runtime"
 current_link="$APP_ROOT/current"
 previous_link="$APP_ROOT/previous"
 lock_file="$shared_root/deploy.lock"
@@ -219,10 +220,31 @@ backup_shared_data() {
   done
 }
 
+stage_runtime() {
+  local release_dir="$1" runtime_config="$runtime_dir/config"
+  local required
+  for required in stack.sh docker-compose.yml docker-compose.prod.yml; do
+    [[ -f "$release_dir/$required" ]] || die "release is missing runtime file: $required"
+  done
+  [[ -d "$release_dir/config" ]] || die "release is missing Caddy config directory"
+
+  mkdir -p "$runtime_config"
+  install -m 700 "$release_dir/stack.sh" "$runtime_dir/stack.sh"
+  install -m 600 "$release_dir/docker-compose.yml" "$runtime_dir/docker-compose.yml"
+  install -m 600 "$release_dir/docker-compose.prod.yml" "$runtime_dir/docker-compose.prod.yml"
+
+  # Keep the bind-mount source stable between releases. Caddy continues serving
+  # its loaded config while these files are replaced, then reloads below.
+  find "$runtime_config" -mindepth 1 -delete
+  cp -a "$release_dir/config/." "$runtime_config/"
+}
+
 compose_up() {
   local release_dir="$1"
-  STACK_ENV_FILE="$ENV_FILE" "$release_dir/stack.sh" prod up \
+  stage_runtime "$release_dir"
+  STACK_ENV_FILE="$ENV_FILE" "$runtime_dir/stack.sh" prod up \
     --remove-orphans --wait --wait-timeout 180
+  STACK_ENV_FILE="$ENV_FILE" "$runtime_dir/stack.sh" prod reload
 }
 
 smoke_check() {

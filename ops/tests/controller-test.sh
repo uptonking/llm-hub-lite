@@ -47,10 +47,14 @@ git -C "$work" config user.email test@example.invalid
 git -C "$work" config user.name controller-test
 cat >"$work/stack.sh" <<'EOF'
 #!/bin/sh
+printf '%s|%s\n' "$(cd -- "$(dirname -- "$0")" && pwd)" "$*" >>"${STACK_CALL_LOG:?}"
 exit 0
 EOF
 chmod +x "$work/stack.sh"
-printf 'caddy\n' >"$work/Caddyfile"
+mkdir -p "$work/config"
+printf 'caddy\n' >"$work/config/Caddyfile"
+printf 'services: {}\n' >"$work/docker-compose.yml"
+printf 'services: {}\n' >"$work/docker-compose.prod.yml"
 git -C "$work" add .
 git -C "$work" -c commit.gpgsign=false commit --quiet -m initial
 git -C "$work" remote add origin "$remote"
@@ -81,34 +85,40 @@ DEPLOY_LOG=$app_root/shared/logs/deploy.log
 EOF
 
 controller="$repo_root/ops/deploy-controller.sh"
+stack_call_log="$tmp/stack-calls.log"
 sha1="$(git -C "$work" rev-parse HEAD)"
-PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" "$controller" deploy "$sha1"
+PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" STACK_CALL_LOG="$stack_call_log" "$controller" deploy "$sha1"
 [[ "$(readlink "$app_root/current")" == "$app_root/releases/$sha1" ]]
 [[ -L "$app_root/current" ]]
+grep -q "^$app_root/releases/$sha1|prod validate$" "$stack_call_log"
+grep -q "^$app_root/shared/runtime|prod up --remove-orphans --wait --wait-timeout 180$" "$stack_call_log"
+grep -q "^$app_root/shared/runtime|prod reload$" "$stack_call_log"
+cmp "$work/config/Caddyfile" "$app_root/shared/runtime/config/Caddyfile"
 find "$app_root/shared/backups" -maxdepth 1 -type f -name '*.tar.gz' -print -quit | grep -q .
-PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" "$controller" deploy "$sha1"
+PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" STACK_CALL_LOG="$stack_call_log" "$controller" deploy "$sha1"
 
 printf 'second\n' >"$work/marker"
 git -C "$work" add marker
 git -C "$work" -c commit.gpgsign=false commit --quiet -m second
 git -C "$work" push --quiet origin HEAD:main
 sha2="$(git -C "$work" rev-parse HEAD)"
-PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" "$controller" deploy "$sha2"
+PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" STACK_CALL_LOG="$stack_call_log" "$controller" deploy "$sha2"
 [[ "$(readlink "$app_root/current")" == "$app_root/releases/$sha2" ]]
 [[ "$(readlink "$app_root/previous")" == "$app_root/releases/$sha1" ]]
+[[ "$(grep -c "^$app_root/shared/runtime|prod up " "$stack_call_log")" -eq 3 ]]
 
-if PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" FAIL_SMOKE=1 "$controller" deploy "$sha1"; then
+if PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" STACK_CALL_LOG="$stack_call_log" FAIL_SMOKE=1 "$controller" deploy "$sha1"; then
   printf 'expected smoke failure\n' >&2
   exit 1
 fi
 grep -q '^result=failed$' "$app_root/shared/deploy-status.env"
 [[ "$(readlink "$app_root/current")" == "$app_root/releases/$sha1" ]]
 [[ "$(readlink "$app_root/previous")" == "$app_root/releases/$sha2" ]]
-PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" "$controller" rollback previous
+PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" STACK_CALL_LOG="$stack_call_log" "$controller" rollback previous
 [[ "$(readlink "$app_root/current")" == "$app_root/releases/$sha2" ]]
 [[ "$(readlink "$app_root/previous")" == "$app_root/releases/$sha1" ]]
 
-if PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" "$controller" deploy not-a-sha; then
+if PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" STACK_CALL_LOG="$stack_call_log" "$controller" deploy not-a-sha; then
   printf 'expected SHA validation failure\n' >&2
   exit 1
 fi
