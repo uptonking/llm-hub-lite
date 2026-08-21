@@ -36,7 +36,9 @@ backup_sqlite() {
 
 backup_sqlite "$APP_ROOT/shared/data/prod/new-api/one-api.db" "$stage/sqlite/new-api.db"
 backup_sqlite "$PLATFORM_ROOT/woodpecker/data/woodpecker.sqlite" "$stage/sqlite/woodpecker.sqlite"
-backup_sqlite "$PLATFORM_ROOT/beszel/hub/data.db" "$stage/sqlite/beszel.db"
+while IFS= read -r database; do
+  backup_sqlite "$database" "$stage/sqlite/beszel-$(basename "$database")"
+done < <(find "$PLATFORM_ROOT/beszel/hub" -maxdepth 1 -type f -name '*.db' -print 2>/dev/null | sort)
 
 manifest="$stage/manifest.txt"
 {
@@ -71,10 +73,10 @@ restic backup --tag platform --tag "$reason" \
   --exclude "$PLATFORM_ROOT/woodpecker/data/woodpecker.sqlite-journal" \
   --exclude "$PLATFORM_ROOT/woodpecker/data/woodpecker.sqlite-shm" \
   --exclude "$PLATFORM_ROOT/woodpecker/data/woodpecker.sqlite-wal" \
-  --exclude "$PLATFORM_ROOT/beszel/hub/data.db" \
-  --exclude "$PLATFORM_ROOT/beszel/hub/data.db-journal" \
-  --exclude "$PLATFORM_ROOT/beszel/hub/data.db-shm" \
-  --exclude "$PLATFORM_ROOT/beszel/hub/data.db-wal" \
+  --exclude "$PLATFORM_ROOT/beszel/hub/*.db" \
+  --exclude "$PLATFORM_ROOT/beszel/hub/*.db-journal" \
+  --exclude "$PLATFORM_ROOT/beszel/hub/*.db-shm" \
+  --exclude "$PLATFORM_ROOT/beszel/hub/*.db-wal" \
   "${existing[@]}"
 restic forget --tag platform --keep-last 48 --keep-hourly 24 --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
 check_stamp="$(dirname "$REPO")/.last-restic-check"

@@ -17,5 +17,5 @@ install -d -m 700 "$target"
 restic restore "$snapshot" --target "$target" --tag platform
 while IFS= read -r database; do
   sqlite3 "$database" 'PRAGMA integrity_check;' | grep -qx ok || { printf 'restored SQLite integrity check failed: %s\n' "$database" >&2; exit 1; }
-done < <(find "$target/run/llm-hub-lite/backup/sqlite" -type f -name '*.db' 2>/dev/null | sort)
+done < <(find "$target/run/llm-hub-lite/backup/sqlite" -type f \( -name '*.db' -o -name '*.sqlite' \) 2>/dev/null | sort)
 printf 'restore extracted to %s; review and atomically replace affected data after validation\n' "$target"
