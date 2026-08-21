@@ -28,10 +28,20 @@ trap 'find "$stage" -mindepth 1 -delete' EXIT
 install -d -m 700 "$stage/sqlite"
 
 backup_sqlite() {
-  local source="$1" target="$2"
+  local source="$1" target="$2" attempt delay
   [[ -f "$source" ]] || return 0
-  sqlite3 "$source" ".backup '$target'"
-  sqlite3 "$target" 'PRAGMA integrity_check;' | grep -qx ok
+  for attempt in 1 2 3 4 5; do
+    rm -f -- "$target"
+    if sqlite3 -cmd '.timeout 30000' "$source" ".backup '$target'" && \
+      sqlite3 "$target" 'PRAGMA integrity_check;' | grep -qx ok; then
+      return 0
+    fi
+    delay=$((attempt * 2))
+    printf 'SQLite backup retry %s/5 for %s in %s seconds\n' "$attempt" "$source" "$delay" >&2
+    sleep "$delay"
+  done
+  printf 'SQLite backup failed after retries: %s\n' "$source" >&2
+  return 1
 }
 
 backup_sqlite "$APP_ROOT/shared/data/prod/new-api/one-api.db" "$stage/sqlite/new-api.db"
