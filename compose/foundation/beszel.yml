@@ -1,4 +1,4 @@
-name: beszel
+name: foundation-beszel
 
 services:
   beszel-hub:
@@ -8,12 +8,7 @@ services:
     stop_grace_period: 60s
     labels:
       com.aichorage.platform: llm-hub-lite
-      com.aichorage.component: monitoring
-    logging:
-      driver: local
-      options:
-        max-size: 20m
-        max-file: "5"
+      com.aichorage.component: foundation-beszel
     environment:
       APP_URL: ${BESZEL_APP_URL:?BESZEL_APP_URL must be set}
       DISABLE_PASSWORD_AUTH: ${BESZEL_DISABLE_PASSWORD_AUTH:-false}
@@ -28,23 +23,20 @@ services:
       HEARTBEAT_INTERVAL: ${BESZEL_HEARTBEAT_INTERVAL:-60}
     volumes:
       - ${BESZEL_DATA_ROOT:-/opt/platform/beszel/hub}:/beszel_data
-    expose:
-      - "8090"
+    expose: ["8090"]
+    networks: [platform_edge]
     healthcheck:
       test: ["CMD", "/beszel", "health", "--url", "http://localhost:8090"]
-      interval: 120s
+      interval: 30s
       timeout: 15s
-      retries: 3
+      retries: 5
       start_period: 10s
-    networks:
-      - shared_network
 
   beszel-socket-proxy:
     image: ${BESZEL_SOCKET_PROXY_IMAGE:?BESZEL_SOCKET_PROXY_IMAGE must be digest-pinned}
     restart: unless-stopped
     read_only: true
-    security_opt:
-      - no-new-privileges:true
+    security_opt: [no-new-privileges:true]
     environment:
       CONTAINERS: "1"
       LOG_LEVEL: warning
@@ -52,17 +44,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "127.0.0.1:${BESZEL_SOCKET_PROXY_PORT:-2375}:2375"
-    tmpfs:
-      - /run
-      - /tmp
+    tmpfs: [/run, /tmp]
     labels:
       com.aichorage.platform: llm-hub-lite
-      com.aichorage.component: monitoring
-    logging:
-      driver: local
-      options:
-        max-size: 10m
-        max-file: "3"
+      com.aichorage.component: foundation-beszel
 
   beszel-agent:
     image: ${BESZEL_AGENT_IMAGE:?BESZEL_AGENT_IMAGE must be digest-pinned}
@@ -74,12 +59,7 @@ services:
         condition: service_started
     labels:
       com.aichorage.platform: llm-hub-lite
-      com.aichorage.component: monitoring
-    logging:
-      driver: local
-      options:
-        max-size: 20m
-        max-file: "5"
+      com.aichorage.component: foundation-beszel
     network_mode: host
     environment:
       LISTEN: 127.0.0.1:45876
@@ -88,7 +68,7 @@ services:
       KEY_FILE: /run/secrets/beszel_key
       TOKEN_FILE: /run/secrets/beszel_token
       DATA_DIR: /var/lib/beszel-agent
-      SYSTEM_NAME: ${BESZEL_SYSTEM_NAME:-yaoodtnd.com}
+      SYSTEM_NAME: ${BESZEL_SYSTEM_NAME:-vps}
       DOCKER_HOST: tcp://127.0.0.1:${BESZEL_SOCKET_PROXY_PORT:-2375}
       SKIP_SYSTEMD: "false"
       SERVICE_PATTERNS: ${BESZEL_SERVICE_PATTERNS:-platform-*,docker.service,containerd.service,ssh.service}
@@ -99,12 +79,12 @@ services:
       - ${BESZEL_TOKEN_FILE:-/opt/platform/beszel/secrets/token}:/run/secrets/beszel_token:ro
     healthcheck:
       test: ["CMD", "/agent", "health"]
-      interval: 120s
+      interval: 30s
       timeout: 15s
-      retries: 3
+      retries: 5
       start_period: 10s
 
 networks:
-  shared_network:
-    name: ${SHARED_NETWORK_NAME:-shared_network}
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
     external: true

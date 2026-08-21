@@ -20,7 +20,8 @@ auth_response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-t
   -H 'Content-Type: application/json' -d "$auth_payload" "$beszel_url/api/collections/users/auth-with-password")"
 auth_token="$(jq -er '.token' <<<"$auth_response")"
 systems_response="$(curl -fsS -H "Authorization: $auth_token" "$beszel_url/api/collections/systems/records?perPage=200")"
-mapfile -t system_ids < <(jq -r '.items[] | select(.status != "pending") | .id' <<<"$systems_response")
+system_ids=()
+while IFS= read -r system_id; do [[ -n "$system_id" ]] && system_ids+=("$system_id"); done < <(jq -r '.items[] | select(.status != "pending") | .id' <<<"$systems_response")
 (( ${#system_ids[@]} > 0 )) || { printf 'no enrolled Beszel system is ready for alerts\n' >&2; exit 0; }
 systems_json="$(printf '%s\n' "${system_ids[@]}" | jq -R . | jq -s .)"
 

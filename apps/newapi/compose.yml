@@ -1,0 +1,35 @@
+name: app-newapi
+
+services:
+  newapi:
+    image: ${NEW_API_IMAGE:?NEW_API_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: app-newapi
+    command: ["--log-dir", "/app/logs"]
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      SESSION_SECRET: ${NEW_API_SESSION_SECRET:?NEW_API_SESSION_SECRET must be set}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_COOKIE_TRUSTED_URL: ${SESSION_COOKIE_TRUSTED_URL:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/new-api:/data
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/new-api/logs:/app/logs
+    networks: [newapi_private, platform_edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/api/status | grep -q '\"success\":true'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+networks:
+  newapi_private:
+    name: app-newapi_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

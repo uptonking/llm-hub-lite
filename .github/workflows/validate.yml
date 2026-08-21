@@ -34,27 +34,15 @@ jobs:
           ops/tests/backup-test.sh
 
       - name: Validate Compose model
-        run: >-
-          docker compose
-          --env-file .env.prod.example
-          --env-file ops/images.prod.env
-          -f docker-compose.base.yml
-          -f docker-compose.prod.yml
-          config --quiet
-
-      - name: Validate platform Compose models
         run: |
-          docker compose --env-file ops/woodpecker/.env.example --env-file ops/images.prod.env -f ops/woodpecker/docker-compose.yml config --quiet
-          docker compose --env-file ops/beszel/.env.example --env-file ops/images.prod.env -f ops/beszel/docker-compose.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file ops/images.foundation.prod.env -f compose/foundation/caddy.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/newapi/compose.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cliproxyapi/compose.yml config --quiet
 
       - name: Validate Caddyfile
-        run: >-
-          docker run --rm
-          --env-file .env.prod.example
-          -v "$PWD/config:/etc/caddy:ro"
-          caddy:2.10.0@sha256:133b5eb7ef9d42e34756ba206b06d84f4e3eb308044e268e182c2747083f09de
-          caddy
-          validate --config /etc/caddy/Caddyfile --adapter caddyfile
+        run: STACK_ENV_FILE=.env.prod.example STACK_IMAGE_ENV_FILE=ops/images.apps.prod.env STACK_FOUNDATION_IMAGE_ENV_FILE=ops/images.foundation.prod.env STACK_RUNTIME_ROOT="$PWD/.runtime/ci" ./stack.sh prod validate
 
       - name: Lint Woodpecker workflow
         run: >-

@@ -1,148 +1,51 @@
 # llm-hub-lite
 
-A single-VPS, self-hosted platform for Caddy, New API, CLIProxyAPI,
-Woodpecker CI, and Beszel monitoring. Caddy is the only public application
-entry point and keeps HTTP/3 enabled on UDP 443.
+Reproducible single-VPS Docker platform for Caddy, Woodpecker CI, Beszel, New API, and CLIProxyAPI. Caddy is the only public ingress; UDP 443 remains enabled for HTTP/3.
 
-## Compose model
+## Architecture
 
-The application stack uses an explicit base plus one environment overlay:
+- Foundation Compose projects are independent: `compose/foundation/caddy.yml`, `woodpecker.yml`, and `beszel.yml`.
+- Applications are declarative descriptors under `apps/<id>/` (manifest, Compose file, and Caddy route).
+- Every project joins the external `platform_edge` network; each application also has a private network.
+- Production image references are digest-pinned in `ops/images.foundation.prod.env` and `ops/images.apps.prod.env`.
+- `SERVICE_WOODPECKER_DISABLE`, `SERVICE_BESZEL_DISABLE`, `APP_NEWAPI_DISABLE`, and `APP_CLIPROXYAPI_DISABLE` independently disable services. Disabled applications retain their data and routes, but their containers are stopped and removed during reconciliation.
 
-- `docker-compose.base.yml` — shared service definitions.
-- `docker-compose.dev.yml` — local development ports and settings.
-- `docker-compose.prod.yml` — production TLS and secret requirements.
-
-Environment naming is symmetric:
-
-- `.env.dev.example` → `.env.dev`
-- `.env.prod.example` → `.env.prod`
-
-Production image pins are non-secret and maintained separately in
-`ops/images.prod.env`. Every production image must use an immutable digest.
-
-## Local development
+## Local validation
 
 ```bash
 cp .env.dev.example .env.dev
 ./stack.sh dev validate
 ./stack.sh dev up
-./stack.sh dev logs
-```
 
-New API is available at `http://newapi.localhost:4080` and CLIProxyAPI at
-`http://cpa.localhost:4080`.
-
-To validate the production model locally:
-
-```bash
 cp .env.prod.example .env.prod
 chmod 600 .env.prod
-./stack.sh prod validate
+STACK_ENV_FILE=.env.prod.example ./stack.sh prod validate
 ```
 
-## Production layout
+The production runtime file is `.env.prod`; `.env.prod.example` is only a template. Development follows the same convention with `.env.dev`.
 
-- Application releases: `/opt/apps/llm-hub-lite/releases/<commit-sha>`
-- Stable runtime: `/opt/apps/llm-hub-lite/shared/runtime`
-- Production secrets: `/opt/apps/llm-hub-lite/shared/.env.prod`
-- Woodpecker state: `/opt/platform/woodpecker`
-- Beszel state: `/opt/platform/beszel`
-- Active image manifest: `/etc/llm-hub-lite/images.env`
-- Encrypted Restic repository: `/opt/backups/llm-hub-lite/repository`
+## First VPS bootstrap
 
-`shared_network` connects only Caddy and the upstream control-plane services.
-New API and CLIProxyAPI remain on a private backend. The Woodpecker agent has a
-dedicated network and is restricted to the trusted production repository.
+Bootstrap is the only SSH operation. Copy `ops/bootstrap-vps.sh` to a new host and run it as root. It installs Docker Compose, firewall rules, systemd recovery/timers, root-only secrets, the split foundation/app manifests, and the initial Beszel enrollment. It is idempotent and does not remove persistent data.
 
-## GitHub push deployment
+Set the GitHub OAuth callback to `https://ci.<your-domain>/authorize` before bootstrap. After bootstrap, daily operation is GitHub push → Woodpecker → deployment controller; no SSH is needed.
 
-Pushes to `main` trigger `.woodpecker/deploy.yml`. Woodpecker passes the exact
-commit SHA to the VPS deployment controller, which:
+## Deployment lifecycle
 
-1. Validates Compose and Caddy configuration.
-2. Creates a verified Restic snapshot.
-3. Stages runtime files under the stable runtime directory.
-4. Reconciles containers without pulling images.
-5. Reloads Caddy and runs public smoke checks.
-6. Automatically restores the prior release if validation fails.
+`.woodpecker/deploy.yml` validates the exact commit, snapshots persistent state, stages a versioned control bundle, reconciles only the changed application configuration, and runs smoke checks. Foundation upgrades use the separate manual `.woodpecker/foundation-upgrade.yml` workflow. A failed deployment restores the previous complete bundle (control pointer, app/foundation manifests, and foundation Compose files).
 
-Image upgrades are deliberately separate from source deployments.
+`platformctl recover` is health-first and never pulls images. Docker restart policies plus `platform-recovery.service` restore the stack after a VPS reboot; periodic health checks repair drift.
 
-## VPS bootstrap
+## Operations
 
-Create the GitHub OAuth application with callback
-`https://ci.aichorage.de/authorize`, then run:
-
-```bash
-scp ops/bootstrap-vps.sh root@166.88.160.139:/root/llm-hub-lite-bootstrap.sh
-ssh -t root@166.88.160.139 /root/llm-hub-lite-bootstrap.sh
-```
-
-Bootstrap is idempotent. It preserves credentials and persistent data, installs
-a checksum-pinned Docker Compose binary, installs systemd recovery/timers,
-enrolls Beszel, and performs a verified backup. This beta stack intentionally
-has no compatibility layer for legacy filenames or service units.
-
-## Production operations
-
-`platformctl` is the only supported VPS operations interface:
-
-```bash
+```text
 platformctl status
-platformctl status --json
 platformctl health
 platformctl recover
-platformctl restart app
+platformctl restart all
 platformctl recreate beszel
-platformctl upgrade app
-platformctl reload caddy
+platformctl reload
 platformctl logs woodpecker
-```
-
-Semantics are intentionally distinct:
-
-- `recover` is health-first, never pulls, and repairs only broken projects.
-- `restart` performs a real restart.
-- `recreate` reapplies the active configuration and image manifest.
-- `upgrade` snapshots, promotes reviewed pins, pulls, recreates, verifies, and
-  automatically rolls back on failure.
-
-Use `platformctl maintenance begin <reason>` before manual data work and
-`platformctl maintenance end` afterwards. Recovery timers do not start writers
-while maintenance mode is active.
-
-## Beszel monitoring
-
-Beszel is served at `https://status.aichorage.de`. Its agent uses an outbound
-WebSocket and does not expose port 45876 publicly. Docker metrics pass through a
-loopback-only, read-filtered socket proxy; the agent never mounts the real
-Docker socket. Systemd monitoring uses the read-only system D-Bus socket.
-
-Bootstrap configures baseline system-down, CPU, memory, and disk alerts.
-`BESZEL_HEARTBEAT_URL` can point to Healthchecks.io, Better Stack, or another
-dead-man endpoint so a complete VPS outage is detectable externally.
-
-After saving the initial login in a password manager, remove the VPS copy with:
-
-```bash
-platformctl credentials purge-beszel-initial
-```
-
-## Reboot recovery
-
-Docker restart policies start all containers concurrently. `platform.target`
-then runs a single health-first recovery service with one global deadline.
-`platform-health.timer` checks every five minutes and repairs drift. A normal
-reboot must restore all public services within five minutes without changing
-persistent data.
-
-## Backups and restore
-
-SQLite databases are copied with SQLite's online backup operation and verified
-with `PRAGMA integrity_check`. Live database/WAL files are excluded from the
-filesystem portion of the snapshot.
-
-```bash
 platformctl backup snapshot manual
 platformctl backup prune
 platformctl backup check
@@ -150,25 +53,14 @@ platformctl restore extract latest
 platformctl restore apply latest
 ```
 
-Snapshots run every 15 minutes, prune runs daily, and repository checks run
-weekly. Restore extracts and validates first; apply enters persistent
-maintenance mode, stops writers, swaps state on the same filesystem, verifies
-the platform, and restores the previous directories on failure.
+SQLite databases are copied with SQLite online backup and integrity-checked before Restic snapshots. Live database/WAL files are excluded from filesystem backup. Keep the Restic password in an external password manager and configure an off-site repository for protection from VPS loss.
 
-The Restic password must also be kept in an external password manager. Local
-backups protect against application and operator mistakes but not complete VPS
-or disk loss; an S3-compatible offsite repository can be added later.
+Beszel is served at `https://status.<your-domain>`. Its agent uses an outbound connection, reads Docker through a loopback-only socket proxy, and does not expose its agent port publicly. Configure `BESZEL_HEARTBEAT_URL` for an external dead-man alert if desired.
 
-## Security boundaries
+## Adding an application
 
-- Only ports 22, 80, 443/TCP, and 443/UDP are public.
-- CLIProxyAPI OAuth callback ports bind to loopback only.
-- Production secrets remain in root-only host files.
-- Beszel container details/log access is disabled by default.
-- Woodpecker's Docker socket is root-equivalent; only the trusted deployment
-  repository may run on that agent.
-- Production images and the Compose executable are digest/checksum pinned.
+Create `apps/<id>/manifest.env`, `compose.yml`, and `route.caddy`. The manifest must define the disable variable, Compose project/service, network alias, digest manifest key, data directory, health endpoint, smoke URL key, and route template. `platformctl validate` enforces the descriptor contract automatically.
 
-## License
+## Security
 
-MIT
+Only ports 22, 80, 443/TCP, and 443/UDP are opened. Secrets are root-readable only. The Woodpecker agent has Docker-socket access and must be restricted to this trusted repository.

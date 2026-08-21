@@ -1,4 +1,4 @@
-name: woodpecker
+name: foundation-woodpecker
 
 services:
   woodpecker-server:
@@ -8,15 +8,13 @@ services:
     stop_grace_period: 60s
     labels:
       com.aichorage.platform: llm-hub-lite
-      com.aichorage.component: ci
+      com.aichorage.component: foundation-woodpecker
     logging:
       driver: local
       options:
         max-size: 20m
         max-file: "5"
-    expose:
-      - "8000"
-      - "9000"
+    expose: ["8000", "9000"]
     volumes:
       - ${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker/data}:/var/lib/woodpecker
     environment:
@@ -35,9 +33,7 @@ services:
       WOODPECKER_DATABASE_IDLE_CONNECTIONS: ${WOODPECKER_DATABASE_IDLE_CONNECTIONS:-1}
       WOODPECKER_FORCE_IGNORE_SERVICE_FAILURE: ${WOODPECKER_FORCE_IGNORE_SERVICE_FAILURE:-false}
       WOODPECKER_LOG_LEVEL: ${WOODPECKER_LOG_LEVEL:-info}
-    networks:
-      - woodpecker
-      - shared_network
+    networks: [woodpecker_private, platform_edge]
     healthcheck:
       test: ["CMD", "/bin/woodpecker-server", "ping"]
       interval: 30s
@@ -53,12 +49,7 @@ services:
     stop_grace_period: 2m
     labels:
       com.aichorage.platform: llm-hub-lite
-      com.aichorage.component: ci
-    logging:
-      driver: local
-      options:
-        max-size: 20m
-        max-file: "5"
+      com.aichorage.component: foundation-woodpecker
     depends_on:
       woodpecker-server:
         condition: service_healthy
@@ -71,8 +62,7 @@ services:
       WOODPECKER_MAX_WORKFLOWS: ${WOODPECKER_MAX_WORKFLOWS:-1}
       WOODPECKER_AGENT_LABELS: ${WOODPECKER_AGENT_LABELS:?WOODPECKER_AGENT_LABELS must be set}
       WOODPECKER_LOG_LEVEL: ${WOODPECKER_LOG_LEVEL:-info}
-    networks:
-      - woodpecker
+    networks: [woodpecker_private]
     healthcheck:
       test: ["CMD", "/bin/woodpecker-agent", "ping"]
       interval: 30s
@@ -81,8 +71,8 @@ services:
       start_period: 10s
 
 networks:
-  woodpecker:
-    driver: bridge
-  shared_network:
-    name: ${SHARED_NETWORK_NAME:-shared_network}
+  woodpecker_private:
+    name: foundation-woodpecker_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
     external: true

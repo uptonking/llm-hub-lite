@@ -1,0 +1,6 @@
+{$NEW_API_SITE} {
+  import common_proxy
+  reverse_proxy newapi:3000 {
+    flush_interval -1
+  }
+}

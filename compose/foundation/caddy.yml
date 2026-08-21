@@ -1,0 +1,41 @@
+name: foundation-caddy
+
+services:
+  caddy:
+    image: ${CADDY_IMAGE:?CADDY_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: foundation-caddy
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
+    environment:
+      SSL_EMAIL: ${SSL_EMAIL:?SSL_EMAIL must be set}
+      WOODPECKER_SITE: ${WOODPECKER_SITE:?WOODPECKER_SITE must be set}
+      BESZEL_SITE: ${BESZEL_SITE:?BESZEL_SITE must be set}
+    volumes:
+      - ${CADDY_DATA_ROOT:-/opt/platform/caddy}/data:/data
+      - ${CADDY_DATA_ROOT:-/opt/platform/caddy}/config:/config
+      - ${CADDY_CONFIG_ROOT:-/opt/platform/caddy/config}:/etc/caddy:ro
+    ports:
+      - "${CADDY_HTTP_BIND:-0.0.0.0}:80:80"
+      - "${CADDY_HTTPS_BIND:-0.0.0.0}:443:443/tcp"
+      - "${CADDY_HTTPS_BIND:-0.0.0.0}:443:443/udp"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - platform_edge
+
+networks:
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

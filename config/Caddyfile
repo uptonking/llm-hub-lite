@@ -15,33 +15,5 @@
 	}
 }
 
-{$NEW_API_SITE:http://newapi.localhost} {
-	import common_proxy
-	reverse_proxy new-api:3000 {
-		flush_interval -1
-	}
-}
-
-{$CLIPROXY_SITE:http://cpa.localhost} {
-	import common_proxy
-	reverse_proxy cliproxy:8317 {
-		flush_interval -1
-	}
-}
-
-{$WOODPECKER_SITE:http://ci.localhost} {
-	import common_proxy
-	reverse_proxy woodpecker-server:8000
-}
-
-{$BESZEL_SITE:http://status.localhost} {
-	import common_proxy
-	request_body {
-		max_size 10MB
-	}
-	reverse_proxy beszel-hub:8090 {
-		transport http {
-			read_timeout 360s
-		}
-	}
-}
+import /etc/caddy/foundation-routes.caddy
+import /etc/caddy/routes.d/*.caddy

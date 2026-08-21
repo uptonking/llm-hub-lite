@@ -1,5 +1,5 @@
 when:
-  - event: push
+  - event: manual
     branch: main
 
 labels:
@@ -17,10 +17,8 @@ steps:
       - platform-compose --env-file .env.prod.example --env-file ops/images.foundation.prod.env -f compose/foundation/caddy.yml config --quiet
       - platform-compose --env-file .env.prod.example --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker.yml config --quiet
       - platform-compose --env-file .env.prod.example --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel.yml config --quiet
-      - platform-compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/newapi/compose.yml config --quiet
-      - platform-compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cliproxyapi/compose.yml config --quiet
 
-  - name: deploy
+  - name: upgrade
     image: llm-hub-lite/deploy-runner:0.3.0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -29,9 +27,8 @@ steps:
       - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite
       - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite
       - /etc/llm-hub-lite:/etc/llm-hub-lite
-      - /etc/llm-hub-lite/restic-password:/etc/llm-hub-lite/restic-password:ro
       - /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro
       - /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
     commands:
-      - /usr/local/bin/platform-submit deploy "$CI_COMMIT_SHA"
+      - /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"
