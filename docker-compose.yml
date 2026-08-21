@@ -9,6 +9,7 @@ services:
       NEW_API_SITE: ${NEW_API_SITE:-http://newapi.localhost}
       CLIPROXY_SITE: ${CLIPROXY_SITE:-http://cpa.localhost}
       WOODPECKER_SITE: ${WOODPECKER_SITE:-http://ci.localhost}
+      BESZEL_SITE: ${BESZEL_SITE:-http://status.localhost}
       SSL_EMAIL: ${SSL_EMAIL:-dev@example.invalid}
     volumes:
       - ${DATA_ROOT:-./data/dev}/caddy:/data
@@ -16,9 +17,15 @@ services:
       - ./config:/etc/caddy:ro
     depends_on:
       new-api:
-        condition: service_started
+        condition: service_healthy
       cliproxy:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     networks:
       - shared_network
       - backend
@@ -69,6 +76,12 @@ services:
       - ${DATA_ROOT:-./data/dev}/cliproxy:/runtime
       - ${DATA_ROOT:-./data/dev}/cliproxy/logs:/CLIProxyAPI/logs
       - ${DATA_ROOT:-./data/dev}/cliproxy/plugins:/CLIProxyAPI/plugins
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8317"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
     networks:
       - backend
 

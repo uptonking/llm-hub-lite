@@ -5,6 +5,8 @@ services:
     environment:
       NEW_API_SITE: http://newapi.localhost
       CLIPROXY_SITE: http://cpa.localhost
+      WOODPECKER_SITE: http://ci.localhost
+      BESZEL_SITE: http://status.localhost
       SSL_EMAIL: dev@example.invalid
 
   cliproxy:

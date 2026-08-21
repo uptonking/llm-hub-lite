@@ -21,6 +21,7 @@ source "$config_file"
 : "${RETAIN_RELEASES:=5}"
 : "${BACKUP_RETENTION:=10}"
 : "${DEPLOY_LOG:=$APP_ROOT/shared/logs/deploy.log}"
+: "${PLATFORM_LOCK_FILE:=$APP_ROOT/shared/platform.lock}"
 
 log() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"
@@ -71,7 +72,7 @@ backup_dir="$shared_root/backups"
 runtime_dir="$shared_root/runtime"
 current_link="$APP_ROOT/current"
 previous_link="$APP_ROOT/previous"
-lock_file="$shared_root/deploy.lock"
+lock_file="$PLATFORM_LOCK_FILE"
 status_file="$shared_root/deploy-status.env"
 
 mkdir -p "$shared_root/logs" "$releases_dir" "$backup_dir"
@@ -161,16 +162,18 @@ validate_release() {
   validate_production_env
   STACK_ENV_FILE="$ENV_FILE" "$release_dir/stack.sh" prod validate
 
-  local caddy_image new_api_site cliproxy_site woodpecker_site ssl_email
+  local caddy_image new_api_site cliproxy_site woodpecker_site beszel_site ssl_email
   caddy_image="$(dotenv_value "$ENV_FILE" CADDY_IMAGE)"
   new_api_site="$(dotenv_value "$ENV_FILE" NEW_API_SITE)"
   cliproxy_site="$(dotenv_value "$ENV_FILE" CLIPROXY_SITE)"
   woodpecker_site="$(dotenv_value "$ENV_FILE" WOODPECKER_SITE)"
+  beszel_site="$(dotenv_value "$ENV_FILE" BESZEL_SITE)"
   ssl_email="$(dotenv_value "$ENV_FILE" SSL_EMAIL)"
   docker run --rm \
     -e NEW_API_SITE="$new_api_site" \
     -e CLIPROXY_SITE="$cliproxy_site" \
     -e WOODPECKER_SITE="$woodpecker_site" \
+    -e BESZEL_SITE="$beszel_site" \
     -e SSL_EMAIL="$ssl_email" \
     -v "$release_dir/config:/etc/caddy:ro" \
     "$caddy_image" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
@@ -243,7 +246,7 @@ compose_up() {
   local release_dir="$1"
   stage_runtime "$release_dir"
   STACK_ENV_FILE="$ENV_FILE" "$runtime_dir/stack.sh" prod up \
-    --remove-orphans --wait --wait-timeout 180
+    --wait --wait-timeout 180
   STACK_ENV_FILE="$ENV_FILE" "$runtime_dir/stack.sh" prod reload
 }
 
@@ -291,8 +294,9 @@ cleanup_releases() {
 deploy() {
   local sha="$1"
   validate_sha "$sha"
+  mkdir -p "$(dirname "$lock_file")"
   exec 9>"$lock_file"
-  flock -n 9 || die "another deployment is already running"
+  flock -w 300 9 || die "timed out waiting for another platform operation"
 
   ensure_mirror
   fetch_main || die "unable to fetch origin/$MAIN_BRANCH"
@@ -331,8 +335,9 @@ rollback() {
   fi
   [[ -d "$release_dir" ]] || die "release does not exist: $release_dir"
 
+  mkdir -p "$(dirname "$lock_file")"
   exec 9>"$lock_file"
-  flock -n 9 || die "another deployment is already running"
+  flock -w 300 9 || die "timed out waiting for another platform operation"
   validate_release "$release_dir"
   backup_shared_data
   old_current="$(readlink "$current_link" 2>/dev/null || true)"

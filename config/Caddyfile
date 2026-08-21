@@ -33,3 +33,15 @@
 	import common_proxy
 	reverse_proxy woodpecker-server:8000
 }
+
+{$BESZEL_SITE:http://status.localhost} {
+	import common_proxy
+	request_body {
+		max_size 10MB
+	}
+	reverse_proxy beszel-hub:8090 {
+		transport http {
+			read_timeout 360s
+		}
+	}
+}

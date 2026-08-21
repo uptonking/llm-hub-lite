@@ -28,6 +28,12 @@ services:
     networks:
       - woodpecker
       - shared_network
+    healthcheck:
+      test: ["CMD", "/bin/woodpecker-server", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
 
   woodpecker-agent:
     image: ${WOODPECKER_AGENT_IMAGE:?WOODPECKER_AGENT_IMAGE must be digest-pinned}
@@ -35,7 +41,7 @@ services:
     restart: unless-stopped
     depends_on:
       woodpecker-server:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker/agent}:/etc/woodpecker
       - /var/run/docker.sock:/var/run/docker.sock
@@ -47,6 +53,12 @@ services:
       WOODPECKER_LOG_LEVEL: ${WOODPECKER_LOG_LEVEL:-info}
     networks:
       - woodpecker
+    healthcheck:
+      test: ["CMD", "/bin/woodpecker-agent", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
 
 networks:
   woodpecker:

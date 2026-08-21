@@ -1,0 +1,13 @@
+[Unit]
+Description=Shared Docker network for the llm-hub-lite platform
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/platformctl ensure-network
+
+[Install]
+WantedBy=platform.target

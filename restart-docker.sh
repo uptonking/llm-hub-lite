@@ -2,5 +2,9 @@
 set -euo pipefail
 
 date
+mode="${1:-prod}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-"$script_dir/stack.sh" "${1:-dev}" restart
+if [[ "$mode" == prod && -x /usr/local/bin/platformctl ]]; then
+  exec /usr/local/bin/platformctl restart all
+fi
+exec "$script_dir/stack.sh" "$mode" restart

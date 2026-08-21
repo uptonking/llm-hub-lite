@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up persistent llm-hub-lite platform data
+After=platform.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=900
+ExecStart=/usr/local/bin/platformctl backup scheduled

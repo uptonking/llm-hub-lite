@@ -1,0 +1,15 @@
+[Unit]
+Description=llm-hub-lite application services
+After=platform-network.service platform-beszel.service platform-woodpecker.service
+Requires=platform-network.service
+Wants=platform-beszel.service platform-woodpecker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=240
+ExecStart=/usr/local/bin/platformctl start app
+ExecReload=/usr/local/bin/platformctl restart app
+
+[Install]
+WantedBy=platform.target

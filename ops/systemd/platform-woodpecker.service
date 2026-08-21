@@ -1,0 +1,14 @@
+[Unit]
+Description=Woodpecker CI services
+After=platform-network.service platform-beszel.service
+Requires=platform-network.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=180
+ExecStart=/usr/local/bin/platformctl start woodpecker
+ExecReload=/usr/local/bin/platformctl restart woodpecker
+
+[Install]
+WantedBy=platform.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Beszel monitoring services
+After=platform-network.service
+Requires=platform-network.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=180
+ExecStart=/usr/local/bin/platformctl start beszel
+ExecReload=/usr/local/bin/platformctl restart beszel
+
+[Install]
+WantedBy=platform.target

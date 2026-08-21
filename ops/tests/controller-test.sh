@@ -71,6 +71,7 @@ CLIPROXY_IMAGE=eceasy/cli-proxy-api:v7.2.137@sha256:591a09c19de769be09a2e5627736
 NEW_API_SITE=https://newapi.example.invalid
 CLIPROXY_SITE=https://cpa.example.invalid
 WOODPECKER_SITE=https://ci.example.invalid
+BESZEL_SITE=https://status.example.invalid
 SSL_EMAIL=test@example.invalid
 EOF
 config="$tmp/deploy.env"
@@ -82,6 +83,7 @@ ENV_FILE=$env_file
 RETAIN_RELEASES=1
 BACKUP_RETENTION=2
 DEPLOY_LOG=$app_root/shared/logs/deploy.log
+PLATFORM_LOCK_FILE=$app_root/shared/platform.lock
 EOF
 
 controller="$repo_root/ops/deploy-controller.sh"
@@ -91,7 +93,7 @@ PATH="$fake_bin:$PATH" DEPLOY_CONFIG_FILE="$config" STACK_CALL_LOG="$stack_call_
 [[ "$(readlink "$app_root/current")" == "$app_root/releases/$sha1" ]]
 [[ -L "$app_root/current" ]]
 grep -q "^$app_root/releases/$sha1|prod validate$" "$stack_call_log"
-grep -q "^$app_root/shared/runtime|prod up --remove-orphans --wait --wait-timeout 180$" "$stack_call_log"
+grep -q "^$app_root/shared/runtime|prod up --wait --wait-timeout 180$" "$stack_call_log"
 grep -q "^$app_root/shared/runtime|prod reload$" "$stack_call_log"
 cmp "$work/config/Caddyfile" "$app_root/shared/runtime/config/Caddyfile"
 find "$app_root/shared/backups" -maxdepth 1 -type f -name '*.tar.gz' -print -quit | grep -q .

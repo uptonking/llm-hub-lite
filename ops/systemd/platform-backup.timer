@@ -1,0 +1,12 @@
+[Unit]
+Description=Frequent llm-hub-lite platform backups
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+RandomizedDelaySec=60s
+Persistent=true
+Unit=platform-backup.service
+
+[Install]
+WantedBy=timers.target

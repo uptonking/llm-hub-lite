@@ -10,6 +10,7 @@ The same stack supports HTTP-only local development and automatic HTTPS.
 | Caddy | Public reverse proxy and TLS termination | 80 / 443 |
 | New API | LLM aggregation, relay, and administration | 3000 |
 | CLIProxyAPI | OpenAI/Gemini/Claude/Codex-compatible proxy | 8317 |
+| Beszel hub | VPS monitoring UI and agent enrollment | 8090 (internal) |
 
 New API uses SQLite by default. Its database is stored under the selected `DATA_ROOT` (development defaults to `data/dev`; production should use an absolute shared path such as `/opt/apps/llm-hub-lite/shared/data/prod`).
 
@@ -21,7 +22,7 @@ The application containers are never published directly. Caddy is the only publi
 
 - Docker Engine and Docker Compose v2
 - A Docker network named `shared_network` (the helper script creates it when absent)
-- For production: DNS records for `newapi.<your-domain>`, `cpa.<your-domain>`, and optionally `ci.<your-domain>` pointing to the server
+- For production: DNS records for `newapi.<your-domain>`, `cpa.<your-domain>`, `ci.<your-domain>`, and `status.<your-domain>` pointing to the server
 
 ## Local development
 
@@ -58,6 +59,7 @@ Set the complete HTTPS site addresses in the production environment file:
 - `NEW_API_SITE=https://newapi.<DOMAIN_NAME>` -> New API
 - `CLIPROXY_SITE=https://cpa.<DOMAIN_NAME>` -> CLIProxyAPI
 - `WOODPECKER_SITE=https://ci.<DOMAIN_NAME>` -> Woodpecker, when enabled
+- `BESZEL_SITE=https://status.<DOMAIN_NAME>` -> Beszel monitoring
 
 Caddy stores ACME certificates and state under the configured production data root. Keep that directory in backups. `SSL_EMAIL`, `NEW_API_SESSION_SECRET`, `CLIPROXY_API_KEY`, `CLIPROXY_MANAGEMENT_KEY`, `NEW_API_SITE`, `CLIPROXY_SITE`, `WOODPECKER_SITE`, `SESSION_COOKIE_TRUSTED_URL`, and `DATA_ROOT` are required by the production helper. Production site and trusted-origin values must use `https://`, and `DATA_ROOT` must be absolute.
 
@@ -118,12 +120,14 @@ scp ops/bootstrap-vps.sh root@166.88.160.139:/root/llm-hub-lite-bootstrap.sh
 ssh -t root@166.88.160.139 /root/llm-hub-lite-bootstrap.sh
 ```
 
-The script prompts for OAuth credentials without echoing the secret, generates
-application and agent credentials, enables the firewall, installs the
-controller, performs the initial exact-SHA deployment, and starts Woodpecker.
-It preserves existing host environment files on repeated runs. Production
-credentials live only under `/opt/apps/llm-hub-lite/shared` and
-`/opt/platform/woodpecker`; they are never copied into Git releases.
+The script prompts for OAuth credentials without echoing the secret, installs
+`restic`, `sqlite3`, and `jq`, generates application and agent credentials,
+enables the firewall, installs the controller and systemd units, performs the
+initial exact-SHA deployment, and starts Woodpecker and Beszel. It preserves
+existing host environment files, releases, databases, certificates, and OAuth
+credentials on repeated runs. Production credentials live only under
+`/opt/apps/llm-hub-lite/shared`, `/opt/platform/woodpecker`, and
+`/opt/platform/beszel`; they are never copied into Git releases.
 
 After bootstrap, activate `uptonking/llm-hub-lite`, disable pull-request and
 fork events, and mark only this repository trusted. Releases are stored under
@@ -159,7 +163,15 @@ Change only reviewed digest pins in `/opt/platform/woodpecker/.env` or the
 application production environment. Never replace production pins with mutable
 tags.
 
-## Persistence and backups
+## Beszel monitoring
+
+Beszel is available at `https://status.<your-domain>` through Caddy. The agent
+uses host networking and an outbound WebSocket, so there is no public listener
+on port `45876`; UFW only permits SSH, HTTP/HTTPS, and HTTP/3. The hub database,
+agent fingerprint, key, and token are under `/opt/platform/beszel` and are
+included in encrypted backups.
+
+## Persistence, backups, and reboot recovery
 
 Back up these paths:
 
@@ -167,6 +179,24 @@ Back up these paths:
 - the selected runtime root's `cliproxy` directory - writable CLIProxyAPI configuration, auth files, logs, and plugins
 - the selected runtime root's `caddy` and `caddy-config` directories - certificates and Caddy state
 - `/opt/platform/woodpecker/data` - Woodpecker's SQLite database and repository state
+- `/opt/platform/beszel/hub` and `/opt/platform/beszel/agent` - monitoring history and agent identity
+
+The bootstrap creates an encrypted local Restic repository at
+`/opt/backups/llm-hub-lite/repository`, protected by
+`/etc/llm-hub-lite/restic-password` (root-only). A systemd timer runs every 15
+minutes, keeps hourly/daily/weekly/monthly retention, and runs `restic check`
+at least weekly. SQLite databases are copied with SQLite's online `.backup`
+operation and integrity-checked; live database, journal, WAL, and SHM files are
+excluded from the filesystem portion of the snapshot so an inconsistent copy
+cannot override the verified one. `platformctl backup manual` creates an
+immediate snapshot; `platformctl restore latest` extracts to a new directory
+for validation and deliberate atomic replacement.
+
+All platform services are enabled through `platform.target`; Docker/network
+ordering, health-gated Compose startup, and bounded retries make a VPS reboot
+reconcile the complete platform automatically. `platform-health.timer` checks
+and repairs drift every 15 minutes. `platformctl status` and
+`platformctl recover` are the primary diagnostics/recovery commands.
 
 Existing data under the old top-level `data/` directory is not migrated automatically; back it up and copy it deliberately if it is needed.
 

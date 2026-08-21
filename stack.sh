@@ -36,14 +36,14 @@ read_env_value() {
 }
 
 if [[ "$mode" == prod ]]; then
-  for key in DOMAIN_NAME SSL_EMAIL NEW_API_SITE CLIPROXY_SITE WOODPECKER_SITE SESSION_COOKIE_TRUSTED_URL DATA_ROOT NEW_API_SESSION_SECRET CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY; do
+  for key in DOMAIN_NAME SSL_EMAIL NEW_API_SITE CLIPROXY_SITE WOODPECKER_SITE BESZEL_SITE SESSION_COOKIE_TRUSTED_URL DATA_ROOT NEW_API_SESSION_SECRET CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY; do
     value="$(read_env_value "$key")"
     if [[ -z "$value" || "$value" == replace-with-* || "$value" == example.com || "$value" == admin@example.com || "$value" == ./data/dev || "$value" == https://newapi.example.com || "$value" == https://cpa.example.com || "$value" == https://newapi.localhost || "$value" == https://cpa.localhost || "$value" == https://*example.invalid ]]; then
       printf '%s must be set to a real value in %s\n' "$key" "$env_file" >&2
       exit 1
     fi
   done
-  for key in NEW_API_SITE CLIPROXY_SITE WOODPECKER_SITE SESSION_COOKIE_TRUSTED_URL; do
+  for key in NEW_API_SITE CLIPROXY_SITE WOODPECKER_SITE BESZEL_SITE SESSION_COOKIE_TRUSTED_URL; do
     value="$(read_env_value "$key")"
     if [[ "$value" != https://* ]]; then
       printf '%s must start with https:// in %s\n' "$key" "$env_file" >&2
@@ -88,9 +88,9 @@ case "$action" in
       docker network create "$network_name" >/dev/null
     fi
     if [[ "$action" == restart ]]; then
-      "${compose[@]}" up -d --force-recreate "$@"
+      "${compose[@]}" up -d --wait "$@"
     elif [[ "$action" == up ]]; then
-      "${compose[@]}" up -d "$@"
+      "${compose[@]}" up -d --wait "$@"
     else
       "${compose[@]}" "$action" "$@"
     fi

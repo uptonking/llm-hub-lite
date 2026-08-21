@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic llm-hub-lite platform reconciliation
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=platform-health.service
+
+[Install]
+WantedBy=timers.target

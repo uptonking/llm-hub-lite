@@ -8,6 +8,7 @@ services:
       NEW_API_SITE: ${NEW_API_SITE:?NEW_API_SITE must be set in .env.production}
       CLIPROXY_SITE: ${CLIPROXY_SITE:?CLIPROXY_SITE must be set in .env.production}
       WOODPECKER_SITE: ${WOODPECKER_SITE:?WOODPECKER_SITE must be set in .env.production}
+      BESZEL_SITE: ${BESZEL_SITE:?BESZEL_SITE must be set in .env.production}
       SSL_EMAIL: ${SSL_EMAIL:?SSL_EMAIL must be set in .env.production}
 
   new-api:
