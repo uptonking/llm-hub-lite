@@ -93,6 +93,7 @@ if [[ ! -f "$woodpecker_env" ]]; then
   printf '\n'
   [[ -n "$github_client" && -n "$github_secret" ]] || die 'OAuth credentials are required'
   agent_secret="$(openssl rand -hex 32)"
+  grpc_secret="$(openssl rand -hex 32)"
   {
     printf 'WOODPECKER_SERVER_IMAGE=woodpeckerci/woodpecker-server:v3.17.0@sha256:23bdea05bc35ce150d9ba768889c3f00b3a618785c85b268e8fbf9b06d5a21e0\n'
     printf 'WOODPECKER_AGENT_IMAGE=woodpeckerci/woodpecker-agent:v3.17.0@sha256:03c7b1f7b2156d00fdf4c30da77ac2bfe88d09ed818ea4627f82835ad81a98c9\n'
@@ -103,6 +104,7 @@ if [[ ! -f "$woodpecker_env" ]]; then
     printf 'WOODPECKER_GITHUB_CLIENT=%s\n' "$github_client"
     printf 'WOODPECKER_GITHUB_SECRET=%s\n' "$github_secret"
     printf 'WOODPECKER_AGENT_SECRET=%s\n' "$agent_secret"
+    printf 'WOODPECKER_GRPC_SECRET=%s\n' "$grpc_secret"
     printf 'WOODPECKER_REPO_OWNERS=uptonking\n'
     printf 'WOODPECKER_AGENT_LABELS=target=production,repo=uptonking/llm-hub-lite\n'
     printf 'WOODPECKER_MAX_WORKFLOWS=1\n'
