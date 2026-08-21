@@ -4,5 +4,5 @@ After=platform.target
 
 [Service]
 Type=oneshot
-TimeoutStartSec=300
+TimeoutStartSec=900
 ExecStart=/usr/local/bin/platformctl recover

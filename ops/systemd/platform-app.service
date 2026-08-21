@@ -7,7 +7,7 @@ Wants=platform-beszel.service platform-woodpecker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-TimeoutStartSec=240
+TimeoutStartSec=420
 ExecStart=/usr/local/bin/platformctl reconcile app
 ExecReload=/usr/local/bin/platformctl restart app
 
