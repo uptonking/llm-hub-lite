@@ -116,7 +116,12 @@ chmod 600 "$deploy_env"
 
 docker build --pull=false -t llm-hub-lite/deploy-runner:0.1.0 "$SOURCE_ROOT/ops/deploy-runner"
 sha="$(git -C "$SOURCE_ROOT" rev-parse "origin/$MAIN_BRANCH")"
-DEPLOY_CONFIG_FILE="$deploy_env" /usr/local/bin/deploy-controller deploy "$sha"
+current_sha="$(basename "$(readlink "$APP_ROOT/current" 2>/dev/null || true)")"
+if [[ "$current_sha" != "$sha" ]]; then
+  DEPLOY_CONFIG_FILE="$deploy_env" /usr/local/bin/deploy-controller deploy "$sha"
+else
+  printf 'Application release %s is already current; skipping duplicate deployment.\n' "$sha"
+fi
 /usr/local/bin/platformctl start beszel
 
 if [[ "$beszel_needs_enrollment" == true ]]; then

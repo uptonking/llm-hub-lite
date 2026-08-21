@@ -7,7 +7,7 @@ Requires=platform-network.service
 Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=180
-ExecStart=/usr/local/bin/platformctl start beszel
+ExecStart=/usr/local/bin/platformctl reconcile beszel
 ExecReload=/usr/local/bin/platformctl restart beszel
 
 [Install]

@@ -8,7 +8,7 @@ Wants=platform-beszel.service platform-woodpecker.service
 Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=240
-ExecStart=/usr/local/bin/platformctl start app
+ExecStart=/usr/local/bin/platformctl reconcile app
 ExecReload=/usr/local/bin/platformctl restart app
 
 [Install]

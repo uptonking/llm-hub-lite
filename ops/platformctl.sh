@@ -15,6 +15,7 @@ SOURCE_ROOT="${SOURCE_ROOT:-$PLATFORM_ROOT/llm-hub-lite-bootstrap}"
 LOCK_FILE="${PLATFORM_LOCK_FILE:-/run/lock/llm-hub-lite/platform.lock}"
 LOCK_WAIT="${PLATFORM_LOCK_WAIT:-300}"
 COMPOSE_WAIT_TIMEOUT="${COMPOSE_WAIT_TIMEOUT:-180}"
+RECOVERY_GRACE_SECONDS="${RECOVERY_GRACE_SECONDS:-60}"
 
 mkdir -p "$(dirname "$LOCK_FILE")"
 exec 9>"$LOCK_FILE"
@@ -112,6 +113,57 @@ status_project() {
   esac
 }
 
+project_expected() {
+  local name="$1" key token
+  case "$name" in
+    app) printf '3\n' ;;
+    woodpecker) printf '2\n' ;;
+    beszel)
+      key="$(sed -n 's/^BESZEL_KEY_FILE=//p' "$BESZEL_ENV" | tail -n1)"
+      token="$(sed -n 's/^BESZEL_TOKEN_FILE=//p' "$BESZEL_ENV" | tail -n1)"
+      key="${key:-$BESZEL_ROOT/secrets/key}"
+      token="${token:-$BESZEL_ROOT/secrets/token}"
+      [[ -s "$key" && -s "$token" ]] && printf '2\n' || printf '1\n'
+      ;;
+  esac
+}
+
+project_ids() {
+  case "$1" in
+    app) "${app_compose[@]}" ps -q ;;
+    woodpecker) "${woodpecker_compose[@]}" ps -q ;;
+    beszel) "${beszel_compose[@]}" ps -q ;;
+  esac
+}
+
+project_is_healthy() {
+  local name="$1" expected ids count id state
+  expected="$(project_expected "$name")"
+  ids="$(project_ids "$name")"
+  count="$(grep -c . <<<"$ids" || true)"
+  (( count == expected )) || return 1
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
+    [[ "$state" == 'running healthy' || "$state" == 'running none' ]] || return 1
+  done <<<"$ids"
+}
+
+reconcile_project() {
+  local name="$1" waited=0 ids
+  ensure_network
+  if project_is_healthy "$name"; then return 0; fi
+  ids="$(project_ids "$name")"
+  if [[ -n "$ids" ]]; then
+    while (( waited < RECOVERY_GRACE_SECONDS )); do
+      sleep 5
+      waited=$((waited + 5))
+      if project_is_healthy "$name"; then return 0; fi
+    done
+  fi
+  "start_${name}"
+}
+
 validate() {
   need_file "$APP_ENV"; need_file "$APP_RUNTIME/docker-compose.yml"; need_file "$APP_RUNTIME/docker-compose.prod.yml"
   "${app_compose[@]}" config --quiet
@@ -120,41 +172,13 @@ validate() {
 }
 
 health() {
-  local failed=0 name expected running key token id state
+  local failed=0 name
   for name in beszel woodpecker app; do
     if ! status_project "$name"; then
       failed=1
       continue
     fi
-    case "$name" in
-      app) expected=3; running="$("${app_compose[@]}" ps --status running -q | wc -l)" ;;
-      woodpecker) expected=2; running="$("${woodpecker_compose[@]}" ps --status running -q | wc -l)" ;;
-      beszel)
-        key="$(sed -n 's/^BESZEL_KEY_FILE=//p' "$BESZEL_ENV" | tail -n1)"
-        token="$(sed -n 's/^BESZEL_TOKEN_FILE=//p' "$BESZEL_ENV" | tail -n1)"
-        key="${key:-$BESZEL_ROOT/secrets/key}"
-        token="${token:-$BESZEL_ROOT/secrets/token}"
-        [[ -s "$key" && -s "$token" ]] && expected=2 || expected=1
-        running="$("${beszel_compose[@]}" ps --status running -q | wc -l)"
-        ;;
-    esac
-    if (( running != expected )); then
-      printf '%s: expected %s running services, found %s\n' "$name" "$expected" "$running" >&2
-      failed=1
-    fi
-    case "$name" in
-      app) ids="$("${app_compose[@]}" ps -q)" ;;
-      woodpecker) ids="$("${woodpecker_compose[@]}" ps -q)" ;;
-      beszel) ids="$("${beszel_compose[@]}" ps -q)" ;;
-    esac
-    while IFS= read -r id; do
-      [[ -n "$id" ]] || continue
-      state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
-      if [[ "$state" != 'running healthy' && "$state" != 'running none' ]]; then
-        printf '%s: container %s state is %s\n' "$name" "$id" "$state" >&2
-        failed=1
-      fi
-    done <<<"$ids"
+    project_is_healthy "$name" || { printf '%s: one or more services are missing or unhealthy\n' "$name" >&2; failed=1; }
   done
   return "$failed"
 }
@@ -168,7 +192,9 @@ start_all() {
 recover() {
   validate
   ensure_network
-  start_all
+  reconcile_project beszel
+  reconcile_project woodpecker
+  reconcile_project app
   health
 }
 
@@ -194,6 +220,9 @@ case "${1:-status}" in
     case "${2:-all}" in all) start_all ;; app|woodpecker|beszel) "start_${2}" ;; *) die "unknown project: $2" ;; esac ;;
   stop) stop_project "${2:-all}" ;;
   recover) recover ;;
+  reconcile)
+    case "${2:-all}" in all) recover ;; app|woodpecker|beszel) reconcile_project "$2" ;; *) die "unknown project: $2" ;; esac
+    ;;
   upgrade) upgrade ;;
   backup) backup "$@" ;;
   restore)
@@ -203,5 +232,5 @@ case "${1:-status}" in
   logs)
     case "${2:-app}" in app) "${app_compose[@]}" logs --tail 200 ;; woodpecker) "${woodpecker_compose[@]}" logs --tail 200 ;; beszel) "${beszel_compose[@]}" logs --tail 200 ;; *) die "unknown project: $2" ;; esac
     ;;
-  *) die 'usage: platformctl {ensure-network|validate|status|start|restart|stop|recover|upgrade|backup|restore|logs} [project]' ;;
+  *) die 'usage: platformctl {ensure-network|validate|status|start|restart|stop|reconcile|recover|upgrade|backup|restore|logs} [project]' ;;
 esac

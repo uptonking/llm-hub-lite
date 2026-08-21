@@ -7,7 +7,7 @@ Requires=platform-network.service
 Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=180
-ExecStart=/usr/local/bin/platformctl start woodpecker
+ExecStart=/usr/local/bin/platformctl reconcile woodpecker
 ExecReload=/usr/local/bin/platformctl restart woodpecker
 
 [Install]
