@@ -32,6 +32,8 @@ jobs:
         run: |
           ops/tests/stack-test.sh
           ops/tests/backup-test.sh
+          ops/tests/enroll-test.sh
+          ops/tests/platform-submit-test.sh
 
       - name: Validate Compose model
         run: |
@@ -43,6 +45,13 @@ jobs:
 
       - name: Validate Caddyfile
         run: STACK_ENV_FILE=.env.prod.example STACK_IMAGE_ENV_FILE=ops/images.apps.prod.env STACK_FOUNDATION_IMAGE_ENV_FILE=ops/images.foundation.prod.env STACK_RUNTIME_ROOT="$PWD/.runtime/ci" ./stack.sh prod validate
+
+      - name: Validate deployment runner Dockerfile
+        run: >-
+          docker build --check
+          --build-arg APK_LOCK_SHA256_AMD64=04dc754bdbbfdc2a9130ff5e13ed9213e8bb6e80f37abd033766de59a3a6e67b
+          --build-arg APK_LOCK_SHA256_ARM64=04dc754bdbbfdc2a9130ff5e13ed9213e8bb6e80f37abd033766de59a3a6e67b
+          ops/deploy-runner
 
       - name: Lint Woodpecker workflow
         run: >-

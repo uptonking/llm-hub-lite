@@ -1,0 +1,10 @@
+[Unit]
+Description=Enroll the llm-hub-lite Beszel agent
+After=platform-recovery.service
+Requires=platform-recovery.service
+ConditionPathExists=/etc/llm-hub-lite/beszel-initial-credentials
+
+[Service]
+Type=oneshot
+TimeoutStartSec=180
+ExecStart=/usr/local/bin/enroll-beszel

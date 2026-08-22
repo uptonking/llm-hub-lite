@@ -1,5 +1,5 @@
 [Unit]
-Description=Recover the llm-hub-lite Docker platform
+Description=Retry llm-hub-lite Docker platform recovery
 After=platform-network.service network-online.target
 Requires=platform-network.service docker.service
 Wants=network-online.target
@@ -7,10 +7,5 @@ RequiresMountsFor=/opt/apps/llm-hub-lite /opt/platform /etc/llm-hub-lite
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
 TimeoutStartSec=420
-OnFailure=platform-recovery-retry.service
 ExecStart=/usr/local/bin/platformctl recover --quiet
-
-[Install]
-WantedBy=platform.target

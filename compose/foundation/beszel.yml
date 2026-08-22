@@ -48,15 +48,26 @@ services:
     labels:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.component: foundation-beszel
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:2375/_ping | grep -qx OK"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   beszel-agent:
     image: ${BESZEL_AGENT_IMAGE:?BESZEL_AGENT_IMAGE must be digest-pinned}
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
+    # Beszel documents this exception for Dockerized systemd/D-Bus
+    # monitoring. The agent remains non-root and keeps no-new-privileges.
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:${BESZEL_AGENT_APPARMOR:-unconfined}
     depends_on:
       beszel-socket-proxy:
-        condition: service_started
+        condition: service_healthy
     labels:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.component: foundation-beszel
@@ -75,6 +86,7 @@ services:
     volumes:
       - ${BESZEL_AGENT_DATA_ROOT:-/opt/platform/beszel/agent}:/var/lib/beszel-agent
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro
+      - ${BESZEL_SYSTEMD_PRIVATE_SOCKET:-/run/systemd/private}:/run/systemd/private:ro
       - ${BESZEL_KEY_FILE:-/opt/platform/beszel/secrets/key}:/run/secrets/beszel_key:ro
       - ${BESZEL_TOKEN_FILE:-/opt/platform/beszel/secrets/token}:/run/secrets/beszel_token:ro
     healthcheck:

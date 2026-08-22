@@ -1,0 +1,23 @@
+when:
+  - event: manual
+    branch: main
+
+labels:
+  target: production
+  repo: uptonking/llm-hub-lite
+
+concurrency:
+  limit: 1
+  group: production
+
+steps:
+  - name: upgrade-runner
+    image: llm-hub-lite/deploy-runner:current
+    pull: false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/platform:/opt/platform
+      - /etc/llm-hub-lite:/etc/llm-hub-lite
+      - /usr/local/bin/upgrade-runner:/usr/local/bin/upgrade-runner:ro
+    commands:
+      - /usr/local/bin/upgrade-runner

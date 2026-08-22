@@ -1,0 +1,12 @@
+[Unit]
+Description=Retry llm-hub-lite platform recovery after boot and failures
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+RandomizedDelaySec=15s
+Persistent=true
+Unit=platform-recovery-retry.service
+
+[Install]
+WantedBy=timers.target

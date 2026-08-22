@@ -1,6 +1,7 @@
 [Unit]
 Description=Back up persistent llm-hub-lite platform data
 After=platform.target
+Requires=platform.target
 
 [Service]
 Type=oneshot

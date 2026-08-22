@@ -3,6 +3,7 @@ Description=Shared Docker network for the llm-hub-lite platform
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
+RequiresMountsFor=/opt/apps/llm-hub-lite /opt/platform /etc/llm-hub-lite
 
 [Service]
 Type=oneshot

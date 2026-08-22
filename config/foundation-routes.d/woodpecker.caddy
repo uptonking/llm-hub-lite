@@ -1,0 +1,4 @@
+{$WOODPECKER_SITE} {
+  import common_proxy
+  reverse_proxy woodpecker-server:8000
+}

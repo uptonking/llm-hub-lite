@@ -12,14 +12,16 @@ concurrency:
 
 steps:
   - name: validate
-    image: llm-hub-lite/deploy-runner:0.3.0
+    image: llm-hub-lite/deploy-runner:current
+    pull: false
     commands:
-      - platform-compose --env-file .env.prod.example --env-file ops/images.foundation.prod.env -f compose/foundation/caddy.yml config --quiet
+      - STACK_ENV_FILE=.env.prod.example STACK_RUNTIME_ROOT=.runtime/ci STACK_IMAGE_ENV_FILE=ops/images.apps.prod.env STACK_FOUNDATION_IMAGE_ENV_FILE=ops/images.foundation.prod.env ./stack.sh prod validate
       - platform-compose --env-file .env.prod.example --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker.yml config --quiet
       - platform-compose --env-file .env.prod.example --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel.yml config --quiet
 
   - name: upgrade
-    image: llm-hub-lite/deploy-runner:0.3.0
+    image: llm-hub-lite/deploy-runner:current
+    pull: false
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite

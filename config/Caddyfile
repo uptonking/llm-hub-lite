@@ -15,5 +15,5 @@
 	}
 }
 
-import /etc/caddy/foundation-routes.caddy
+import /etc/caddy/foundation-routes.d/*.caddy
 import /etc/caddy/routes.d/*.caddy

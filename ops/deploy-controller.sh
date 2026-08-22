@@ -72,6 +72,22 @@ verify_target() {
   git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$sha" "refs/remotes/origin/$MAIN_BRANCH" || die 'target is not reachable from main'
 }
 
+verify_app_scope() {
+  local old_release="$1" new_release="$2" mode="${3:-app}" old_sha new_sha path
+  [[ -n "$old_release" ]] || return 0
+  old_sha="$(basename "$old_release")"; new_sha="$(basename "$new_release")"
+  while IFS= read -r path; do
+    case "$path" in
+      apps/*|README.md|LICENSE.md) ;;
+      ops/images.apps.prod.env) ;;
+      *) die "application deployment contains foundation/control-plane change: $path; use the reviewed foundation workflow" ;;
+    esac
+    if [[ "$path" == ops/images.apps.prod.env && "$mode" != app && "$mode" != app-upgrade ]]; then
+      die "unsupported image manifest change in $mode deployment: $path"
+    fi
+  done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
+}
+
 prepare_release() {
   local sha="$1" release="$RELEASES/$sha"
   if [[ ! -e "$release" ]]; then git -C "$SOURCE_MIRROR" worktree add --detach "$release" "$sha" >/dev/null; fi
@@ -99,7 +115,7 @@ validate_release() {
     APP_ENV="$APP_ENV" APP_IMAGE_ENV="$image_apps" FOUNDATION_IMAGE_ENV="$image_foundation" \
     FOUNDATION_ROOT="$foundation_validate" FOUNDATION_ENV_ROOT="$foundation_validate/env" \
     PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
-    "$release/ops/platformctl.sh" validate; then
+    "$release/ops/platformctl.sh" validate --check; then
     rm -rf -- "$runtime" "$foundation_validate" "$control_validate"; return 1
   fi
   rm -rf -- "$runtime" "$foundation_validate" "$control_validate"
@@ -111,6 +127,18 @@ backup() {
   PLATFORM_LOCK_HELD=1 "$BACKUP_SCRIPT" snapshot "${1:-pre-deploy}" || die 'verified backup failed'
 }
 
+merge_new_app_image_keys() {
+  local release="$1" key value
+  [[ -f "$APP_IMAGE_ENV" ]] || : >"$APP_IMAGE_ENV"
+  while IFS='=' read -r key value; do
+    [[ -n "$key" && "$key" != \#* ]] || continue
+    if ! grep -q "^${key}=" "$APP_IMAGE_ENV"; then
+      printf '%s=%s\n' "$key" "$value" >>"$APP_IMAGE_ENV"
+    fi
+  done <"$release/ops/images.apps.prod.env"
+  chmod 600 "$APP_IMAGE_ENV"
+}
+
 install_foundation_files() {
   local release="$1"
   install -d -m 700 "$FOUNDATION_ROOT/env"
@@ -119,20 +147,57 @@ install_foundation_files() {
   install -m 600 "$release/compose/foundation/beszel.yml" "$FOUNDATION_ROOT/beszel.yml"
 }
 
+refresh_descriptor_registry() {
+  local release="$1" descriptor id registry="$CONTROL_ROOT/descriptors"
+  install -d -m 700 "$registry"
+  for descriptor in "$release"/apps/*; do
+    [[ -f "$descriptor/manifest.env" ]] || continue
+    id="$(basename "$descriptor")"
+    install -d -m 700 "$registry/$id"
+    install -m 600 "$descriptor/manifest.env" "$registry/$id/manifest.env"
+  done
+}
+
+prefetch_images() {
+  local mode="$1" file key image should_pull
+  local -a files=()
+  case "$mode" in
+    app|app-upgrade) files=("$APP_IMAGE_ENV") ;;
+    foundation) files=("$FOUNDATION_IMAGE_ENV") ;;
+    rollback) files=("$APP_IMAGE_ENV" "$FOUNDATION_IMAGE_ENV") ;;
+    *) die "unknown image prefetch mode: $mode" ;;
+  esac
+  for file in "${files[@]}"; do
+    [[ -f "$file" ]] || continue
+    while IFS='=' read -r key image; do
+      [[ -n "$key" && "$key" != \#* && -n "$image" ]] || continue
+      should_pull=0
+      if [[ "$mode" == app-upgrade || "$mode" == foundation ]]; then
+        should_pull=1
+      elif ! docker image inspect "$image" >/dev/null 2>&1; then
+        should_pull=1
+      fi
+      if (( should_pull == 1 )); then docker pull "$image" >/dev/null; fi
+    done <"$file"
+  done
+}
+
 reconcile() {
   CONTROL_ROOT="$CONTROL_ROOT" APPS_ROOT="$CONTROL_ROOT/current/apps" FOUNDATION_ROOT="$FOUNDATION_ROOT" \
     APP_ENV="$APP_ENV" APP_IMAGE_ENV="$APP_IMAGE_ENV" FOUNDATION_IMAGE_ENV="$FOUNDATION_IMAGE_ENV" \
     PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
-    "$PLATFORMCTL_SCRIPT" recover --quiet
+    "$PLATFORMCTL_SCRIPT" sync "${DEPLOY_SYNC_SCOPE:-apps}"
 }
 
 smoke_apps() {
-  local descriptor id disable_key disable_value
+  local descriptor id disable_key disable_value default_disabled
   for descriptor in "$CONTROL_ROOT/current"/apps/*; do
     [[ -f "$descriptor/manifest.env" ]] || continue
     id="$(basename "$descriptor")"
     disable_key="$(sed -n 's/^DISABLE_ENV=//p' "$descriptor/manifest.env" | tail -n1)"
     disable_value="$(sed -n "s/^${disable_key}=//p" "$APP_ENV" | tail -n1)"
+    default_disabled="$(sed -n 's/^DEFAULT_DISABLED=//p' "$descriptor/manifest.env" | tail -n1)"
+    [[ -n "$disable_value" ]] || disable_value="$default_disabled"
     [[ "$disable_value" == true || "$disable_value" == TRUE || "$disable_value" == 1 ]] && continue
     APP_ENV="$APP_ENV" PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
       "$PLATFORMCTL_SCRIPT" smoke "app:$descriptor" || die "smoke failed: $id"
@@ -140,46 +205,82 @@ smoke_apps() {
 }
 
 cleanup() {
-  local path kept=0 current_target previous_target
+  local path stamp kept=0 current_target previous_target keep_file
   current_target="$(readlink "$CURRENT" 2>/dev/null || true)"
   previous_target="$(readlink "$PREVIOUS" 2>/dev/null || true)"
+  keep_file="${RETAIN_RELEASES_FILE:-$CONTROL_ROOT/retain-releases}"
+  # Keep newest releases by filesystem mtime (not by SHA lexical order), and
+  # honor explicit pins used by operators while an incident is investigated.
   while IFS= read -r path; do
+    stamp="${path%% *}"; path="${path#* }"
     [[ -d "$path" && "$path" != "$current_target" && "$path" != "$previous_target" ]] || continue
+    if [[ -f "$keep_file" ]] && grep -Fxq "$(basename "$path")" "$keep_file"; then continue; fi
     kept=$((kept + 1))
     if (( kept > RETAIN_RELEASES )); then
       git -C "$SOURCE_MIRROR" worktree remove --force "$path" >/dev/null 2>&1 || true
     fi
-  done < <(find "$RELEASES" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort -r)
+  done < <(for path in "$RELEASES"/*; do
+    [[ -d "$path" ]] || continue
+    stamp="$(stat -c '%Y' "$path" 2>/dev/null || stat -f '%m' "$path" 2>/dev/null || printf 0)"
+    printf '%s %s\n' "$stamp" "$path"
+  done | sort -nr)
 }
 
 apply() {
-  local sha="$1" mode="${2:-app}" release old_current old_previous tx foundation_changed=0
+  local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0
   sha_valid "$sha"
   exec 9>"$PLATFORM_LOCK_FILE"; flock -w 300 9 || die 'timed out waiting for deployment lock'
-  ensure_mirror; fetch_main || die 'unable to fetch repository'; verify_target "$sha"
-  release="$(prepare_release "$sha")"; validate_release "$release"; backup "pre-$mode"
+  ensure_mirror
+  if [[ "$mode" == rollback ]]; then
+    git -C "$SOURCE_MIRROR" cat-file -e "$sha^{commit}" || die 'rollback target is not retained in the local mirror'
+  else
+    fetch_main || die 'unable to fetch repository'
+    verify_target "$sha"
+  fi
+  release="$(prepare_release "$sha")"; validate_release "$release"
   old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
   old_previous="$(readlink "$PREVIOUS" 2>/dev/null || true)"
+  old_app_previous="$(readlink "$APP_PREVIOUS" 2>/dev/null || true)"
+  [[ "$mode" == app || "$mode" == app-upgrade ]] && verify_app_scope "$old_current" "$release" "$mode"
+  backup "pre-$mode"
   tx="$(mktemp -d "$APP_ROOT/shared/runtime/transaction.XXXXXX")"
   cp -f "$APP_IMAGE_ENV" "$tx/images.apps" 2>/dev/null || true
   cp -f "$FOUNDATION_IMAGE_ENV" "$tx/images.foundation" 2>/dev/null || true
   for file in caddy.yml woodpecker.yml beszel.yml; do cp -f "$FOUNDATION_ROOT/$file" "$tx/$file" 2>/dev/null || true; done
+  [[ -d "$CONTROL_ROOT/descriptors" ]] && cp -a "$CONTROL_ROOT/descriptors" "$tx/descriptors"
   if [[ -n "$old_current" ]]; then atomic_link "$old_current" "$PREVIOUS"; atomic_link "$old_current" "$APP_PREVIOUS"; fi
   atomic_link "$release" "$CURRENT"; atomic_link "$release" "$APP_CURRENT"
-  if [[ "$mode" != foundation ]]; then
+  refresh_descriptor_registry "$release"
+  # Normal source deployments change application code/config only. Image
+  # changes are explicit app-upgrade operations so a routine push cannot
+  # silently move production to a new image set.
+  if [[ "$mode" == app-upgrade ]]; then
     install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
+  elif [[ "$mode" == app ]]; then
+    merge_new_app_image_keys "$release"
   fi
   if [[ "$mode" == foundation ]]; then
     foundation_changed=1
     install_foundation_files "$release"
     install -m 600 "$release/ops/images.foundation.prod.env" "$FOUNDATION_IMAGE_ENV"
+  elif [[ "$mode" == rollback ]]; then
+    # A rollback restores the complete release contract, including the
+    # foundation files and both immutable image manifests.
+    foundation_changed=1
+    install_foundation_files "$release"
+    install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
+    install -m 600 "$release/ops/images.foundation.prod.env" "$FOUNDATION_IMAGE_ENV"
   fi
-  if reconcile && smoke_apps; then
+  sync_scope=apps
+  [[ "$mode" == foundation ]] && sync_scope=foundation
+  [[ "$mode" == rollback ]] && sync_scope=all
+  if prefetch_images "$mode" && DEPLOY_SYNC_SCOPE="$sync_scope" reconcile && smoke_apps; then
     cleanup; rm -rf -- "$tx"; log "deployment succeeded: $sha ($mode)"; return 0
   fi
   log 'deployment failed; restoring previous complete bundle'
   [[ -n "$old_current" ]] && { atomic_link "$old_current" "$CURRENT"; atomic_link "$old_current" "$APP_CURRENT"; } || { rm -f -- "$CURRENT" "$APP_CURRENT"; }
   [[ -n "$old_previous" ]] && atomic_link "$old_previous" "$PREVIOUS" || rm -f -- "$PREVIOUS"
+  [[ -n "$old_app_previous" ]] && atomic_link "$old_app_previous" "$APP_PREVIOUS" || rm -f -- "$APP_PREVIOUS"
   if [[ -f "$tx/images.apps" ]]; then install -m 600 "$tx/images.apps" "$APP_IMAGE_ENV"; else rm -f -- "$APP_IMAGE_ENV"; fi
   if [[ -f "$tx/images.foundation" ]]; then install -m 600 "$tx/images.foundation" "$FOUNDATION_IMAGE_ENV"; fi
   if (( foundation_changed )); then
@@ -187,8 +288,10 @@ apply() {
       [[ -f "$tx/$file" ]] && install -m 600 "$tx/$file" "$FOUNDATION_ROOT/$file"
     done
   fi
+  rm -rf -- "$CONTROL_ROOT/descriptors"
+  [[ -d "$tx/descriptors" ]] && cp -a "$tx/descriptors" "$CONTROL_ROOT/descriptors"
   rm -rf -- "$tx"
-  reconcile || true
+  DEPLOY_SYNC_SCOPE=all reconcile || true
   return 1
 }
 

@@ -12,7 +12,8 @@ concurrency:
 
 steps:
   - name: rollback
-    image: llm-hub-lite/deploy-runner:0.3.0
+    image: llm-hub-lite/deploy-runner:current
+    pull: false
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite

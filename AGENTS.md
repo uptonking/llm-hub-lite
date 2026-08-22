@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Self-hosted, reproducible Docker platform for Caddy, Woodpecker CI, Beszel, New API, and CLIProxyAPI on one VPS.
+Self-hosted, reproducible Docker platform for Caddy, Woodpecker CI, Beszel, New API, and CLIProxyAPI on a single server.
 
-## Layout
+## Architecture
 
 - Foundation Compose projects: `compose/foundation/`.
 - Declarative applications: `apps/<id>/manifest.env`, `compose.yml`, `route.caddy`.

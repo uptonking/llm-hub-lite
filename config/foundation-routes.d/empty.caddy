@@ -1,0 +1,2 @@
+# This keeps the foundation route import valid when every optional foundation
+# service is disabled.

@@ -1,6 +1,7 @@
 [Unit]
 Description=Reconcile and validate the llm-hub-lite platform
 After=platform.target platform-recovery.service
+Requires=platform.target
 
 [Service]
 Type=oneshot

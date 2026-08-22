@@ -16,8 +16,6 @@ services:
         max-file: "5"
     environment:
       SSL_EMAIL: ${SSL_EMAIL:?SSL_EMAIL must be set}
-      WOODPECKER_SITE: ${WOODPECKER_SITE:?WOODPECKER_SITE must be set}
-      BESZEL_SITE: ${BESZEL_SITE:?BESZEL_SITE must be set}
     volumes:
       - ${CADDY_DATA_ROOT:-/opt/platform/caddy}/data:/data
       - ${CADDY_DATA_ROOT:-/opt/platform/caddy}/config:/config

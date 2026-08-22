@@ -32,6 +32,7 @@ sed -i.bak 's/^APP_NEWAPI_DISABLE=false/APP_NEWAPI_DISABLE=true/' "$tmp/prod.env
 grep -q 'apps/newapi/compose.yml down --remove-orphans' "$tmp/compose.log"
 grep -q 'apps/cliproxyapi/compose.yml up -d' "$tmp/compose.log"
 grep -q 'compose/foundation/caddy.yml up -d' "$tmp/compose.log"
+[[ ! -e "$tmp/runtime/config/routes.d/newapi.caddy" ]]
 : >"$tmp/compose.log"
 sed -i.bak 's/^APP_CLIPROXYAPI_DISABLE=false/APP_CLIPROXYAPI_DISABLE=true/' "$tmp/prod.env"
 "$repo_root/stack.sh" prod up

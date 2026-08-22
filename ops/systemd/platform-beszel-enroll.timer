@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry llm-hub-lite Beszel enrollment
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+Persistent=true
+Unit=platform-beszel-enroll.service
+
+[Install]
+WantedBy=timers.target

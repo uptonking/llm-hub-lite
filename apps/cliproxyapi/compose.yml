@@ -11,6 +11,7 @@ services:
       com.aichorage.component: app-cliproxyapi
     environment:
       MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?CLIPROXY_MANAGEMENT_KEY must be set}
+      TZ: ${TZ:-Asia/Shanghai}
     working_dir: /CLIProxyAPI
     command:
       - sh

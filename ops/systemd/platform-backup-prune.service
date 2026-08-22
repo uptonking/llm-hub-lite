@@ -1,6 +1,7 @@
 [Unit]
 Description=Apply retention and prune the llm-hub-lite Restic repository
 After=platform.target
+Requires=platform.target
 
 [Service]
 Type=oneshot
