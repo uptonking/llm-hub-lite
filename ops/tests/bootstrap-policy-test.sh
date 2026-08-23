@@ -23,6 +23,14 @@ grep -Fq '/usr/local/bin/git-auth.sh' "$bootstrap"
 grep -Fq 'production bootstrap requires RESTIC_REMOTE_ENABLED=true' "$bootstrap"
 grep -Fq 'remote Restic repository is unavailable or uninitialized' "$bootstrap"
 grep -Fq 'restic snapshots --no-lock' "$bootstrap"
+wrapper_declaration="$(sed -n '/^for script in /p' "$bootstrap")"
+while IFS= read -r executable; do
+	wrapper="$(basename "${executable%% *}")"
+	grep -Eq "(^|[[:space:]])${wrapper}([[:space:];]|$)" <<<"$wrapper_declaration" || {
+		printf 'bootstrap does not install systemd command wrapper: %s\n' "$wrapper" >&2
+		exit 1
+	}
+done < <(sed -n 's/^ExecStart=//p' "$repo_root"/ops/systemd/* | sort -u)
 bundle_functions="$(sed -n '/^bundle_value() {/,/^}/p; /^load_bundle_value() {/,/^}/p' "$bootstrap")"
 loader_result="$(BUNDLE_FUNCTIONS="$bundle_functions" bash -c '
 	set -Eeuo pipefail

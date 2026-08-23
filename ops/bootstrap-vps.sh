@@ -691,7 +691,7 @@ for foundation_file in woodpecker-controller.yml woodpecker-worker.yml woodpecke
 done
 
 install -d -m 700 /usr/local/libexec
-for script in platformctl restart-platform backup-platform restore-platform configure-beszel enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
+for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
 	cat >"/usr/local/bin/$script" <<EOF
 #!/bin/sh
 exec /opt/platform/control/current/ops/$script.sh "\$@"
