@@ -38,6 +38,18 @@ exit 0
 EOF
 chmod +x "$tmp/bin"/*
 export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
+foundation_env_function="$(sed -n '/^foundation_env() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
+foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUNDATION_ENV_ROOT=/foundation bash -c '
+	eval "$FOUNDATION_ENV_FUNCTION"
+	die() { return 1; }
+	foundation_env caddy
+	foundation_env woodpecker-controller
+	foundation_env beszel-worker
+')"
+[[ "$foundation_env_result" == $'/foundation/caddy.env\n/foundation/woodpecker.env\n/foundation/beszel.env' ]] || {
+	printf 'foundation service resolved to an incorrect env file: %q\n' "$foundation_env_result" >&2
+	exit 1
+}
 bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'Do not evaluate an inactive app' "$repo_root/ops/platformctl.sh"
 [[ -f "$tmp/app/shared/runtime/config/Caddyfile" ]]

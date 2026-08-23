@@ -75,7 +75,14 @@ app_route_active() {
 	! csv_has "$(policy_value DISABLED_APPS)" "$id"
 }
 foundation_file() { case "$1" in caddy) echo caddy.yml ;; woodpecker-controller) echo woodpecker-controller.yml ;; woodpecker-worker) echo woodpecker-worker.yml ;; woodpecker-deployer) echo woodpecker-deployer.yml ;; beszel-controller) echo beszel-controller.yml ;; beszel-worker) echo beszel-worker.yml ;; *) die "unknown foundation: $1" ;; esac }
-foundation_env() { [[ "$1" == caddy ]] && echo "$FOUNDATION_ENV_ROOT/caddy.env" || [[ "$1" == woodpecker-* ]] && echo "$FOUNDATION_ENV_ROOT/woodpecker.env" || echo "$FOUNDATION_ENV_ROOT/beszel.env"; }
+foundation_env() {
+	case "$1" in
+	caddy) echo "$FOUNDATION_ENV_ROOT/caddy.env" ;;
+	woodpecker-*) echo "$FOUNDATION_ENV_ROOT/woodpecker.env" ;;
+	beszel-*) echo "$FOUNDATION_ENV_ROOT/beszel.env" ;;
+	*) die "unknown foundation environment: $1" ;;
+	esac
+}
 foundation_compose() { compose_command=("${compose_bin[@]}" --env-file "$APP_ENV" --env-file "$(foundation_env "$1")" --env-file "$FOUNDATION_IMAGE_ENV" --env-file "$NODE_CONFIG_FILE" -f "$FOUNDATION_ROOT/$(foundation_file "$1")"); }
 descriptor_ids() { find -L "$APPS_ROOT" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; 2>/dev/null | sort; }
 descriptor_value() { sed -n "s/^$2=//p" "$1/manifest.env" | tail -n1; }
