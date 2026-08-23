@@ -33,3 +33,4 @@ services:
 networks:
   woodpecker_private:
     name: foundation-woodpecker_private
+    external: true

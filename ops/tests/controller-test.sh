@@ -9,6 +9,17 @@ if grep -Fq '${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker}/data:/var/lib/woo
 fi
 grep -Fq '${BESZEL_DATA_ROOT:-/opt/platform/beszel/hub}:/beszel_data' "$repo_root/compose/foundation/beszel-controller.yml"
 grep -Fq '${BESZEL_AGENT_DATA_ROOT:-/opt/platform/beszel/agent}:/var/lib/beszel-agent' "$repo_root/compose/foundation/beszel-worker.yml"
+for woodpecker_compose in "$repo_root"/compose/foundation/woodpecker-*.yml; do
+	awk '
+		/^  woodpecker_private:$/ { in_network=1; next }
+		in_network && /^    external: true$/ { found=1 }
+		in_network && /^  [a-zA-Z0-9_-]+:$/ { in_network=0 }
+		END { exit found ? 0 : 1 }
+	' "$woodpecker_compose" || {
+		printf 'Woodpecker Compose file does not treat the shared private network as external: %s\n' "$woodpecker_compose" >&2
+		exit 1
+	}
+done
 for node in leader worker-1 worker-2; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
 if grep -R -q '^NODE_PUBLIC_IP=' "$repo_root/config/cluster/nodes"; then
 	printf 'committed node inventory contains a public IP field\n' >&2
