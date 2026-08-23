@@ -18,7 +18,7 @@ services:
         max-file: "5"
     expose: ["8000", "9000"]
     volumes:
-      - ${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker}/data:/var/lib/woodpecker
+      - ${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker/data}:/var/lib/woodpecker
     environment:
       WOODPECKER_OPEN: ${WOODPECKER_OPEN:-false}
       WOODPECKER_ADMIN: ${WOODPECKER_ADMIN:?WOODPECKER_ADMIN must be set}

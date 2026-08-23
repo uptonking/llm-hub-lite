@@ -303,6 +303,8 @@ install -d -m 700 "$APP_ROOT/shared/data/prod" "$APP_ROOT/shared/data/prod/libre
 	"$PLATFORM_ROOT/beszel/hub" "$PLATFORM_ROOT/beszel/agent" "$PLATFORM_ROOT/beszel/secrets" \
 	"$CONTROL_ROOT/releases" "$FOUNDATION_ROOT/env" "$CONFIG_ROOT/image-history" \
 	/opt/backups/llm-hub-lite/repository /opt/backups/llm-hub-lite/restores /run/lock/llm-hub-lite
+# The rootless Woodpecker server image runs as UID/GID 1000.
+install -d -o 1000 -g 1000 -m 700 "$PLATFORM_ROOT/woodpecker/data"
 
 if [[ -n "$DEPLOY_SSH_KEY_FILE" ]]; then
 	[[ -s "$DEPLOY_SSH_KEY_FILE" ]] || die "deployment key does not exist: $DEPLOY_SSH_KEY_FILE"

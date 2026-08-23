@@ -2,6 +2,11 @@
 set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 [[ ! -e "$repo_root/compose/foundation/woodpecker.yml" && ! -e "$repo_root/compose/foundation/beszel.yml" ]]
+grep -Fq '${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker/data}:/var/lib/woodpecker' "$repo_root/compose/foundation/woodpecker-controller.yml"
+if grep -Fq '${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker}/data:/var/lib/woodpecker' "$repo_root/compose/foundation/woodpecker-controller.yml"; then
+	printf 'Woodpecker controller still appends a duplicate data directory\n' >&2
+	exit 1
+fi
 for node in leader worker-1 worker-2; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
 if grep -R -q '^NODE_PUBLIC_IP=' "$repo_root/config/cluster/nodes"; then
 	printf 'committed node inventory contains a public IP field\n' >&2
