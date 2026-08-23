@@ -24,7 +24,7 @@ services:
       HEARTBEAT_METHOD: ${BESZEL_HEARTBEAT_METHOD:-POST}
       HEARTBEAT_INTERVAL: ${BESZEL_HEARTBEAT_INTERVAL:-60}
     volumes:
-      - ${BESZEL_DATA_ROOT:-/opt/platform/beszel}/hub:/beszel_data
+      - ${BESZEL_DATA_ROOT:-/opt/platform/beszel/hub}:/beszel_data
     expose: ["8090"]
     networks: [platform_edge]
     healthcheck:

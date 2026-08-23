@@ -5,6 +5,17 @@ bootstrap="$repo_root/ops/bootstrap-vps.sh"
 bash -n "$bootstrap"
 grep -Fq 'shell xtrace was disabled before loading secrets' "$bootstrap"
 grep -Fq 'install -d -o 1000 -g 1000 -m 700 "$PLATFORM_ROOT/woodpecker/data"' "$bootstrap"
+grep -Fq 'detect_ssh_port' "$bootstrap"
+grep -Fq 'ufw allow "$SSH_PORT"/tcp' "$bootstrap"
+grep -Fq "ufw allow 443/tcp comment 'HTTPS'" "$bootstrap"
+grep -Fq "ufw allow 443/udp comment 'HTTP/3'" "$bootstrap"
+if grep -Fq 'ufw --force delete allow 443' "$bootstrap"; then
+	printf 'bootstrap still deletes the public UFW HTTPS policy\n' >&2
+	exit 1
+fi
+grep -Fq '/usr/local/bin/configure-firewall' "$bootstrap"
+grep -Fq 'Older bootstraps nested Hub and agent state' "$bootstrap"
+grep -Fq 'if [[ "$NODE_ROLE" == leader ]]; then' "$bootstrap"
 grep -Fq 'missing cluster policy' "$bootstrap"
 grep -Fq 'newapi_enabled=0' "$bootstrap"
 grep -Fq 'cliproxy_enabled=0' "$bootstrap"
@@ -23,6 +34,42 @@ grep -Fq '/usr/local/bin/git-auth.sh' "$bootstrap"
 grep -Fq 'production bootstrap requires RESTIC_REMOTE_ENABLED=true' "$bootstrap"
 grep -Fq 'remote Restic repository is unavailable or uninitialized' "$bootstrap"
 grep -Fq 'restic snapshots --no-lock' "$bootstrap"
+grep -Fq 'print_bootstrap_summary' "$bootstrap"
+grep -Fq "printf 'Services\\n  Foundation:" "$bootstrap"
+grep -Fq "printf 'Endpoints\\n'" "$bootstrap"
+grep -Fq "printf '\\nNext tasks\\n'" "$bootstrap"
+grep -Fq "printf '\\nOperations\\n'" "$bootstrap"
+grep -Fq 'available after a Follower is healthy' "$bootstrap"
+grep -Fq 'LibreChat origin:' "$bootstrap"
+summary_function="$(sed -n '/^print_bootstrap_summary() {/,/^}/p' "$bootstrap")"
+summary_inventory="$(mktemp)"
+trap 'rm -f -- "$summary_inventory"' EXIT
+cat >"$summary_inventory" <<'EOF'
+NODE_LIBRECHAT_ORIGIN_HOST=worker-chat-origin.example.test
+NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker-chat-admin-origin.example.test
+EOF
+leader_summary="$(SUMMARY_FUNCTION="$summary_function" INVENTORY_FILE="$summary_inventory" bash -c '
+	set -Eeuo pipefail
+	eval "$SUMMARY_FUNCTION"
+	NODE_ID=leader NODE_ROLE=leader DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
+	librechat_enabled=1 newapi_enabled=0 cliproxy_enabled=0
+	print_bootstrap_summary
+')"
+grep -Fq 'Foundation: Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer' <<<"$leader_summary"
+grep -Fq 'Consumers: none' <<<"$leader_summary"
+grep -Fq 'LibreChat: https://chat.example.test (available after a Follower is healthy)' <<<"$leader_summary"
+grep -Fq 'Bootstrap worker-1, then worker-2.' <<<"$leader_summary"
+follower_summary="$(SUMMARY_FUNCTION="$summary_function" INVENTORY_FILE="$summary_inventory" bash -c '
+	set -Eeuo pipefail
+	eval "$SUMMARY_FUNCTION"
+	NODE_ID=worker-1 NODE_ROLE=follower DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
+	librechat_enabled=1 newapi_enabled=0 cliproxy_enabled=0
+	print_bootstrap_summary
+')"
+grep -Fq 'Foundation: Caddy, Beszel Agent, Woodpecker Agent' <<<"$follower_summary"
+grep -Fq 'Consumers: LibreChat' <<<"$follower_summary"
+grep -Fq 'LibreChat origin: https://worker-chat-origin.example.test' <<<"$follower_summary"
+grep -Fq 'Daily deployments are workflow-driven' <<<"$follower_summary"
 wrapper_declaration="$(sed -n '/^for script in /p' "$bootstrap")"
 while IFS= read -r executable; do
 	wrapper="$(basename "${executable%% *}")"
@@ -56,6 +103,39 @@ runtime_result="$(RUNTIME_FUNCTION="$runtime_function" bash -c '
 	printf 'optional runtime lookup terminated clean bootstrap under set -e\n' >&2
 	exit 1
 }
+migration_functions="$(sed -n '/^directory_has_entries() {/p; /^move_directory_contents() {/,/^}/p' "$bootstrap")"
+migration_result="$(MIGRATION_FUNCTIONS="$migration_functions" bash -c '
+	set -Eeuo pipefail
+	eval "$MIGRATION_FUNCTIONS"
+	die() { printf "%s\n" "$*" >&2; return 1; }
+	tmp="$(mktemp -d)"
+	trap '\''rm -rf "$tmp"'\'' EXIT
+	mkdir -p "$tmp/legacy" "$tmp/current"
+	printf data >"$tmp/legacy/state.db"
+	move_directory_contents "$tmp/legacy" "$tmp/current"
+	[[ -f "$tmp/current/state.db" && ! -e "$tmp/legacy" ]]
+	printf "migrated\n"
+')"
+[[ "$migration_result" == migrated ]] || {
+	printf 'legacy Beszel layout migration failed\n' >&2
+	exit 1
+}
+ssh_port_function="$(sed -n '/^detect_ssh_port() {/,/^}/p' "$bootstrap")"
+ssh_port_result="$(SSH_PORT_FUNCTION="$ssh_port_function" SSH_PORT=0022 bash -c '
+	set -Eeuo pipefail
+	eval "$SSH_PORT_FUNCTION"
+	die() { return 1; }
+	detect_ssh_port
+	printf "%s\n" "$SSH_PORT"
+')"
+[[ "$ssh_port_result" == 0022 ]] || {
+	printf 'explicit SSH port was not preserved\n' >&2
+	exit 1
+}
+if SSH_PORT_FUNCTION="$ssh_port_function" SSH_PORT=70000 bash -c 'eval "$SSH_PORT_FUNCTION"; die() { return 1; }; detect_ssh_port' 2>/dev/null; then
+	printf 'invalid SSH port was accepted\n' >&2
+	exit 1
+fi
 if grep -Fq "NEW_API_SQL_DSN:-\$(openssl rand" "$bootstrap"; then
 	printf 'bootstrap still generates a divergent New API DSN\n' >&2
 	exit 1

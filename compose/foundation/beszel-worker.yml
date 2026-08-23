@@ -55,7 +55,7 @@ services:
       SKIP_SYSTEMD: "false"
       SERVICE_PATTERNS: ${BESZEL_SERVICE_PATTERNS:-platform-*,docker.service,containerd.service,ssh.service}
     volumes:
-      - ${BESZEL_DATA_ROOT:-/opt/platform/beszel}/agent:/var/lib/beszel-agent
+      - ${BESZEL_AGENT_DATA_ROOT:-/opt/platform/beszel/agent}:/var/lib/beszel-agent
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro
       - ${BESZEL_SYSTEMD_PRIVATE_SOCKET:-/run/systemd/private}:/run/systemd/private:ro
       - ${BESZEL_KEY_FILE:?BESZEL_KEY_FILE must be set}:/run/secrets/beszel_key:ro

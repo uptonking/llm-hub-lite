@@ -70,6 +70,7 @@ LOW_MEMORY_SWAP_ENABLED="${LOW_MEMORY_SWAP_ENABLED:-true}"
 LOW_MEMORY_SWAPFILE="${LOW_MEMORY_SWAPFILE:-/swapfile}"
 LOW_MEMORY_SWAP_SIZE="${LOW_MEMORY_SWAP_SIZE:-1G}"
 LOW_MEMORY_SWAP_SWAPPINESS="${LOW_MEMORY_SWAP_SWAPPINESS:-10}"
+SSH_PORT="${SSH_PORT:-}"
 
 die() {
 	printf 'ERROR: %s\n' "$*" >&2
@@ -262,6 +263,41 @@ configure_low_memory_swap() {
 	printf 'vm.swappiness=%s\n' "$LOW_MEMORY_SWAP_SWAPPINESS" >/etc/sysctl.d/99-llm-hub-lite-memory.conf
 	sysctl -p /etc/sysctl.d/99-llm-hub-lite-memory.conf >/dev/null
 }
+detect_ssh_port() {
+	if [[ -z "$SSH_PORT" && -n "${SSH_CONNECTION:-}" ]]; then
+		SSH_PORT="${SSH_CONNECTION##* }"
+	elif [[ -z "$SSH_PORT" ]] && command -v sshd >/dev/null 2>&1; then
+		SSH_PORT="$(sshd -T 2>/dev/null | sed -n 's/^port //p' | head -n1)"
+	fi
+	SSH_PORT="${SSH_PORT:-22}"
+	[[ "$SSH_PORT" =~ ^[0-9]+$ ]] || die 'SSH_PORT must be a valid TCP port'
+	((10#$SSH_PORT >= 1 && 10#$SSH_PORT <= 65535)) || die 'SSH_PORT must be a valid TCP port'
+}
+directory_has_entries() { [[ -d "$1" ]] && find "$1" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; }
+move_directory_contents() {
+	local source="$1" destination="$2" entry name
+	directory_has_entries "$source" || return 0
+	install -d -m 700 "$destination"
+	while IFS= read -r -d '' entry; do
+		name="${entry##*/}"
+		[[ ! -e "$destination/$name" ]] || die "cannot migrate $source: destination already contains $name"
+	done < <(find "$source" -mindepth 1 -maxdepth 1 -print0)
+	while IFS= read -r -d '' entry; do mv -- "$entry" "$destination/"; done < <(find "$source" -mindepth 1 -maxdepth 1 -print0)
+	rmdir "$source"
+}
+migrate_legacy_beszel_layout() {
+	local component container
+	if ! directory_has_entries "$PLATFORM_ROOT/beszel/hub/hub" && ! directory_has_entries "$PLATFORM_ROOT/beszel/hub/agent"; then
+		return 0
+	fi
+	for component in foundation-beszel-controller foundation-beszel-worker; do
+		while IFS= read -r container; do
+			[[ -n "$container" ]] && docker stop --time 60 "$container" >/dev/null
+		done < <(docker ps -q --filter "label=com.aichorage.component=$component")
+	done
+	move_directory_contents "$PLATFORM_ROOT/beszel/hub/hub" "$PLATFORM_ROOT/beszel/hub"
+	move_directory_contents "$PLATFORM_ROOT/beszel/hub/agent" "$PLATFORM_ROOT/beszel/agent"
+}
 
 need apt-get
 bootstrap_packages=()
@@ -296,6 +332,7 @@ fi
 configure_docker_daemon
 systemctl enable --now docker.service
 configure_low_memory_swap
+detect_ssh_port
 
 install -d -m 700 "$APP_ROOT/shared/data/prod" "$APP_ROOT/shared/data/prod/librechat/uploads" "$APP_ROOT/shared/data/prod/librechat/images" "$APP_ROOT/shared/data/prod/librechat/skills" "$APP_ROOT/shared/data/prod/librechat/logs" "$APP_ROOT/shared/data/prod/librechat/data" "$APP_ROOT/shared/runtime" "$APP_ROOT/shared/logs" \
 	"$PLATFORM_ROOT" "$PLATFORM_ROOT/caddy/data" "$PLATFORM_ROOT/caddy/config" \
@@ -305,6 +342,8 @@ install -d -m 700 "$APP_ROOT/shared/data/prod" "$APP_ROOT/shared/data/prod/libre
 	/opt/backups/llm-hub-lite/repository /opt/backups/llm-hub-lite/restores /run/lock/llm-hub-lite
 # The rootless Woodpecker server image runs as UID/GID 1000.
 install -d -o 1000 -g 1000 -m 700 "$PLATFORM_ROOT/woodpecker/data"
+# Older bootstraps nested Hub and agent state below the Hub data directory.
+migrate_legacy_beszel_layout
 
 if [[ -n "$DEPLOY_SSH_KEY_FILE" ]]; then
 	[[ -s "$DEPLOY_SSH_KEY_FILE" ]] || die "deployment key does not exist: $DEPLOY_SSH_KEY_FILE"
@@ -447,15 +486,10 @@ edge_network="${PLATFORM_EDGE_NETWORK:-platform_edge}"
 docker network inspect "$edge_network" >/dev/null 2>&1 || docker network create "$edge_network" >/dev/null
 ufw default deny incoming >/dev/null
 ufw default allow outgoing >/dev/null
-ufw allow 22/tcp comment 'SSH bootstrap and recovery' >/dev/null
+ufw allow "$SSH_PORT"/tcp comment 'SSH bootstrap and recovery' >/dev/null
 ufw allow 80/tcp comment 'HTTP ACME and redirect' >/dev/null
-if [[ "$NODE_ROLE" == leader ]]; then
-	ufw allow 443/tcp comment 'HTTPS' >/dev/null
-	ufw allow 443/udp comment 'HTTP/3' >/dev/null
-else
-	ufw allow from "$LEADER_PUBLIC_IP" to any port 443 proto tcp comment 'Leader to follower HTTPS' >/dev/null
-	ufw allow from "$LEADER_PUBLIC_IP" to any port 443 proto udp comment 'Leader to follower HTTP/3' >/dev/null
-fi
+ufw allow 443/tcp comment 'HTTPS' >/dev/null
+ufw allow 443/udp comment 'HTTP/3' >/dev/null
 ufw --force enable >/dev/null
 
 app_env="$APP_ROOT/shared/.env.prod"
@@ -613,15 +647,17 @@ if ((beszel_key_exists != beszel_token_exists)); then
 fi
 if ((beszel_key_exists == 0)); then
 	install -d -m 700 "$PLATFORM_ROOT/beszel/secrets" "$PLATFORM_ROOT/beszel/hub" "$PLATFORM_ROOT/beszel/agent"
-	if [[ ! -s "$beszel_credentials" ]]; then
-		beszel_password="$(openssl rand -base64 36 | tr -d '=+/')"
-		printf 'email=admin@%s\npassword=%s\n' "$DOMAIN_NAME" "$beszel_password" >"$beszel_credentials"
-		chmod 600 "$beszel_credentials"
-	else
-		beszel_password="$(sed -n 's/^password=//p' "$beszel_credentials" | tail -n1)"
+	if [[ "$NODE_ROLE" == leader ]]; then
+		if [[ ! -s "$beszel_credentials" ]]; then
+			beszel_password="$(openssl rand -base64 36 | tr -d '=+/')"
+			printf 'email=admin@%s\npassword=%s\n' "$DOMAIN_NAME" "$beszel_password" >"$beszel_credentials"
+			chmod 600 "$beszel_credentials"
+		else
+			beszel_password="$(sed -n 's/^password=//p' "$beszel_credentials" | tail -n1)"
+		fi
+		ensure_key "$beszel_env" BESZEL_USER_EMAIL "admin@$DOMAIN_NAME"
+		ensure_key "$beszel_env" BESZEL_USER_PASSWORD "$beszel_password"
 	fi
-	ensure_key "$beszel_env" BESZEL_USER_EMAIL "admin@$DOMAIN_NAME"
-	ensure_key "$beszel_env" BESZEL_USER_PASSWORD "$beszel_password"
 fi
 
 if [[ "$NODE_ROLE" == follower ]]; then
@@ -731,6 +767,8 @@ runner_image_id="$(docker image inspect --format '{{.Id}}' llm-hub-lite/deploy-r
 [[ -n "$runner_image_id" ]] || die 'deployment runner image was not created'
 set_key "$platform_env" PLATFORM_RUNNER_IMAGE_ID "$runner_image_id"
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl validate
+# Apply follower Docker ingress filtering before any public container starts.
+/usr/local/bin/configure-firewall
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl start caddy
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl start beszel-worker
 if [[ "$NODE_ROLE" == follower && -s "$CONFIG_ROOT/beszel-enrollment.env" ]]; then /usr/local/bin/enroll-beszel; fi
@@ -747,4 +785,60 @@ PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot p
 
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet\n' >&2
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet\n' >&2
-printf 'Bootstrap complete. Daily deployments are workflow-driven; SSH is not required after this step.\n'
+print_bootstrap_summary() {
+	local foundation consumers disabled origin_host admin_origin_host
+	foundation='Caddy, Beszel Agent'
+	consumers='none'
+	disabled='none'
+	if [[ "$NODE_ROLE" == leader ]]; then
+		foundation='Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer'
+	else
+		foundation='Caddy, Beszel Agent, Woodpecker Agent'
+		if ((librechat_enabled)); then consumers='LibreChat'; fi
+		if ((newapi_enabled)); then [[ "$consumers" == none ]] && consumers='New API' || consumers+=', New API'; fi
+		if ((cliproxy_enabled)); then [[ "$consumers" == none ]] && consumers='CLIProxyAPI' || consumers+=', CLIProxyAPI'; fi
+	fi
+	if ((!newapi_enabled)); then disabled='New API'; fi
+	if ((!cliproxy_enabled)); then [[ "$disabled" == none ]] && disabled='CLIProxyAPI' || disabled+=', CLIProxyAPI'; fi
+	if ((!librechat_enabled)); then [[ "$disabled" == none ]] && disabled='LibreChat' || disabled+=', LibreChat'; fi
+
+	printf '\nBootstrap complete.\n\n'
+	printf 'Node\n  ID: %s\n  Role: %s\n\n' "$NODE_ID" "$NODE_ROLE"
+	printf 'Services\n  Foundation: %s\n  Consumers: %s\n  Disabled consumers: %s\n\n' "$foundation" "$consumers" "$disabled"
+	printf 'Endpoints\n'
+	if [[ "$NODE_ROLE" == leader ]]; then
+		printf '  Woodpecker: https://ci.%s\n' "$DOMAIN_NAME"
+		printf '  Beszel: https://status.%s\n' "$DOMAIN_NAME"
+		if ((librechat_enabled)); then
+			printf '  LibreChat: https://chat.%s (available after a Follower is healthy)\n' "$DOMAIN_NAME"
+			printf '  LibreChat admin: https://chat-admin.%s (available after a Follower is healthy)\n' "$DOMAIN_NAME"
+		fi
+	else
+		if ((librechat_enabled)); then
+			origin_host="$(sed -n 's/^NODE_LIBRECHAT_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
+			admin_origin_host="$(sed -n 's/^NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
+			[[ -n "$origin_host" ]] && printf '  LibreChat origin: https://%s\n' "$origin_host"
+			[[ -n "$admin_origin_host" ]] && printf '  LibreChat admin origin: https://%s\n' "$admin_origin_host"
+		else
+			printf '  No consumer endpoints are enabled on this node.\n'
+		fi
+	fi
+
+	printf '\nNext tasks\n'
+	if [[ "$NODE_ROLE" == leader ]]; then
+		printf '  1. Transfer %s/shared-secrets.env and %s/beszel-enrollment.env to each Follower.\n' "$CONFIG_ROOT" "$CONFIG_ROOT"
+		printf '  2. Bootstrap worker-1, then worker-2.\n'
+		printf '  3. Sign in to Woodpecker and enable this repository as trusted.\n'
+		printf '  4. Verify cluster health after both Followers join.\n'
+	else
+		printf '  1. Verify this node\047s origin endpoints from the Leader.\n'
+		printf '  2. Verify https://chat.%s and https://chat-admin.%s.\n' "$DOMAIN_NAME" "$DOMAIN_NAME"
+		printf '  3. Bootstrap the remaining Follower, or verify the full cluster if this is the final node.\n'
+	fi
+
+	printf '\nOperations\n'
+	printf '  platformctl status\n  platformctl health\n  docker ps\n  systemctl --failed\n'
+	printf '\nDaily deployments are workflow-driven: push to GitHub and let Woodpecker update the nodes.\n'
+	printf 'SSH remains available for recovery, but is not required for routine deployments.\n'
+}
+print_bootstrap_summary

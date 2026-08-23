@@ -14,7 +14,7 @@ Caddy is installed on every node. Public DNS names point to the Leader. The
 Leader derives consumer upstreams from every follower entry in
 `config/cluster/nodes/*.env` ; adding a follower therefore does not require
 editing a Caddy route. Keep origin records DNS-only and restrict follower
-HTTPS/HTTP3 to the Leader IP at both UFW and Docker's `DOCKER-USER` chain.
+Docker-published HTTPS/HTTP3 to the Leader IP with the `DOCKER-USER` chain.
 Set `REPO_SLUG` in `config/cluster/policy.env` to the GitHub owner/repository
 that runs this stack; generated Woodpecker labels use that value.
 

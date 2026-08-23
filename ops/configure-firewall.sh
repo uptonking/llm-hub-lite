@@ -49,8 +49,10 @@ clear_follower_ufw_rules() {
 	done < <(ufw status numbered 2>/dev/null | sed -n '/Leader to follower/{s/^\[[[:space:]]*\([0-9][0-9]*\)\].*/\1/p;}' | sort -rn)
 }
 chain=LLM_HUB_LITE_DOCKER
+clear_follower_ufw_rules
+ufw allow 443/tcp comment 'HTTPS' >/dev/null
+ufw allow 443/udp comment 'HTTP/3' >/dev/null
 if [[ "$NODE_ROLE" == leader ]]; then
-	clear_follower_ufw_rules
 	while iptables -C DOCKER-USER -j "$chain" 2>/dev/null; do iptables -D DOCKER-USER -j "$chain"; done
 	iptables -F "$chain" 2>/dev/null || true
 	iptables -X "$chain" 2>/dev/null || true
@@ -61,9 +63,6 @@ valid_ipv4 "$LEADER_PUBLIC_IP" || {
 	printf 'configure-firewall: valid runtime LEADER_PUBLIC_IP is required for followers\n' >&2
 	exit 1
 }
-clear_follower_ufw_rules
-ufw allow from "$LEADER_PUBLIC_IP" to any port 443 proto tcp comment 'Leader to follower HTTPS' >/dev/null
-ufw allow from "$LEADER_PUBLIC_IP" to any port 443 proto udp comment 'Leader to follower HTTP/3' >/dev/null
 
 # Docker evaluates DOCKER-USER before its own published-port rules. Allow the
 # Leader to reach follower HTTPS, then drop all other published HTTPS traffic.

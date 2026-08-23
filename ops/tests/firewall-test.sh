@@ -36,8 +36,12 @@ chmod +x "$tmp/bin/ufw" "$tmp/bin/iptables"
 export PATH="$tmp/bin:$PATH" FIREWALL_LOG="$tmp/firewall.log"
 firewall_output="$(LEADER_PUBLIC_IP=198.51.100.20 DEPLOY_CONFIG_FILE="$tmp/platform.env" bash "$repo_root/ops/configure-firewall.sh")"
 grep -Fqx 'ufw --force delete 1' "$FIREWALL_LOG"
-grep -Fqx 'ufw allow from 192.0.2.10 to any port 443 proto tcp comment Leader to follower HTTPS' "$FIREWALL_LOG"
-grep -Fqx 'ufw allow from 192.0.2.10 to any port 443 proto udp comment Leader to follower HTTP/3' "$FIREWALL_LOG"
+grep -Fqx 'ufw allow 443/tcp comment HTTPS' "$FIREWALL_LOG"
+grep -Fqx 'ufw allow 443/udp comment HTTP/3' "$FIREWALL_LOG"
+if grep -Fq 'ufw allow from ' "$FIREWALL_LOG"; then
+	printf 'firewall narrowed the persistent UFW HTTPS policy to one source\n' >&2
+	exit 1
+fi
 grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -s 192.0.2.10 -p tcp --dport 443 -j RETURN' "$FIREWALL_LOG"
 grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -s 192.0.2.10 -p udp --dport 443 -j RETURN' "$FIREWALL_LOG"
 if grep -Fq '198.51.100.20' "$FIREWALL_LOG"; then

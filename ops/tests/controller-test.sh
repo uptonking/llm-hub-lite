@@ -7,6 +7,8 @@ if grep -Fq '${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker}/data:/var/lib/woo
 	printf 'Woodpecker controller still appends a duplicate data directory\n' >&2
 	exit 1
 fi
+grep -Fq '${BESZEL_DATA_ROOT:-/opt/platform/beszel/hub}:/beszel_data' "$repo_root/compose/foundation/beszel-controller.yml"
+grep -Fq '${BESZEL_AGENT_DATA_ROOT:-/opt/platform/beszel/agent}:/var/lib/beszel-agent' "$repo_root/compose/foundation/beszel-worker.yml"
 for node in leader worker-1 worker-2; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
 if grep -R -q '^NODE_PUBLIC_IP=' "$repo_root/config/cluster/nodes"; then
 	printf 'committed node inventory contains a public IP field\n' >&2
