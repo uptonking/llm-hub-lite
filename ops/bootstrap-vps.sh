@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if [[ "$-" == *x* ]]; then
+	set +x
+	printf 'WARNING: shell xtrace was disabled before loading secrets.\n' >&2
+fi
 [[ "$EUID" -eq 0 ]] || {
 	printf 'Run bootstrap as root.\n' >&2
 	exit 1
@@ -115,7 +119,19 @@ load_bundle_value() {
 	local key="$1" value
 	[[ -n "${!key:-}" ]] && return 0
 	value="$(bundle_value "$key")"
-	[[ -n "$value" ]] && printf -v "$key" '%s' "$value"
+	if [[ -n "$value" ]]; then
+		printf -v "$key" '%s' "$value"
+	fi
+	return 0
+}
+load_runtime_value() {
+	local key="$1" file="$2" value
+	[[ -n "${!key:-}" ]] && return 0
+	[[ -r "$file" ]] || return 0
+	value="$(sed -n "s/^${key}=//p" "$file" | tail -n1)"
+	if [[ -n "$value" ]]; then
+		printf -v "$key" '%s' "$value"
+	fi
 	return 0
 }
 clear_placeholder() {
@@ -173,28 +189,16 @@ for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET 
 	clear_placeholder "$shared_key"
 done
 for runtime_key in NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY; do
-	[[ -n "${!runtime_key:-}" ]] || {
-		runtime_value="$(sed -n "s/^${runtime_key}=//p" "$app_env" 2>/dev/null | tail -n1)"
-		[[ -n "$runtime_value" ]] && printf -v "$runtime_key" '%s' "$runtime_value"
-	}
+	load_runtime_value "$runtime_key" "$app_env"
 done
 for runtime_key in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET; do
-	[[ -n "${!runtime_key:-}" ]] || {
-		runtime_value="$(sed -n "s/^${runtime_key}=//p" "$app_env" 2>/dev/null | tail -n1)"
-		[[ -n "$runtime_value" ]] && printf -v "$runtime_key" '%s' "$runtime_value"
-	}
+	load_runtime_value "$runtime_key" "$app_env"
 done
 for runtime_key in LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE; do
-	[[ -n "${!runtime_key:-}" ]] || {
-		runtime_value="$(sed -n "s/^${runtime_key}=//p" "$app_env" 2>/dev/null | tail -n1)"
-		[[ -n "$runtime_value" ]] && printf -v "$runtime_key" '%s' "$runtime_value"
-	}
+	load_runtime_value "$runtime_key" "$app_env"
 done
 for runtime_key in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET WOODPECKER_GITHUB_CLIENT WOODPECKER_GITHUB_SECRET; do
-	[[ -n "${!runtime_key:-}" ]] || {
-		runtime_value="$(sed -n "s/^${runtime_key}=//p" "$woodpecker_env" 2>/dev/null | tail -n1)"
-		[[ -n "$runtime_value" ]] && printf -v "$runtime_key" '%s' "$runtime_value"
-	}
+	load_runtime_value "$runtime_key" "$woodpecker_env"
 done
 if [[ -z "$NODE_ID" ]]; then read -r -p 'Stable cluster node ID (for example leader, worker-1): ' NODE_ID; fi
 [[ "$NODE_ID" =~ ^[a-z][a-z0-9-]*$ ]] || die 'invalid NODE_ID'

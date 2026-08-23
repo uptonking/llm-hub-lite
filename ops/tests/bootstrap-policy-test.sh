@@ -3,6 +3,7 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 bootstrap="$repo_root/ops/bootstrap-vps.sh"
 bash -n "$bootstrap"
+grep -Fq 'shell xtrace was disabled before loading secrets' "$bootstrap"
 grep -Fq 'missing cluster policy' "$bootstrap"
 grep -Fq 'newapi_enabled=0' "$bootstrap"
 grep -Fq 'cliproxy_enabled=0' "$bootstrap"
@@ -32,6 +33,18 @@ loader_result="$(BUNDLE_FUNCTIONS="$bundle_functions" bash -c '
 ')"
 [[ "$loader_result" == continued ]] || {
 	printf 'optional shared bundle lookup terminated bootstrap under set -e\n' >&2
+	exit 1
+}
+runtime_function="$(sed -n '/^load_runtime_value() {/,/^}/p' "$bootstrap")"
+runtime_result="$(RUNTIME_FUNCTION="$runtime_function" bash -c '
+	set -Eeuo pipefail
+	eval "$RUNTIME_FUNCTION"
+	OPTIONAL_TEST_VALUE=
+	load_runtime_value OPTIONAL_TEST_VALUE /missing/optional-runtime.env
+	printf "continued\n"
+')"
+[[ "$runtime_result" == continued ]] || {
+	printf 'optional runtime lookup terminated clean bootstrap under set -e\n' >&2
 	exit 1
 }
 if grep -Fq "NEW_API_SQL_DSN:-\$(openssl rand" "$bootstrap"; then
