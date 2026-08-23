@@ -1,0 +1,30 @@
+name: foundation-woodpecker-deployer
+services:
+  woodpecker-deployer:
+    image: ${WOODPECKER_AGENT_IMAGE:?WOODPECKER_AGENT_IMAGE must be digest-pinned}
+    command: agent
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 2m
+    mem_limit: ${WOODPECKER_DEPLOYER_MEMORY_LIMIT:-128m}
+    cpus: ${WOODPECKER_DEPLOYER_CPUS:-0.50}
+    pids_limit: ${WOODPECKER_DEPLOYER_PIDS_LIMIT:-128}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: foundation-woodpecker-deployer
+    volumes:
+      - ${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker}/deployer:/etc/woodpecker
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WOODPECKER_SERVER: ${WOODPECKER_DEPLOYER_SERVER:?WOODPECKER_DEPLOYER_SERVER must be set}
+      WOODPECKER_GRPC_SECURE: ${WOODPECKER_DEPLOYER_GRPC_SECURE:-true}
+      WOODPECKER_GRPC_SKIP_VERIFY: ${WOODPECKER_DEPLOYER_GRPC_SKIP_VERIFY:-false}
+      WOODPECKER_AGENT_SECRET: ${WOODPECKER_AGENT_SECRET:?WOODPECKER_AGENT_SECRET must be set}
+      WOODPECKER_MAX_WORKFLOWS: ${WOODPECKER_DEPLOYER_MAX_WORKFLOWS:-1}
+      WOODPECKER_AGENT_LABELS: ${WOODPECKER_DEPLOYER_LABELS:?WOODPECKER_DEPLOYER_LABELS must be set}
+      WOODPECKER_LOG_LEVEL: ${WOODPECKER_LOG_LEVEL:-info}
+    networks: [woodpecker_private]
+networks:
+  woodpecker_private:
+    name: foundation-woodpecker_private
+    external: true

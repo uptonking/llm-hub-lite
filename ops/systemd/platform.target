@@ -1,8 +1,9 @@
 [Unit]
 Description=llm-hub-lite VPS platform
 Requires=platform-network.service
+Wants=platform-firewall.service
 Wants=platform-recovery.service
-After=platform-network.service platform-recovery.service
+After=platform-network.service platform-firewall.service platform-recovery.service
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply llm-hub-lite Docker published-port firewall policy
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/configure-firewall
+
+[Install]
+WantedBy=multi-user.target

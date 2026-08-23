@@ -7,13 +7,19 @@ bak/
 sample-**/
 .tmp
 
-# dev 
+# dev
 .env
 .env.local
 .env.local.*
 .env.development
 .env.prod
 .env.dev
+
+# Root-only runtime configuration. These names must never be committed.
+node.env
+shared-secrets.env
+/restic-*.env
+/beszel-enrollment.env
 
 .husky/_
 .aichor/

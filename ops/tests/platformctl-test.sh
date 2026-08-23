@@ -1,86 +1,95 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/control/releases/test" "$tmp/foundation/env" "$tmp/app/shared" "$tmp/config" "$tmp/locks"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/control/releases/test" "$tmp/foundation/env" "$tmp/app/shared" "$tmp/config" "$tmp/bin" "$tmp/locks"
 cp -a "$repo_root/apps" "$repo_root/config" "$tmp/control/releases/test/"
 ln -s "$tmp/control/releases/test" "$tmp/control/current"
-cp "$repo_root"/compose/foundation/*.yml "$tmp/foundation/"
-cp "$repo_root/ops/foundation/caddy.env.example" "$tmp/foundation/env/caddy.env"
-cp "$repo_root/ops/foundation/woodpecker.env.example" "$tmp/foundation/env/woodpecker.env"
-cp "$repo_root/ops/foundation/beszel.env.example" "$tmp/foundation/env/beszel.env"
-cp "$repo_root/.env.prod.example" "$tmp/app/shared/.env.prod"
-cp "$repo_root/ops/images.apps.prod.env" "$tmp/config/images.apps.env"
-cp "$repo_root/ops/images.foundation.prod.env" "$tmp/config/images.foundation.env"
+for f in "$repo_root"/compose/foundation/*.yml; do cp "$f" "$tmp/foundation/"; done
+cp "$repo_root"/ops/foundation/*.env.example "$tmp/foundation/env/"
+cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
+cp "$repo_root"/ops/images.*.prod.env "$tmp/config/"
+cat >"$tmp/config/node.env" <<EOF
+NODE_ID=leader
+NODE_NEW_API_ORIGIN_HOST=worker2-newapi.example.invalid
+NODE_CLIPROXY_ORIGIN_HOST=worker2-cpa.example.invalid
+NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
+NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
+EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
-case "$*" in *" ps --all -q"*) printf 'container-id\n' ;; esac
-case "$*" in *" up -d "*) [ "${FAIL_UP:-0}" = 1 ] && exit 1 ;; esac
+case "$*" in *" ps --all -q"*) printf 'container-id\n';; esac
+case "$*" in
+  *app-librechat*) printf 'librechat-api\nlibrechat-admin-panel\nlibrechat-client\n';;
+  *app-newapi*) printf 'newapi\n';;
+  *app-cliproxyapi*) printf 'cliproxyapi\n';;
+esac
 exit 0
 EOF
 cat >"$tmp/bin/docker" <<'EOF'
 #!/bin/sh
-case "$1 $2" in
-  "network inspect") [ "${FORCE_NETWORK_MISSING:-0}" = 1 ] && exit 1; exit 0 ;;
-  "network create") printf '%s\n' "$*" >>"${NETWORK_CREATE_LOG:?}"; exit 0 ;;
-  "inspect --format") printf 'running healthy\n' ;;
-  "ps -a") printf '{"Names":"test"}\n' ;;
-  "run --rm") exit 0 ;;
-esac
+case "$1 $2" in "network inspect") exit 0;; "inspect --format") printf 'running healthy\n';; "run --rm") exit 0;; esac
 exit 0
 EOF
 cat >"$tmp/bin/flock" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
-chmod +x "$tmp/bin/"*
-export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" COMPOSE_CALL_LOG="$tmp/compose.log"
-export NETWORK_CREATE_LOG="$tmp/network-create.log"
-export APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation"
-export APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.env"
-export RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock" PLATFORM_MAINTENANCE_FILE="$tmp/config/maintenance"
-export RECOVERY_GRACE_SECONDS=0 COMPOSE_WAIT_TIMEOUT=3
-controller="$repo_root/ops/platformctl.sh"
-bash "$controller" validate
-old_route="$(cat "$RUNTIME_ROOT/config/routes.d/newapi.caddy")"
-sed -i.bak 's#^NEW_API_SITE=.*#NEW_API_SITE=https://candidate.example.com#' "$APP_ENV"
-if FAIL_UP=1 bash "$controller" sync apps; then
-  printf 'expected staged sync failure\n' >&2
-  exit 1
+chmod +x "$tmp/bin"/*
+export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
+bash "$repo_root/ops/platformctl.sh" validate
+grep -Fq 'Do not evaluate an inactive app' "$repo_root/ops/platformctl.sh"
+[[ -f "$tmp/app/shared/runtime/config/Caddyfile" ]]
+[[ ! -e "$tmp/app/shared/runtime/config/routes.d/cliproxyapi.caddy" ]]
+grep -Fq 'lb_policy random_choose 2' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+grep -Fq 'header_up Host {http.reverse_proxy.upstream.hostport}' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+grep -Fq 'location = /health' "$repo_root/apps/librechat/client.nginx.conf"
+grep -Fq 'mem_limit:' "$repo_root/apps/librechat/compose.yml"
+grep -Fq 'MONGO_MAX_POOL_SIZE:' "$repo_root/apps/librechat/compose.yml"
+for foundation_file in "$repo_root"/compose/foundation/*.yml; do
+	grep -Fq 'mem_limit:' "$foundation_file"
+	grep -Fq 'cpus:' "$foundation_file"
+	grep -Fq 'pids_limit:' "$foundation_file"
+done
+awk '/^  librechat-api:/{in_api=1; next} /^  [a-z0-9-]+:/{in_api=0} in_api && /networks: \[librechat_private\]/{found=1} END{exit found ? 0 : 1}' "$repo_root/apps/librechat/compose.yml"
+if awk '/^  librechat-api:/{in_api=1; next} /^  [a-z0-9-]+:/{in_api=0} in_api && /platform_edge/{found=1} END{exit found ? 0 : 1}' "$repo_root/apps/librechat/compose.yml"; then
+	printf 'LibreChat API must not join the public edge network\n' >&2
+	exit 1
 fi
-[[ "$(cat "$RUNTIME_ROOT/config/routes.d/newapi.caddy")" == "$old_route" ]]
-sed -i.bak 's#^NEW_API_SITE=.*#NEW_API_SITE=https://newapi.example.com#' "$APP_ENV"
-FORCE_NETWORK_MISSING=1 NETWORK_CREATE_LOG="$tmp/check-network-create.log" bash "$controller" validate --check
-[[ ! -s "$tmp/check-network-create.log" ]]
-: >"$tmp/compose.log"
-bash "$controller" recover --quiet
-if grep -q ' up -d ' "$tmp/compose.log"; then printf 'healthy recovery must be a no-op\n' >&2; exit 1; fi
- : >"$tmp/compose.log"
- bash "$controller" sync apps
- grep -q ' up -d --pull never --wait' "$tmp/compose.log"
-sed -i.bak 's/^APP_NEWAPI_DISABLE=false/APP_NEWAPI_DISABLE=true/' "$APP_ENV"
-: >"$tmp/compose.log"
-bash "$controller" recover --quiet
-bash "$controller" restart all
-grep -q 'down --remove-orphans' "$tmp/compose.log"
-bash "$controller" status --json | jq -e '.projects | index("app:'"$tmp/control/current/apps/newapi"'") | not' >/dev/null
-[[ ! -e "$RUNTIME_ROOT/config/routes.d/newapi.caddy" ]]
-sed -i.bak 's/^SERVICE_BESZEL_DISABLE=false/SERVICE_BESZEL_DISABLE=true/' "$APP_ENV"
-bash "$controller" status --json | jq -e '.projects | index("beszel") | not' >/dev/null
-[[ ! -e "$RUNTIME_ROOT/config/foundation-routes.d/beszel.caddy" ]]
-cp -a "$tmp/control/current/apps/newapi" "$tmp/control/current/apps/default-disabled"
-sed -i.bak \
-  -e 's/^APP_ID=newapi/APP_ID=default-disabled/' \
-  -e 's/^COMPOSE_PROJECT=app-newapi/COMPOSE_PROJECT=app-default-disabled/' \
-  -e 's/^SERVICE_NAME=newapi/SERVICE_NAME=default-disabled/' \
-  -e 's/^NETWORK_ALIAS=newapi/NETWORK_ALIAS=default-disabled/' \
-  -e 's/^DEFAULT_DISABLED=false/DEFAULT_DISABLED=true/' \
-  "$tmp/control/current/apps/default-disabled/manifest.env"
-bash "$controller" status --json | jq -e '.projects | index("app:'"$tmp/control/current/apps/default-disabled"'") | not' >/dev/null
-bash "$controller" maintenance begin test >/dev/null
-[[ -f "$tmp/config/maintenance" ]]
-bash "$controller" maintenance end >/dev/null
-[[ ! -e "$tmp/config/maintenance" ]]
+if grep -Fq 'header_up Host {http.request.host}' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"; then
+	printf 'leader route overrides the origin Host header\n' >&2
+	exit 1
+fi
+bash "$repo_root/ops/platformctl.sh" status --json | jq -e '.node == "leader" and .role == "leader"' >/dev/null
+awk -F= '{if ($1 == "DISABLED_APPS") print "DISABLED_APPS=newapi"; else print}' "$tmp/control/current/config/cluster/policy.env" >"$tmp/policy.tmp"
+mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/policy.env"
+bash "$repo_root/ops/platformctl.sh" validate
+[[ ! -e "$tmp/app/shared/runtime/config/routes.d/newapi.caddy" ]]
+awk -F= '{if ($1 == "DISABLED_APPS") print "DISABLED_APPS="; else print}' "$tmp/control/current/config/cluster/policy.env" >"$tmp/policy.tmp"
+mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/policy.env"
+sed -e 's/^DOMAIN_NAME=.*/DOMAIN_NAME=aichorage.de/' -e 's#^LIBRECHAT_AWS_ENDPOINT_URL=.*#LIBRECHAT_AWS_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com#' "$repo_root/.env.dev.example" >"$tmp/app/shared/.env.prod"
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+	printf 'production LibreChat placeholder was accepted\n' >&2
+	exit 1
+fi
+cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
+bash "$repo_root/ops/platformctl.sh" validate
+grep -Fq 'librechat-client:80' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+bash "$repo_root/ops/platformctl.sh" smoke "app:$tmp/control/current/apps/librechat"
+policy_backup="$tmp/policy.original"
+cp "$tmp/control/current/config/cluster/policy.env" "$policy_backup"
+{
+	sed -E '/^(CLIPROXY_PRIMARY_NODE_ID|NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' "$policy_backup"
+	printf '%s\n' 'DISABLED_APPS=newapi,cliproxyapi'
+} >"$tmp/control/current/config/cluster/policy.env"
+bash "$repo_root/ops/platformctl.sh" validate
+mv "$policy_backup" "$tmp/control/current/config/cluster/policy.env"
+awk -F= '{if ($1 == "NODE_ID") print "NODE_ID=rogue"; else print}' "$tmp/config/node.env" >"$tmp/node.tmp"
+mv "$tmp/node.tmp" "$tmp/config/node.env"
+if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+	printf 'runtime node identity mismatch was accepted\n' >&2
+	exit 1
+fi
 printf 'platformctl tests passed\n'

@@ -1,14 +1,16 @@
-name: foundation-woodpecker
-
+name: foundation-woodpecker-controller
 services:
   woodpecker-server:
     image: ${WOODPECKER_SERVER_IMAGE:?WOODPECKER_SERVER_IMAGE must be digest-pinned}
     restart: unless-stopped
     init: true
     stop_grace_period: 60s
+    mem_limit: ${WOODPECKER_SERVER_MEMORY_LIMIT:-256m}
+    cpus: ${WOODPECKER_SERVER_CPUS:-0.50}
+    pids_limit: ${WOODPECKER_SERVER_PIDS_LIMIT:-256}
     labels:
       com.aichorage.platform: llm-hub-lite
-      com.aichorage.component: foundation-woodpecker
+      com.aichorage.component: foundation-woodpecker-controller
     logging:
       driver: local
       options:
@@ -16,7 +18,7 @@ services:
         max-file: "5"
     expose: ["8000", "9000"]
     volumes:
-      - ${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker/data}:/var/lib/woodpecker
+      - ${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker}/data:/var/lib/woodpecker
     environment:
       WOODPECKER_OPEN: ${WOODPECKER_OPEN:-false}
       WOODPECKER_ADMIN: ${WOODPECKER_ADMIN:?WOODPECKER_ADMIN must be set}
@@ -29,8 +31,8 @@ services:
       WOODPECKER_REPO_OWNERS: ${WOODPECKER_REPO_OWNERS:?WOODPECKER_REPO_OWNERS must be set}
       WOODPECKER_SERVER_ADDR: 0.0.0.0:8000
       WOODPECKER_GRPC_ADDR: 0.0.0.0:9000
-      WOODPECKER_DATABASE_DRIVER: sqlite3
-      WOODPECKER_DATABASE_DATASOURCE: /var/lib/woodpecker/woodpecker.sqlite
+      WOODPECKER_DATABASE_DRIVER: ${WOODPECKER_DATABASE_DRIVER:-sqlite3}
+      WOODPECKER_DATABASE_DATASOURCE: ${WOODPECKER_DATABASE_DATASOURCE:-/var/lib/woodpecker/woodpecker.sqlite}
       WOODPECKER_DATABASE_MAX_CONNECTIONS: ${WOODPECKER_DATABASE_MAX_CONNECTIONS:-1}
       WOODPECKER_DATABASE_IDLE_CONNECTIONS: ${WOODPECKER_DATABASE_IDLE_CONNECTIONS:-1}
       WOODPECKER_FORCE_IGNORE_SERVICE_FAILURE: ${WOODPECKER_FORCE_IGNORE_SERVICE_FAILURE:-false}
@@ -41,40 +43,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 10s
-
-  woodpecker-agent:
-    image: ${WOODPECKER_AGENT_IMAGE:?WOODPECKER_AGENT_IMAGE must be digest-pinned}
-    command: agent
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 2m
-    labels:
-      com.aichorage.platform: llm-hub-lite
-      com.aichorage.component: foundation-woodpecker
-    depends_on:
-      woodpecker-server:
-        condition: service_healthy
-    volumes:
-      - ${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker/agent}:/etc/woodpecker
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      WOODPECKER_SERVER: woodpecker-server:9000
-      WOODPECKER_AGENT_SECRET: ${WOODPECKER_AGENT_SECRET:?WOODPECKER_AGENT_SECRET must be set}
-      WOODPECKER_MAX_WORKFLOWS: ${WOODPECKER_MAX_WORKFLOWS:-1}
-      WOODPECKER_AGENT_LABELS: ${WOODPECKER_AGENT_LABELS:?WOODPECKER_AGENT_LABELS must be set}
-      WOODPECKER_LOG_LEVEL: ${WOODPECKER_LOG_LEVEL:-info}
-    networks: [woodpecker_private]
-    healthcheck:
-      test: ["CMD", "/bin/woodpecker-agent", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
-
+      start_period: 15s
 networks:
   woodpecker_private:
     name: foundation-woodpecker_private
+    external: true
   platform_edge:
     name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
     external: true

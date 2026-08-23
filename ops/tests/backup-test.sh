@@ -50,9 +50,55 @@ export PLATFORM_LOCK_FILE="$tmp/platform.lock"
 grep -qx -- "-Pk $tmp/repository" "$tmp/df.log"
 grep -q ' backup ' "$tmp/restic.log"
 
+if PRODUCTION_REQUIRE_REMOTE_BACKUP=true RESTIC_REMOTE_ENABLED=false \
+	"$repo_root/ops/backup-platform.sh" snapshot production-gate-test >/dev/null 2>&1; then
+	printf 'production backup gate accepted a local-only snapshot\n' >&2
+	exit 1
+fi
+
 export RESTIC_REMOTE_ENABLED=true RESTIC_REMOTE_REPOSITORY="$tmp/remote-repository" RESTIC_REMOTE_PASSWORD_FILE="$tmp/config/restic-remote-password"
 mkdir -p "$tmp/remote-repository"
 "$repo_root/ops/backup-platform.sh" snapshot remote-test
 grep -q "$tmp/remote-repository" "$tmp/restic.log"
+
+mkdir -p "$tmp/control/current/config/cluster/nodes"
+cat >"$tmp/control/current/config/cluster/policy.env" <<'EOF'
+NODE_IDS=leader,worker-1
+NEW_API_BACKUP_NODE_ID=leader
+DISABLED_APPS=
+EOF
+cat >"$tmp/config/node.env" <<'EOF'
+NODE_ID=leader
+EOF
+cat >"$tmp/bin/pg_dump" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"${PG_DUMP_CALL_LOG:?}"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --file ]; then
+    shift
+    : >"$1"
+  fi
+  shift
+done
+EOF
+cat >"$tmp/bin/pg_restore" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$tmp/bin/pg_dump" "$tmp/bin/pg_restore"
+export PG_DUMP_CALL_LOG="$tmp/pg_dump.log" NEW_API_SQL_DSN=postgresql://backup.example/newapi
+export NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env"
+: >"$PG_DUMP_CALL_LOG"
+"$repo_root/ops/backup-platform.sh" snapshot postgres-owner-test
+grep -q 'postgresql://backup.example/newapi' "$PG_DUMP_CALL_LOG"
+cat >"$tmp/config/node.env" <<'EOF'
+NODE_ID=worker-1
+EOF
+: >"$PG_DUMP_CALL_LOG"
+"$repo_root/ops/backup-platform.sh" snapshot postgres-non-owner-test
+[[ ! -s "$PG_DUMP_CALL_LOG" ]] || {
+	printf 'non-owner node invoked pg_dump\n' >&2
+	exit 1
+}
 
 printf 'backup tests passed\n'

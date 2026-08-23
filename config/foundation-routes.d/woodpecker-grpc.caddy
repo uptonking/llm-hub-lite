@@ -1,0 +1,3 @@
+{$WOODPECKER_GRPC_SITE} {
+  reverse_proxy h2c://woodpecker-server:9000
+}

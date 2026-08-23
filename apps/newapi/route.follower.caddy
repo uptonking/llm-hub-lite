@@ -1,4 +1,4 @@
-{$NEW_API_SITE} {
+{$NODE_NEW_API_ORIGIN_HOST} {
   import common_proxy
   reverse_proxy newapi:3000 {
     flush_interval -1

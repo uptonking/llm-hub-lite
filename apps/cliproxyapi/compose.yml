@@ -1,5 +1,4 @@
 name: app-cliproxyapi
-
 services:
   cliproxyapi:
     image: ${CLIPROXY_IMAGE:?CLIPROXY_IMAGE must be digest-pinned}
@@ -11,15 +10,14 @@ services:
       com.aichorage.component: app-cliproxyapi
     environment:
       MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?CLIPROXY_MANAGEMENT_KEY must be set}
+      CLIPROXY_CONFIG_RESET: ${CLIPROXY_CONFIG_RESET:-false}
       TZ: ${TZ:-Asia/Shanghai}
     working_dir: /CLIProxyAPI
     command:
       - sh
       - -c
       - >-
-        mkdir -p /runtime/auths /runtime/logs /runtime/plugins;
-        if [ ! -f /runtime/config.yaml ]; then cp /run/configs/cliproxy_config_seed /runtime/config.yaml; fi;
-        exec ./CLIProxyAPI --config /runtime/config.yaml
+        mkdir -p /runtime/auths /runtime/logs /runtime/plugins; if [ ! -f /runtime/config.yaml ]; then cp /run/configs/cliproxy_config_seed /runtime/config.yaml; elif [ "$${CLIPROXY_CONFIG_RESET:-false}" = true ]; then cp /runtime/config.yaml "/runtime/config.yaml.backup.$$(date -u +%Y%m%dT%H%M%SZ)"; cp /run/configs/cliproxy_config_seed /runtime/config.yaml; fi; exec ./CLIProxyAPI --config /runtime/config.yaml
     configs:
       - source: cliproxy_config_seed
         target: /run/configs/cliproxy_config_seed
@@ -34,7 +32,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
-
 configs:
   cliproxy_config_seed:
     content: |
@@ -51,7 +48,6 @@ configs:
       logging-to-file: true
       logs-max-total-size-mb: 100
       error-logs-max-files: 10
-
 networks:
   cliproxyapi_private:
     name: app-cliproxyapi_private

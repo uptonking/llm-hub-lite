@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply firewall policy after a committed cluster change
+
+[Path]
+PathExists=/etc/llm-hub-lite/firewall-reconcile.request
+Unit=platform-firewall.service
+
+[Install]
+WantedBy=multi-user.target

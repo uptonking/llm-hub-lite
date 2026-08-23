@@ -1,192 +1,166 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2155
+# shellcheck disable=SC2015,SC2043,SC2155
 set -Eeuo pipefail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 mode="${1:-dev}"
-action="${2:-up}"
-shift || true
-shift || true
-
-case "$mode" in
-  dev)
-    env_file="${STACK_ENV_FILE:-$script_dir/.env.dev}"
-    image_env_file="${STACK_IMAGE_ENV_FILE:-}"
-    runtime_root="${STACK_RUNTIME_ROOT:-$script_dir/.runtime/dev}"
-    caddy_bind="127.0.0.1"
-    ;;
-  prod)
-    env_file="${STACK_ENV_FILE:-$script_dir/.env.prod}"
-    image_env_file="${STACK_IMAGE_ENV_FILE:-$script_dir/ops/images.apps.prod.env}"
-    foundation_image_env_file="${STACK_FOUNDATION_IMAGE_ENV_FILE:-$script_dir/ops/images.foundation.prod.env}"
-    runtime_root="${STACK_RUNTIME_ROOT:-$script_dir/.runtime/prod}"
-    caddy_bind="0.0.0.0"
-    ;;
-  *) printf 'Usage: %s {dev|prod} {up|down|restart|validate|config|logs|ps}\n' "$0" >&2; exit 2 ;;
+action="${2:-validate}"
+case "$mode" in dev)
+	env_file="${STACK_ENV_FILE:-$root/.env.dev}"
+	runtime="${STACK_RUNTIME_ROOT:-$root/.runtime/dev}"
+	bind=127.0.0.1
+	;;
+prod)
+	env_file="${STACK_ENV_FILE:-$root/.env.prod}"
+	runtime="${STACK_RUNTIME_ROOT:-$root/.runtime/prod}"
+	bind=0.0.0.0
+	;;
+*)
+	printf 'usage: %s {dev|prod} {validate|up|down|restart|logs|ps}\n' "$0" >&2
+	exit 2
+	;;
 esac
-
-foundation_env_root="${STACK_FOUNDATION_ENV_ROOT:-$script_dir/ops/foundation}"
-foundation_env_file() {
-  local name="$1" candidate
-  candidate="$foundation_env_root/$name.env"
-  [[ -f "$candidate" ]] || candidate="$foundation_env_root/$name.env.example"
-  [[ -f "$candidate" ]] || { printf 'Missing foundation environment file: %s/{%s.env,%s.env.example}\n' "$foundation_env_root" "$name" "$name" >&2; exit 1; }
-  printf '%s\n' "$candidate"
+[[ -f "$env_file" ]] || {
+	printf 'missing environment file: %s\n' "$env_file" >&2
+	exit 1
 }
-
-[[ -f "$env_file" ]] || { printf 'Missing environment file: %s\n' "$env_file" >&2; exit 1; }
-if [[ -n "$image_env_file" ]]; then [[ -f "$image_env_file" ]] || { printf 'Missing image manifest: %s\n' "$image_env_file" >&2; exit 1; }; fi
-if [[ -n "${foundation_image_env_file:-}" ]]; then [[ -f "$foundation_image_env_file" ]] || { printf 'Missing foundation image manifest: %s\n' "$foundation_image_env_file" >&2; exit 1; }; fi
-
+image_apps="${STACK_IMAGE_ENV_FILE:-$root/ops/images.apps.prod.env}"
+image_foundation="${STACK_FOUNDATION_IMAGE_ENV_FILE:-$root/ops/images.foundation.prod.env}"
+[[ -f "$image_apps" && -f "$image_foundation" ]] || {
+	printf 'missing image manifest\n' >&2
+	exit 1
+}
 compose_bin=(docker compose)
-if [[ -n "${PLATFORM_COMPOSE_BIN:-}" ]]; then compose_bin=("$PLATFORM_COMPOSE_BIN"); elif [[ -x /usr/local/bin/platform-compose ]]; then compose_bin=(/usr/local/bin/platform-compose); fi
-
-read_env() { local key="$1"; sed -n "s/^${key}=//p" "$env_file" | tail -n1; }
-read_image() {
-  local key="$1" file="${foundation_image_env_file:-$image_env_file}" value
-  if [[ -n "$file" && -f "$file" ]]; then
-    value="$(sed -n "s/^${key}=//p" "$file" | tail -n1)"
-  else
-    value="$(read_env "$key")"
-  fi
-  printf '%s\n' "$value"
+[[ -n "${PLATFORM_COMPOSE_BIN:-}" ]] && compose_bin=("$PLATFORM_COMPOSE_BIN")
+policy="$root/config/cluster/policy.env"
+node_config="${STACK_NODE_CONFIG_FILE:-$root/config/cluster/nodes/$(sed -n 's/^NODE_ID=//p' "$env_file" | tail -n1).env}"
+node_id="$(sed -n 's/^NODE_ID=//p' "$node_config" 2>/dev/null | tail -n1)"
+leader_id="$(sed -n 's/^LEADER_NODE_ID=//p' "$policy" | tail -n1)"
+[[ -n "$node_id" ]] || node_id=leader
+[[ -n "$leader_id" ]] || leader_id=leader
+[[ "$node_id" == "$leader_id" ]] && role=leader || role=follower
+cluster_upstreams() {
+	local field="$1" primary="${2:-}" node host output=""
+	if [[ -n "$primary" ]]; then
+		host="$(sed -n "s/^${field}=//p" "$root/config/cluster/nodes/$primary.env" | tail -n1)"
+		[[ -n "$host" ]] || {
+			printf 'missing %s in inventory for %s\n' "$field" "$primary" >&2
+			return 1
+		}
+		output="https://$host"
+	fi
+	while IFS= read -r node; do
+		[[ -n "$node" && "$node" != "$leader_id" && "$node" != "$primary" ]] || continue
+		host="$(sed -n "s/^${field}=//p" "$root/config/cluster/nodes/$node.env" | tail -n1)"
+		[[ -n "$host" ]] || {
+			printf 'missing %s in inventory for %s\n' "$field" "$node" >&2
+			return 1
+		}
+		output="${output:+$output }https://$host"
+	done < <(sed -n 's/^NODE_IDS=//p' "$policy" | tr ',' '\n' | sed '/^$/d')
+	printf '%s\n' "$output"
 }
-disabled() { local key="$1" value; value="$(read_env "$key")"; [[ "$value" == true || "$value" == TRUE || "$value" == 1 ]]; }
-app_disabled() {
-  local descriptor="$1" key value
-  key="$(sed -n 's/^DISABLE_ENV=//p' "$descriptor/manifest.env" | tail -n1)"
-  value="$(read_env "$key")"
-  [[ -n "$value" ]] || value="$(sed -n 's/^DEFAULT_DISABLED=//p' "$descriptor/manifest.env" | tail -n1)"
-  [[ "$value" == true || "$value" == TRUE || "$value" == 1 ]]
+get() {
+	local k="$1" v domain
+	v="$(sed -n "s/^$k=//p" "$env_file" | tail -n1)"
+	[[ -n "$v" ]] || v="$(sed -n "s/^$k=//p" "$node_config" 2>/dev/null | tail -n1)"
+	domain="$(sed -n 's/^DOMAIN_NAME=//p' "$env_file" | tail -n1)"
+	case "$k" in NEW_API_UPSTREAMS) [[ "$role" != leader || "$domain" == localhost || -n "${PLATFORM_ALLOW_STATIC_UPSTREAMS:-}" ]] || v="$(cluster_upstreams NODE_NEW_API_ORIGIN_HOST)" ;; CLIPROXY_UPSTREAMS) [[ "$role" != leader || "$domain" == localhost || -n "${PLATFORM_ALLOW_STATIC_UPSTREAMS:-}" ]] || v="$(cluster_upstreams NODE_CLIPROXY_ORIGIN_HOST "$(sed -n 's/^CLIPROXY_PRIMARY_NODE_ID=//p' "$policy" | tail -n1)")" ;; LIBRECHAT_UPSTREAMS) [[ "$role" != leader || "$domain" == localhost || -n "${PLATFORM_ALLOW_STATIC_UPSTREAMS:-}" ]] || v="$(cluster_upstreams NODE_LIBRECHAT_ORIGIN_HOST)" ;; LIBRECHAT_ADMIN_UPSTREAMS) [[ "$role" != leader || "$domain" == localhost || -n "${PLATFORM_ALLOW_STATIC_UPSTREAMS:-}" ]] || v="$(cluster_upstreams NODE_LIBRECHAT_ADMIN_ORIGIN_HOST)" ;; esac
+	printf '%s\n' "$v"
 }
-validate_descriptor_paths() {
-  local descriptor="$1" key value version
-  version="$(sed -n 's/^MANIFEST_VERSION=//p' "$descriptor/manifest.env" | tail -n1)"
-  [[ "$version" == 1 ]] || { printf 'Unsupported MANIFEST_VERSION in %s\n' "$descriptor" >&2; exit 1; }
-  for key in COMPOSE_FILE ROUTE_TEMPLATE; do
-    value="$(sed -n "s/^${key}=//p" "$descriptor/manifest.env" | tail -n1)"
-    [[ "$value" != /* && "$value" != *..* && "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { printf 'Invalid %s in %s\n' "$key" "$descriptor" >&2; exit 1; }
-  done
+csv_has() {
+	local c=",${1//[[:space:]]/},"
+	[[ "$c" == *",$2,"* ]]
 }
-ensure_network() { local network_name="$(read_env PLATFORM_EDGE_NETWORK)"; network_name="${network_name:-platform_edge}"; docker network inspect "$network_name" >/dev/null 2>&1 || docker network create "$network_name" >/dev/null; }
-
-render_config() {
-  local config_root="$runtime_root/config" staged="$runtime_root/.config.staging.$$" descriptor app output key value escaped_value existing active_ids relative
-  install -d -m 700 "$runtime_root/data" "$runtime_root"
-  rm -rf -- "$staged"
-  install -d -m 700 "$staged/routes.d"
-  cp -a "$script_dir/config/." "$staged/"
-  install -d -m 700 "$staged/routes.d.disabled"
-  active_ids=""
-  while IFS= read -r descriptor; do
-    app_disabled "$descriptor" || active_ids="$active_ids $(basename "$descriptor")"
-  done < <(app_descriptors)
-  if [[ -d "$config_root/routes.d" ]]; then
-    while IFS= read -r existing; do
-      [[ -f "$existing" ]] || continue
-      app="$(basename "$existing" .caddy)"
-      case " $active_ids " in *" $app "*) ;; *) cp "$existing" "$staged/routes.d.disabled/$app.caddy" ;; esac
-    done < <(find "$config_root/routes.d" -mindepth 1 -maxdepth 1 -type f -name '*.caddy' -print 2>/dev/null)
-  fi
-  while IFS= read -r output; do
-    [[ -f "$output" ]] || continue
-    while IFS='=' read -r key value; do
-      [[ -n "$key" ]] || continue
-      escaped_value="$(printf '%s' "$value" | sed 's/[&|\\]/\\&/g')"
-      sed "s|{\$${key}}|${escaped_value}|g" "$output" >"$output.tmp"
-      mv "$output.tmp" "$output"
-    done < <(grep -E '^[A-Z0-9_]+=' "$env_file")
-  done < <(find "$staged" -type f -name '*.caddy' -print | sort)
-  while IFS= read -r descriptor; do
-    app_disabled "$descriptor" && continue
-    app="$(basename "$descriptor")"; output="$staged/routes.d/$app.caddy"
-    cp "$descriptor/$(sed -n 's/^ROUTE_TEMPLATE=//p' "$descriptor/manifest.env" | tail -n1)" "$output"
-    while IFS='=' read -r key value; do
-      [[ -n "$key" ]] || continue
-      escaped_value="$(printf '%s' "$value" | sed 's/[&|\\]/\\&/g')"
-      sed "s|{\$${key}}|${escaped_value}|g" "$output" >"$output.tmp"
-      mv "$output.tmp" "$output"
-    done < <(grep -E '^[A-Z0-9_]+=' "$env_file")
-  done < <(app_descriptors)
-  disabled SERVICE_WOODPECKER_DISABLE && rm -f -- "$staged/foundation-routes.d/woodpecker.caddy"
-  disabled SERVICE_BESZEL_DISABLE && rm -f -- "$staged/foundation-routes.d/beszel.caddy"
-  # Keep the bind-mounted directory stable; validate the staged tree before
-  # replacing its contents so a bad change cannot erase the live config.
-  validate_config_dir "$staged"
-  install -d -m 700 "$config_root"
-  while IFS= read -r output; do
-    relative="${output#"$staged/"}"
-    install -d -m 700 "$config_root/$(dirname "$relative")"
-    cp "$output" "$config_root/$relative.tmp"
-    mv -f -- "$config_root/$relative.tmp" "$config_root/$relative"
-  done < <(find "$staged" -type f -print)
-  while IFS= read -r output; do
-    relative="${output#"$config_root/"}"
-    [[ -e "$staged/$relative" ]] || rm -rf -- "$output"
-  done < <(find "$config_root" -mindepth 1 -print)
-  rm -rf -- "$staged"
+foundations() { [[ "$role" == leader ]] && sed -n 's/^FOUNDATION_LEADER=//p' "$policy" || sed -n 's/^FOUNDATION_FOLLOWER=//p' "$policy"; }
+disabled_apps() { sed -n 's/^DISABLED_APPS=//p' "$policy"; }
+app_dirs() { find "$root/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; | sort; }
+app_placement() { sed -n 's/^PLACEMENT=//p' "$1/manifest.env" | tail -n1; }
+app_active() { [[ "$(app_placement "$1")" == follower && "$role" == follower ]] && ! csv_has "$(disabled_apps)" "$(basename "$1")"; }
+app_route_active() { [[ "$(app_placement "$1")" == follower ]] && { [[ "$role" == leader ]] || app_active "$1"; } && ! csv_has "$(disabled_apps)" "$(basename "$1")"; }
+foundation_file() { case "$1" in caddy) echo caddy.yml ;; woodpecker-controller) echo woodpecker-controller.yml ;; woodpecker-worker) echo woodpecker-worker.yml ;; woodpecker-deployer) echo woodpecker-deployer.yml ;; beszel-controller) echo beszel-controller.yml ;; beszel-worker) echo beszel-worker.yml ;; esac }
+foundation_env() { case "$1" in caddy) echo "$root/ops/foundation/caddy.env.example" ;; woodpecker-*) echo "$root/ops/foundation/woodpecker.env.example" ;; *) echo "$root/ops/foundation/beszel.env.example" ;; esac }
+fc() {
+	local n="$1"
+	command=("${compose_bin[@]}" --env-file "$env_file" --env-file "$(foundation_env "$n")" --env-file "$image_foundation" --env-file "$node_config" -f "$root/compose/foundation/$(foundation_file "$n")")
 }
-
-validate_config_dir() {
-  local config_dir="$1"
-  docker run --rm --pull=never --env-file "$env_file" -v "$config_dir:/etc/caddy:ro" "$(read_image CADDY_IMAGE)" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+ac() {
+	local d="$1"
+	command=("${compose_bin[@]}" --env-file "$env_file" --env-file "$node_config" --env-file "$image_apps" -p "$(sed -n 's/^COMPOSE_PROJECT=//p' "$d/manifest.env")" -f "$d/compose.yml")
 }
-
-base_env=(--env-file "$env_file")
-if [[ -n "$image_env_file" ]]; then base_env+=(--env-file "$image_env_file"); fi
-if [[ -n "${foundation_image_env_file:-}" ]]; then base_env+=(--env-file "$foundation_image_env_file"); fi
-base_env+=(--env-file "$(foundation_env_file caddy)" --env-file "$(foundation_env_file woodpecker)" --env-file "$(foundation_env_file beszel)")
-export CADDY_CONFIG_ROOT="$runtime_root/config" CADDY_DATA_ROOT="$runtime_root/data" CADDY_HTTP_BIND="$caddy_bind" CADDY_HTTPS_BIND="$caddy_bind"
-caddy_compose=("${compose_bin[@]}" "${base_env[@]}" -f "$script_dir/compose/foundation/caddy.yml")
-foundation_compose() { local name="$1"; foundation_command=("${compose_bin[@]}" "${base_env[@]}" -f "$script_dir/compose/foundation/$name.yml"); }
-run_app() {
-  local app="$1"; shift
-  local project
-  project="$(sed -n 's/^COMPOSE_PROJECT=//p' "$script_dir/apps/$app/manifest.env" | tail -n1)"
-  local -a command=("${compose_bin[@]}" "${base_env[@]}" -p "$project" -f "$script_dir/apps/$app/compose.yml")
-  "${command[@]}" "$@"
+render() {
+	local s="$runtime/config" d a t
+	rm -rf "$runtime"
+	install -d -m700 "$s/routes.d"
+	cp -a "$root/config/." "$s/"
+	while IFS= read -r f; do while IFS= read -r k; do
+		v="$(get "$k")"
+		sed "s|{\$${k}}|${v//&/\\&}|g" "$f" >"$f.tmp"
+		mv "$f.tmp" "$f"
+	done < <(grep -oE '\{\$[A-Z0-9_]+\}' "$f" | sed 's/[^A-Z0-9_]//g' | sort -u); done < <(find "$s" -type f -name '*.caddy' -print)
+	while IFS= read -r d; do
+		app_route_active "$d" || continue
+		a="$(basename "$d")"
+		[[ "$role" == leader ]] && t="$(sed -n 's/^ROUTE_TEMPLATE_LEADER=//p' "$d/manifest.env")" || t="$(sed -n 's/^ROUTE_TEMPLATE_FOLLOWER=//p' "$d/manifest.env")"
+		cp "$d/$t" "$s/routes.d/$a.caddy"
+		while IFS= read -r k; do
+			v="$(get "$k")"
+			sed "s|{\$${k}}|${v//&/\\&}|g" "$s/routes.d/$a.caddy" >"$s/routes.d/$a.caddy.tmp"
+			mv "$s/routes.d/$a.caddy.tmp" "$s/routes.d/$a.caddy"
+		done < <(grep -oE '\{\$[A-Z0-9_]+\}' "$s/routes.d/$a.caddy" | sed 's/[^A-Z0-9_]//g' | sort -u)
+	done < <(app_dirs)
+	[[ "$role" == leader ]] || rm -f "$s/foundation-routes.d/woodpecker.caddy" "$s/foundation-routes.d/woodpecker-grpc.caddy" "$s/foundation-routes.d/beszel.caddy"
 }
-
+base_env() { export CADDY_CONFIG_ROOT="$runtime/config" CADDY_DATA_ROOT="$runtime/data" CADDY_HTTP_BIND="$bind" CADDY_HTTPS_BIND="$bind" PLATFORM_EDGE_NETWORK="$(get PLATFORM_EDGE_NETWORK)"; }
 validate() {
-  while IFS= read -r descriptor; do validate_descriptor_paths "$descriptor"; done < <(app_descriptors)
-  render_config; ensure_network
-  "${caddy_compose[@]}" config --quiet
-  foundation_compose woodpecker; "${foundation_command[@]}" config --quiet
-  foundation_compose beszel; "${foundation_command[@]}" config --quiet
-  while IFS= read -r descriptor; do run_app "$(basename "$descriptor")" config --quiet; done < <(app_descriptors)
-  validate_config_dir "$CADDY_CONFIG_ROOT"
+	base_env
+	render
+	fc caddy
+	"${command[@]}" config --quiet
+	while IFS= read -r n; do
+		[[ "$n" == caddy ]] && continue
+		fc "$n"
+		"${command[@]}" config --quiet
+	done < <(printf '%s\n' "$(foundations)" | tr ',' '\n' | sed '/^$/d')
+	while IFS= read -r d; do
+		app_active "$d" || continue
+		ac "$d"
+		"${command[@]}" config --quiet
+	done < <(app_dirs)
+	docker run --rm --pull=never --env-file "$env_file" -v "$runtime/config:/etc/caddy:ro" "$(sed -n 's/^CADDY_IMAGE=//p' "$image_foundation")" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 }
-
 up() {
-  render_config; ensure_network
-  foundation_compose caddy; "${foundation_command[@]}" up -d --pull never --wait --wait-timeout 180
-  if disabled SERVICE_WOODPECKER_DISABLE; then foundation_compose woodpecker; "${foundation_command[@]}" down --remove-orphans; else foundation_compose woodpecker; "${foundation_command[@]}" up -d --pull never --wait --wait-timeout 180; fi
-  foundation_compose beszel
-  if disabled SERVICE_BESZEL_DISABLE; then
-    "${foundation_command[@]}" down --remove-orphans
-  else
-    beszel_key_file="$(sed -n 's/^BESZEL_KEY_FILE=//p' "$(foundation_env_file beszel)" | tail -n1)"
-    beszel_token_file="$(sed -n 's/^BESZEL_TOKEN_FILE=//p' "$(foundation_env_file beszel)" | tail -n1)"
-    if [[ -s "$beszel_key_file" && -s "$beszel_token_file" ]]; then
-      "${foundation_command[@]}" up -d --pull never --wait --wait-timeout 180
-    else
-      "${foundation_command[@]}" up -d --pull never --wait --wait-timeout 180 beszel-hub beszel-socket-proxy
-    fi
-  fi
-  while IFS= read -r descriptor; do
-    app="$(basename "$descriptor")"
-    if app_disabled "$descriptor"; then run_app "$app" down --remove-orphans; else run_app "$app" up -d --pull never --wait --wait-timeout 180 "$@"; fi
-  done < <(find "$script_dir/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; | sort)
+	validate
+	base_env
+	fc caddy
+	"${command[@]}" up -d --pull never --wait --wait-timeout 180
+	while IFS= read -r n; do
+		[[ "$n" == caddy ]] && continue
+		fc "$n"
+		"${command[@]}" up -d --pull never --wait --wait-timeout 180
+	done < <(printf '%s\n' "$(foundations)" | tr ',' '\n' | sed '/^$/d')
+	while IFS= read -r d; do
+		app_active "$d" || continue
+		ac "$d"
+		"${command[@]}" up -d --pull never --wait --wait-timeout 180
+	done < <(app_dirs)
 }
-
-app_descriptors() { find "$script_dir/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; | sort; }
-
-case "$action" in
-  validate) validate ;;
-  config) validate; "${caddy_compose[@]}" config "$@" ;;
-  up|start) up "$@" ;;
-  restart) up; ;;
-  down) for foundation in caddy woodpecker beszel; do foundation_compose "$foundation"; "${foundation_command[@]}" down --remove-orphans; done; while IFS= read -r descriptor; do run_app "$(basename "$descriptor")" down --remove-orphans; done < <(app_descriptors) ;;
-  logs|ps) for foundation in caddy woodpecker beszel; do foundation_compose "$foundation"; "${foundation_command[@]}" "$action" "$@"; done; while IFS= read -r descriptor; do run_app "$(basename "$descriptor")" "$action" "$@"; done < <(app_descriptors) ;;
-  *) printf 'Unknown action: %s\n' "$action" >&2; exit 2 ;;
+base_env
+case "$action" in validate) validate ;; up | restart) up ;; down)
+	for n in caddy woodpecker-controller woodpecker-worker woodpecker-deployer beszel-controller beszel-worker; do
+		fc "$n"
+		"${command[@]}" down --remove-orphans || true
+	done
+	while IFS= read -r d; do
+		ac "$d"
+		"${command[@]}" down --remove-orphans || true
+	done < <(app_dirs)
+	;;
+logs | ps) for n in caddy; do
+	fc "$n"
+	"${command[@]}" "$action"
+done ;; *)
+	printf 'unknown action: %s\n' "$action" >&2
+	exit 2
+	;;
 esac

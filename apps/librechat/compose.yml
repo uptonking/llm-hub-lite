@@ -1,0 +1,142 @@
+name: app-librechat
+services:
+  librechat-api:
+    image: ${LIBRECHAT_API_IMAGE:?LIBRECHAT_API_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    mem_limit: ${LIBRECHAT_API_MEMORY_LIMIT:-512m}
+    cpus: ${LIBRECHAT_API_CPUS:-0.75}
+    pids_limit: ${LIBRECHAT_API_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: app-librechat-api
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3080
+      NODE_ENV: production
+      NODE_OPTIONS: ${LIBRECHAT_API_NODE_OPTIONS:---max-old-space-size=384}
+      OTEL_SDK_DISABLED: ${LIBRECHAT_OTEL_SDK_DISABLED:-true}
+      CONSOLE_JSON: ${LIBRECHAT_CONSOLE_JSON:-false}
+      MONGO_URI: ${LIBRECHAT_MONGO_URI:?LIBRECHAT_MONGO_URI must be set}
+      MONGO_MAX_POOL_SIZE: ${LIBRECHAT_MONGO_MAX_POOL_SIZE:-5}
+      MONGO_MIN_POOL_SIZE: ${LIBRECHAT_MONGO_MIN_POOL_SIZE:-1}
+      MONGO_MAX_CONNECTING: ${LIBRECHAT_MONGO_MAX_CONNECTING:-1}
+      MONGO_MAX_IDLE_TIME_MS: ${LIBRECHAT_MONGO_MAX_IDLE_TIME_MS:-60000}
+      MONGO_WAIT_QUEUE_TIMEOUT_MS: ${LIBRECHAT_MONGO_WAIT_QUEUE_TIMEOUT_MS:-5000}
+      MONGO_AUTO_INDEX: ${LIBRECHAT_MONGO_AUTO_INDEX:-false}
+      MONGO_AUTO_CREATE: ${LIBRECHAT_MONGO_AUTO_CREATE:-false}
+      JWT_SECRET: ${LIBRECHAT_JWT_SECRET:?LIBRECHAT_JWT_SECRET must be set}
+      JWT_REFRESH_SECRET: ${LIBRECHAT_JWT_REFRESH_SECRET:?LIBRECHAT_JWT_REFRESH_SECRET must be set}
+      ADMIN_PANEL_SESSION_SECRET: ${LIBRECHAT_ADMIN_PANEL_SESSION_SECRET:?LIBRECHAT_ADMIN_PANEL_SESSION_SECRET must be set}
+      ADMIN_PANEL_URL: ${LIBRECHAT_ADMIN_PANEL_URL:-https://chat-admin.aichorage.de}
+      DOMAIN_CLIENT: ${LIBRECHAT_DOMAIN_CLIENT:-https://chat.aichorage.de}
+      DOMAIN_SERVER: ${LIBRECHAT_DOMAIN_SERVER:-https://chat.aichorage.de}
+      ALLOW_REGISTRATION: ${LIBRECHAT_ALLOW_REGISTRATION:-true}
+      SESSION_COOKIE_SECURE: ${LIBRECHAT_SESSION_COOKIE_SECURE:-true}
+      TRUST_PROXY: ${LIBRECHAT_TRUST_PROXY:-1}
+      USE_REDIS: ${LIBRECHAT_USE_REDIS:-true}
+      USE_REDIS_STREAMS: ${LIBRECHAT_USE_REDIS_STREAMS:-true}
+      REDIS_URI: ${LIBRECHAT_REDIS_URI:?LIBRECHAT_REDIS_URI must be set}
+      REDIS_KEY_PREFIX: ${LIBRECHAT_REDIS_KEY_PREFIX:-aichorage-librechat-prod}
+      REDIS_MAX_LISTENERS: ${LIBRECHAT_REDIS_MAX_LISTENERS:-20}
+      REDIS_RETRY_MAX_DELAY: ${LIBRECHAT_REDIS_RETRY_MAX_DELAY:-2000}
+      REDIS_RETRY_MAX_ATTEMPTS: ${LIBRECHAT_REDIS_RETRY_MAX_ATTEMPTS:-0}
+      REDIS_CONNECT_TIMEOUT: ${LIBRECHAT_REDIS_CONNECT_TIMEOUT:-5000}
+      REDIS_ENABLE_OFFLINE_QUEUE: ${LIBRECHAT_REDIS_ENABLE_OFFLINE_QUEUE:-false}
+      REDIS_PING_INTERVAL: ${LIBRECHAT_REDIS_PING_INTERVAL:-0}
+      USE_REDIS_CLUSTER: ${LIBRECHAT_USE_REDIS_CLUSTER:-false}
+      REDIS_CLUSTER_SAFE_DELETE: ${LIBRECHAT_REDIS_CLUSTER_SAFE_DELETE:-false}
+      REDIS_DELETE_CHUNK_SIZE: ${LIBRECHAT_REDIS_DELETE_CHUNK_SIZE:-100}
+      REDIS_UPDATE_CHUNK_SIZE: ${LIBRECHAT_REDIS_UPDATE_CHUNK_SIZE:-100}
+      REDIS_SCAN_COUNT: ${LIBRECHAT_REDIS_SCAN_COUNT:-100}
+      FORCED_IN_MEMORY_CACHE_NAMESPACES: ${LIBRECHAT_FORCED_IN_MEMORY_CACHE_NAMESPACES:-CONFIG_STORE,APP_CONFIG}
+      MCP_REGISTRY_CACHE_TTL: ${LIBRECHAT_MCP_REGISTRY_CACHE_TTL:-30000}
+      STREAM_DELTA_COALESCE_MS: ${LIBRECHAT_STREAM_DELTA_COALESCE_MS:-25}
+      MCP_INIT_TIMEOUT_MS: ${LIBRECHAT_MCP_INIT_TIMEOUT_MS:-10000}
+      SEARCH: ${LIBRECHAT_SEARCH:-false}
+      SCHEDULES_DISABLED: ${LIBRECHAT_SCHEDULES_DISABLED:-true}
+      DEPLOYMENT_PLUGIN_HOOKS: ${LIBRECHAT_DEPLOYMENT_PLUGIN_HOOKS:-false}
+      DEPLOYMENT_SKILLS_DIR: /app/skill
+      CODE_SANDBOX_PREWARM: ${LIBRECHAT_CODE_SANDBOX_PREWARM:-false}
+      FILE_UPLOAD_SSE_ENABLED: ${LIBRECHAT_FILE_UPLOAD_SSE_ENABLED:-false}
+      FILE_UPLOAD_IP_MAX: ${LIBRECHAT_FILE_UPLOAD_IP_MAX:-10}
+      FILE_UPLOAD_IP_WINDOW: ${LIBRECHAT_FILE_UPLOAD_IP_WINDOW:-60}
+      FILE_UPLOAD_USER_MAX: ${LIBRECHAT_FILE_UPLOAD_USER_MAX:-20}
+      FILE_UPLOAD_USER_WINDOW: ${LIBRECHAT_FILE_UPLOAD_USER_WINDOW:-60}
+      CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES: ${LIBRECHAT_CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES:-16777216}
+      FILE_STRATEGY: ${LIBRECHAT_FILE_STRATEGY:-s3}
+      AWS_ENDPOINT_URL: ${LIBRECHAT_AWS_ENDPOINT_URL:?LIBRECHAT_AWS_ENDPOINT_URL must be set}
+      AWS_ACCESS_KEY_ID: ${LIBRECHAT_AWS_ACCESS_KEY_ID:?LIBRECHAT_AWS_ACCESS_KEY_ID must be set}
+      AWS_SECRET_ACCESS_KEY: ${LIBRECHAT_AWS_SECRET_ACCESS_KEY:?LIBRECHAT_AWS_SECRET_ACCESS_KEY must be set}
+      AWS_REGION: ${LIBRECHAT_AWS_REGION:-auto}
+      AWS_BUCKET_NAME: ${LIBRECHAT_AWS_BUCKET_NAME:?LIBRECHAT_AWS_BUCKET_NAME must be set}
+      AWS_FORCE_PATH_STYLE: ${LIBRECHAT_AWS_FORCE_PATH_STYLE:-true}
+      LIBRECHAT_TEMP_CREDENTIALS_PATH: /app/data/.env.temp
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/librechat/images:/app/client/public/images
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/librechat/uploads:/app/uploads
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/librechat/skills:/app/skill
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/librechat/logs:/app/api/logs
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/librechat/data:/app/data
+      - ./librechat.yaml:/app/librechat.yaml:ro
+    networks: [librechat_private]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3080/health | grep -q '^OK$'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+  librechat-admin-panel:
+    image: ${LIBRECHAT_ADMIN_IMAGE:?LIBRECHAT_ADMIN_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: ${LIBRECHAT_ADMIN_MEMORY_LIMIT:-128m}
+    cpus: ${LIBRECHAT_ADMIN_CPUS:-0.25}
+    pids_limit: ${LIBRECHAT_ADMIN_PIDS_LIMIT:-128}
+    depends_on:
+      librechat-api:
+        condition: service_healthy
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: app-librechat-admin-panel
+    environment:
+      PORT: 3000
+      NODE_OPTIONS: ${LIBRECHAT_ADMIN_NODE_OPTIONS:---max-old-space-size=96}
+      SESSION_SECRET: ${LIBRECHAT_ADMIN_PANEL_SESSION_SECRET:?LIBRECHAT_ADMIN_PANEL_SESSION_SECRET must be set}
+      API_SERVER_URL: http://librechat-api:3080
+      VITE_API_BASE_URL: ${LIBRECHAT_DOMAIN_CLIENT:-https://chat.aichorage.de}
+      SESSION_COOKIE_SECURE: ${LIBRECHAT_SESSION_COOKIE_SECURE:-true}
+    networks: [librechat_private, platform_edge]
+  librechat-client:
+    image: ${LIBRECHAT_CLIENT_IMAGE:?LIBRECHAT_CLIENT_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: ${LIBRECHAT_CLIENT_MEMORY_LIMIT:-32m}
+    cpus: ${LIBRECHAT_CLIENT_CPUS:-0.10}
+    pids_limit: ${LIBRECHAT_CLIENT_PIDS_LIMIT:-64}
+    depends_on:
+      librechat-api:
+        condition: service_healthy
+      librechat-admin-panel:
+        condition: service_started
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: app-librechat-client
+    volumes:
+      - ./client.nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [librechat_private, platform_edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/health | grep -q '^OK$'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+networks:
+  librechat_private:
+    name: app-librechat_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

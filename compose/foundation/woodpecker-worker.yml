@@ -1,0 +1,35 @@
+name: foundation-woodpecker-worker
+services:
+  woodpecker-agent:
+    image: ${WOODPECKER_AGENT_IMAGE:?WOODPECKER_AGENT_IMAGE must be digest-pinned}
+    command: agent
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 2m
+    mem_limit: ${WOODPECKER_AGENT_MEMORY_LIMIT:-128m}
+    cpus: ${WOODPECKER_AGENT_CPUS:-0.50}
+    pids_limit: ${WOODPECKER_AGENT_PIDS_LIMIT:-128}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: foundation-woodpecker-worker
+    volumes:
+      - ${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker}/agent:/etc/woodpecker
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WOODPECKER_SERVER: ${WOODPECKER_AGENT_SERVER:?WOODPECKER_AGENT_SERVER must be set}
+      WOODPECKER_GRPC_SECURE: ${WOODPECKER_GRPC_SECURE:-true}
+      WOODPECKER_GRPC_SKIP_VERIFY: ${WOODPECKER_GRPC_SKIP_VERIFY:-false}
+      WOODPECKER_AGENT_SECRET: ${WOODPECKER_AGENT_SECRET:?WOODPECKER_AGENT_SECRET must be set}
+      WOODPECKER_MAX_WORKFLOWS: ${WOODPECKER_MAX_WORKFLOWS:-1}
+      WOODPECKER_AGENT_LABELS: ${WOODPECKER_AGENT_LABELS:?WOODPECKER_AGENT_LABELS must be set}
+      WOODPECKER_LOG_LEVEL: ${WOODPECKER_LOG_LEVEL:-info}
+    networks: [woodpecker_private]
+    healthcheck:
+      test: ["CMD", "/bin/woodpecker-agent", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+networks:
+  woodpecker_private:
+    name: foundation-woodpecker_private

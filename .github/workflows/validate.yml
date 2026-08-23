@@ -1,62 +1,62 @@
 name: validate
-
 on:
   pull_request:
   push:
     branches:
       - main
-
 permissions:
   contents: read
-
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
       - name: Check shell syntax
         run: bash -n stack.sh ops/*.sh ops/tests/*.sh
-
+      - name: Check generated Woodpecker workflows
+        run: ops/generate-woodpecker-workflows.sh --check
       - name: Lint shell scripts
         run: shellcheck stack.sh ops/*.sh ops/tests/*.sh
-
+      - name: Check IP privacy
+        run: ops/tests/ip-privacy-test.sh
       - name: Run deployment controller tests
         run: ops/tests/controller-test.sh
-
+      - name: Run bootstrap policy tests
+        run: ops/tests/bootstrap-policy-test.sh
+      - name: Run deployment rollback tests
+        run: ops/tests/deployment-rollback-test.sh
       - name: Run platform controller tests
         run: ops/tests/platformctl-test.sh
-
       - name: Run stack and backup tests
         run: |
           ops/tests/stack-test.sh
           ops/tests/backup-test.sh
-          ops/tests/enroll-test.sh
+          ops/tests/workflow-generator-test.sh
+          ops/tests/enroll-beszel-test.sh
+          ops/tests/firewall-test.sh
           ops/tests/platform-submit-test.sh
-
+          ops/tests/git-auth-test.sh
       - name: Validate Compose model
         run: |
           docker compose --env-file .env.prod.example --env-file ops/images.foundation.prod.env -f compose/foundation/caddy.yml config --quiet
-          docker compose --env-file .env.prod.example --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker.yml config --quiet
-          docker compose --env-file .env.prod.example --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel.yml config --quiet
-          docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/newapi/compose.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker-controller.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker-deployer.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel-controller.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel-worker.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker-worker.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel-worker.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/images.apps.prod.env -f apps/newapi/compose.yml config --quiet
           docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cliproxyapi/compose.yml config --quiet
-
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/images.apps.prod.env -f apps/librechat/compose.yml config --quiet
       - name: Validate Caddyfile
-        run: STACK_ENV_FILE=.env.prod.example STACK_IMAGE_ENV_FILE=ops/images.apps.prod.env STACK_FOUNDATION_IMAGE_ENV_FILE=ops/images.foundation.prod.env STACK_RUNTIME_ROOT="$PWD/.runtime/ci" ./stack.sh prod validate
-
+        run: |
+          for node in leader worker-1 worker-2; do
+            STACK_ENV_FILE=.env.prod.example STACK_NODE_CONFIG_FILE="config/cluster/nodes/$node.env" STACK_IMAGE_ENV_FILE=ops/images.apps.prod.env STACK_FOUNDATION_IMAGE_ENV_FILE=ops/images.foundation.prod.env STACK_RUNTIME_ROOT="$PWD/.runtime/$node" ./stack.sh prod validate
+          done
       - name: Validate deployment runner Dockerfile
         run: >-
-          docker build --check
-          --build-arg APK_LOCK_SHA256_AMD64=04dc754bdbbfdc2a9130ff5e13ed9213e8bb6e80f37abd033766de59a3a6e67b
-          --build-arg APK_LOCK_SHA256_ARM64=04dc754bdbbfdc2a9130ff5e13ed9213e8bb6e80f37abd033766de59a3a6e67b
-          ops/deploy-runner
-
+          docker build --check --build-arg APK_LOCK_SHA256_AMD64=04dc754bdbbfdc2a9130ff5e13ed9213e8bb6e80f37abd033766de59a3a6e67b --build-arg APK_LOCK_SHA256_ARM64=04dc754bdbbfdc2a9130ff5e13ed9213e8bb6e80f37abd033766de59a3a6e67b ops/deploy-runner
       - name: Lint Woodpecker workflow
         run: >-
-          docker run --rm
-          -v "$PWD:/work:ro"
-          -w /work
-          woodpeckerci/woodpecker-cli:v3.17.0@sha256:c9710c0ed05d1ac57124cde5c7743166a9449892fc8a6adcc818976f63468d32
-          lint .woodpecker
+          docker run --rm -v "$PWD:/work:ro" -w /work woodpeckerci/woodpecker-cli:v3.17.0@sha256:c9710c0ed05d1ac57124cde5c7743166a9449892fc8a6adcc818976f63468d32 lint .woodpecker

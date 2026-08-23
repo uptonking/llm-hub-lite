@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+config_file="${DEPLOY_CONFIG_FILE:-/etc/llm-hub-lite/platform.env}"
+[[ -r "$config_file" ]] || {
+	printf 'configure-firewall: missing %s\n' "$config_file" >&2
+	exit 1
+}
+# shellcheck disable=SC1090
+source "$config_file"
+: "${CONTROL_ROOT:=/opt/platform/control}"
+: "${NODE_CONFIG_FILE:=/etc/llm-hub-lite/node.env}"
+: "${CLUSTER_POLICY_FILE:=$CONTROL_ROOT/current/config/cluster/policy.env}"
+REQUEST_FILE="${FIREWALL_RECONCILE_REQUEST_FILE:-/etc/llm-hub-lite/firewall-reconcile.request}"
+value() { sed -n "s/^$1=//p" "$2" | tail -n1; }
+valid_ipv4() {
+	local ip="$1" octet
+	local -a octets
+	[[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+	IFS=. read -r -a octets <<<"$ip"
+	[[ "${#octets[@]}" -eq 4 ]] || return 1
+	for octet in "${octets[@]}"; do
+		[[ "$octet" =~ ^[0-9]+$ ]] && ((10#$octet <= 255)) || return 1
+	done
+}
+node_id="${NODE_ID:-$(value NODE_ID "$NODE_CONFIG_FILE")}"
+leader_id="$(value LEADER_NODE_ID "$CLUSTER_POLICY_FILE")"
+[[ -n "$node_id" && -n "$leader_id" ]] || {
+	printf 'configure-firewall: node identity or cluster policy is incomplete\n' >&2
+	exit 1
+}
+[[ "$node_id" == "$leader_id" ]] && NODE_ROLE=leader || NODE_ROLE=follower
+LEADER_PUBLIC_IP="$(value LEADER_PUBLIC_IP "$NODE_CONFIG_FILE")"
+
+command -v iptables >/dev/null 2>&1 || {
+	printf 'configure-firewall: iptables is required\n' >&2
+	exit 1
+}
+command -v ufw >/dev/null 2>&1 || {
+	printf 'configure-firewall: ufw is required\n' >&2
+	exit 1
+}
+clear_follower_ufw_rules() {
+	local number
+	while IFS= read -r number; do
+		[[ "$number" =~ ^[0-9]+$ ]] || continue
+		ufw --force delete "$number" >/dev/null || true
+	done < <(ufw status numbered 2>/dev/null | sed -n '/Leader to follower/{s/^\[[[:space:]]*\([0-9][0-9]*\)\].*/\1/p;}' | sort -rn)
+}
+chain=LLM_HUB_LITE_DOCKER
+if [[ "$NODE_ROLE" == leader ]]; then
+	clear_follower_ufw_rules
+	while iptables -C DOCKER-USER -j "$chain" 2>/dev/null; do iptables -D DOCKER-USER -j "$chain"; done
+	iptables -F "$chain" 2>/dev/null || true
+	iptables -X "$chain" 2>/dev/null || true
+	rm -f -- "$REQUEST_FILE"
+	exit 0
+fi
+valid_ipv4 "$LEADER_PUBLIC_IP" || {
+	printf 'configure-firewall: valid runtime LEADER_PUBLIC_IP is required for followers\n' >&2
+	exit 1
+}
+clear_follower_ufw_rules
+ufw allow from "$LEADER_PUBLIC_IP" to any port 443 proto tcp comment 'Leader to follower HTTPS' >/dev/null
+ufw allow from "$LEADER_PUBLIC_IP" to any port 443 proto udp comment 'Leader to follower HTTP/3' >/dev/null
+
+# Docker evaluates DOCKER-USER before its own published-port rules. Allow the
+# Leader to reach follower HTTPS, then drop all other published HTTPS traffic.
+iptables -N "$chain" 2>/dev/null || true
+iptables -F "$chain"
+iptables -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+iptables -A "$chain" -s "$LEADER_PUBLIC_IP" -p tcp --dport 443 -j RETURN
+iptables -A "$chain" -s "$LEADER_PUBLIC_IP" -p udp --dport 443 -j RETURN
+iptables -A "$chain" -p tcp --dport 443 -j DROP
+iptables -A "$chain" -p udp --dport 443 -j DROP
+while iptables -C DOCKER-USER -j "$chain" 2>/dev/null; do iptables -D DOCKER-USER -j "$chain"; done
+iptables -I DOCKER-USER 1 -j "$chain"
+
+printf 'Docker published-port policy applied for the configured Leader address\n'
+rm -f -- "$REQUEST_FILE"

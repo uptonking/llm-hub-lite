@@ -2,12 +2,16 @@
 
 ## Purpose
 
-Self-hosted, reproducible Docker platform for Caddy, Woodpecker CI, Beszel, New API, and CLIProxyAPI on a single server.
+Self-hosted, reproducible multi-node Docker platform for Caddy, Woodpecker CI,
+Beszel, and LibreChat.
+LibreChat is the enabled follower-only consumer; New API and CLIProxyAPI are retained but disabled by policy by default.
 
 ## Architecture
 
 - Foundation Compose projects: `compose/foundation/`.
-- Declarative applications: `apps/<id>/manifest.env`, `compose.yml`, `route.caddy`.
+- Cluster inventory and policy: `config/cluster/`.
+- Declarative applications: `apps/<id>/manifest.env`, `compose.yml`, and role
+  route templates.
 - Generated runtime Caddy configuration: `/opt/apps/llm-hub-lite/shared/runtime/config`.
 - Persistent app data: `/opt/apps/llm-hub-lite/shared/data/prod`.
 - Foundation state: `/opt/platform/{caddy,woodpecker,beszel}`.
@@ -17,7 +21,11 @@ Self-hosted, reproducible Docker platform for Caddy, Woodpecker CI, Beszel, New 
 
 `ops/bootstrap-vps.sh` is for first deployment only. Daily changes are GitHub push → Woodpecker → `deploy-controller`; do not add SSH-based daily procedures. `platformctl recover` must remain safe after a VPS reboot and must never pull mutable images.
 
-Production images stay digest-pinned in `ops/images.foundation.prod.env` and `ops/images.apps.prod.env`. Caddy remains mandatory and exposes 80, 443/TCP, and 443/UDP on the external `platform_edge` network. Woodpecker and Beszel are independently disableable with `SERVICE_WOODPECKER_DISABLE` and `SERVICE_BESZEL_DISABLE`; applications use their descriptor `DISABLE_ENV` variables.
+Production images stay digest-pinned in `ops/images.foundation.prod.env` and
+`ops/images.apps.prod.env`. Caddy remains mandatory and exposes 80, 443/TCP,
+and 443/UDP on the external `platform_edge` network. Role placement and
+intentional service disablement are committed in `config/cluster/policy.env`;
+there are no per-service disable environment variables.
 
 ## Validation
 

@@ -1,72 +1,238 @@
 # llm-hub-lite
 
-Reproducible single-server Docker platform for Caddy, Woodpecker CI, Beszel, New API, and CLIProxyAPI. Caddy is the only public ingress; UDP 443 remains enabled for HTTP/3.
+Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, and LibreChat.
 
 ## Architecture
 
-- Foundation Compose projects are independent: `compose/foundation/caddy.yml`, `woodpecker.yml`, and `beszel.yml`.
-- Applications are declarative descriptors under `apps/<id>/` (manifest, Compose file, Caddy route, and optional SQLite backup metadata).
-- Every project joins the external `platform_edge` network; each application also has a private network.
-- `stack.sh` manages the foundation projects and application descriptors together for local development; on a VPS, `platformctl` keeps the same projects independently reconciled.
-- Production image references are digest-pinned in `ops/images.foundation.prod.env` and `ops/images.apps.prod.env`.
-- `SERVICE_WOODPECKER_DISABLE`, `SERVICE_BESZEL_DISABLE`, `APP_NEWAPI_DISABLE`, and `APP_CLIPROXYAPI_DISABLE` independently disable services. Disabled applications retain their data and backup metadata, but their containers are stopped, removed, and excluded from active Caddy configuration. Removed app descriptors retain their last route and backup metadata as dormant records. Foundation toggles remove their public routes as well; Caddy is mandatory.
+The committed inventory is in `config/cluster/` . The current Leader has stable ode ID `leader` ; it runs Caddy, Woodpecker server/controller, a trusted
+deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node
+IDs `worker-1` and `worker-2` ; they run Caddy, Woodpecker workers, Beszel
+agents, and LibreChat. The IDs are stable labels; the role is selected only by
+`LEADER_NODE_ID` in the policy.
 
-## Local validation
+Caddy is installed on every node. Public DNS names point to the Leader. The
+Leader derives consumer upstreams from every follower entry in
+`config/cluster/nodes/*.env` ; adding a follower therefore does not require
+editing a Caddy route. Keep origin records DNS-only and restrict follower
+HTTPS/HTTP3 to the Leader IP at both UFW and Docker's `DOCKER-USER` chain.
+Set `REPO_SLUG` in `config/cluster/policy.env` to the GitHub owner/repository
+that runs this stack; generated Woodpecker labels use that value.
+
+The control plane is intentionally single-controller: Woodpecker and Beszel
+use persistent SQLite on the Leader. LibreChat replicas share external Atlas
+MongoDB and Upstash Redis state. This provides consumer availability without claiming automatic
+control-plane failover.
+
+## Configuration
+
+Copy `.env.prod.example` to `.env.prod` and keep it root-readable only. Put
+OAuth, Neon, application keys, and all other secrets in that runtime file or
+the root-only foundation files under `/etc/llm-hub-lite` . Never commit them.
+The runtime filenames `node.env` and `shared-secrets.env` are ignored as a
+second line of defense. Run `ops/check-ip-privacy.sh --cached` before committing;
+CI rejects globally routable IPv4 literals anywhere in tracked content.
+Production backup policy requires `RESTIC_REMOTE_ENABLED=true` , a verified
+`RESTIC_REMOTE_REPOSITORY` , and the root-only password file named by
+`RESTIC_REMOTE_PASSWORD_FILE` before the first bootstrap. If the remote
+backend needs provider credentials (for example S3 or B2), put the required
+Restic variables in a root-only file at `RESTIC_REMOTE_ENV_FILE` ; pass
+`RESTIC_REMOTE_ENV_SOURCE_FILE=/path/to/file` during bootstrap so it is
+installed on the VPS and reused by all backup timers. Prefer a separate remote
+repository or backend prefix for each stable node ID. Shared repositories are
+supported: snapshots and retention are scoped by the `node:<NODE_ID>` tag.
+
+Service disablement is committed in `config/cluster/policy.env` ; there are no
+per-service `*_DISABLE` switches. Foundation placement is policy-controlled;
+consumer placement is declared by `PLACEMENT=follower` in each app manifest.
+When a consumer is active, the Leader can generate the initial shared random
+secrets once, while every Follower must receive the same values from the
+root-only bundle or explicit environment variables. A non-interactive
+bootstrap fails closed instead of inventing per-node credentials. Disabled
+consumers do not require their database or application secrets.
+To add a consumer, add an app descriptor under `apps/<id>/` , its two route
+templates, Compose file, and digest-pinned image key. No second placement list
+is required. The next normal push deploys it to every follower and adds its
+load-balanced route on the Leader.
+
+New API and CLIProxyAPI remain as dormant manifests and are disabled by the
+committed policy. LibreChat is enabled on Followers and is published at
+`chat.aichorage.de` and `chat-admin.aichorage.de` . It uses MongoDB Atlas and
+Upstash Redis; provide `LIBRECHAT_MONGO_URI` and `LIBRECHAT_REDIS_URI` (plus
+the generated JWT and admin-panel secrets) in the root-only bundle or during
+interactive bootstrap. Production also requires the shared Cloudflare R2
+endpoint, access key, secret key, region ( `auto` ), and bucket through the
+`LIBRECHAT_AWS_*` settings. LibreChat uses `fileStrategy: s3` , so R2 is the
+source of truth for uploads and images across Followers. The initial profile
+intentionally omits local MongoDB, Redis, Meilisearch, RAG, and pgvector.
+Registration is enabled by default as an explicit product choice. URL-encode
+reserved characters in Atlas and Upstash credentials before placing them in
+the connection URI.
+
+The minimal LibreChat profile runs exactly three containers on each Follower:
+the API, admin panel, and Nginx client. The API is capped at 512 MiB and 384
+MiB of Node heap, with small Mongo connection pools and bounded Redis retry-delay and scan settings; the admin panel and client have 128 MiB and 32 MiB caps. Search, RAG, pgvector, Meilisearch, code execution, local process-backed MCP, schedules, and deployment hooks are disabled in the checked-in profile. Remote MCP and the normal agent/tool orchestration remain available through the operator YAML.
+Uploads use R2, and the Compose API does not join the public edge network.
+Foundation services also have explicit low-memory caps: Caddy 64 MiB, Woodpecker server 256 MiB, Woodpecker workers 128 MiB, Beszel Hub 128 MiB, and Beszel agent 64 MiB by default. These are configurable through the `*_MEMORY_LIMIT` , `*_CPUS` , and `*_PIDS_LIMIT` variables in `.env.prod` .
+
+On a 1 GB VPS, bootstrap enables a 1 GB `/swapfile` with `nofail` persistence
+and low swappiness when no swap is already active. Override
+`LOW_MEMORY_SWAP_ENABLED` , `LOW_MEMORY_SWAPFILE` , `LOW_MEMORY_SWAP_SIZE` , or
+`LOW_MEMORY_SWAP_SWAPPINESS` before bootstrap if the provider supplies swap or
+uses a different storage policy. Swap is a pressure buffer, not a substitute
+for external MongoDB, Redis, and R2. Keep `LIBRECHAT_MONGO_BACKUP_NODE_ID`
+
+fixed to one Follower; only that node performs the optional `mongodump` export,
+avoiding duplicate Atlas backups.
+
+## Local checks
 
 ```bash
 cp .env.dev.example .env.dev
 ./stack.sh dev validate
 ./stack.sh dev up
-
-cp .env.prod.example .env.prod
-chmod 600 .env.prod
-STACK_ENV_FILE=.env.prod.example ./stack.sh prod validate
 ```
 
-The production runtime file is `.env.prod`; `.env.prod.example` is only a template. Development follows the same convention with `.env.dev`.
+## First deployment
 
-## First VPS bootstrap
+SSH is used only for bootstrap. Run the script on each node, provide its stable
+node ID and the Leader public IPv4 address, and confirm the role derived from
+the committed inventory. Bootstrap persists the address as `LEADER_PUBLIC_IP`
 
-Bootstrap is the only normal SSH operation. The target should be a clean Debian or Ubuntu VPS with systemd, a public IPv4 address, and root access. Prepare Cloudflare first:
-
-1. Create `A` records for `@` and `*` under `aichorage.de`, both pointing to `166.88.160.139`. Remove stale `AAAA` records unless IPv6 is configured on the VPS. Keep the records DNS-only (gray cloud) until Caddy has issued certificates and the endpoints have been verified.
-2. Create a GitHub **OAuth App** (not a GitHub App) with homepage `https://ci.aichorage.de` and callback `https://ci.aichorage.de/authorize`.
-3. From the repository checkout, copy and run bootstrap. It prompts for the OAuth client ID and secret and generates all other application secrets:
+in `/etc/llm-hub-lite/node.env` ; it installs Docker, persistent directories,
+firewall rules, systemd recovery/backup timers, pinned images, the deployment
+runner, and the role-specific foundation projects.
 
 ```bash
-scp ops/bootstrap-vps.sh root@166.88.160.139:/root/llm-hub-lite-bootstrap.sh
-ssh root@166.88.160.139 \
-  'chmod 700 /root/llm-hub-lite-bootstrap.sh && \
-   REPO_URL=https://github.com/uptonking/llm-hub-lite.git \
-   REPO_SLUG=uptonking/llm-hub-lite \
-   DOMAIN_NAME=aichorage.de \
-   SSL_EMAIL=your-email@example.com \
-   WOODPECKER_ADMIN=uptonking \
-   MAIN_BRANCH=main \
-   /root/llm-hub-lite-bootstrap.sh'
+LEADER_HOST='<leader-host-or-ip>'
+scp ops/bootstrap-vps.sh "root@$LEADER_HOST:/root/llm-hub-lite-bootstrap.sh"
+ssh -t "root@$LEADER_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=leader DOMAIN_NAME=aichorage.de SSL_EMAIL=admin@example.com /root/llm-hub-lite-bootstrap.sh'
 ```
 
-Replace the repository, slug, and email values as needed. The script installs Docker, Compose, UFW rules for `22/tcp`, `80/tcp`, `443/tcp`, and `443/udp`, configures Docker live-restore and log rotation, installs systemd recovery/backup timers, builds the pinned deployment runner, starts the foundation, and enrolls the Beszel agent. It is idempotent and does not remove persistent data. On ARM64, the script uses the pinned Compose checksum for that architecture automatically. If the repository is private, arrange a read-only GitHub deploy key or another source-access mechanism before running bootstrap; the default HTTPS clone assumes the repository is publicly readable.
+Repeat for the two follower addresses. Provision DNS first: public domains
+`ci` , `ci-grpc` , `status` , `chat` , and `chat-admin` point to the Leader. The
+DNS-only origins using the `worker1-` prefix point to Worker 1, while the
+stable-ID `worker2-` origin records point to Worker 2. The `leader` stable ID is
+the public Leader and therefore does not need a private origin record for
+ingress.
 
-After bootstrap, retrieve the one-time Beszel login from `/etc/llm-hub-lite/beszel-initial-credentials`, sign in at `https://status.aichorage.de`, change the generated password, and retain or remove the root-only file according to your recovery policy. Verify the host before enabling Cloudflare proxying:
+The three-node bootstrap order is Leader ( `leader` ), then Follower
+`worker-1` , then Follower `worker-2` :
 
 ```bash
-ssh root@166.88.160.139 '/usr/local/bin/platformctl status && /usr/local/bin/platformctl health'
-curl -fsS https://ci.aichorage.de/
-curl -fsS https://status.aichorage.de/api/health
+LEADER_HOST='<leader-host-or-ip>'
+WORKER_1_HOST='<worker-1-host-or-ip>'
+WORKER_2_HOST='<worker-2-host-or-ip>'
+for host in "$LEADER_HOST" "$WORKER_1_HOST" "$WORKER_2_HOST"; do
+  scp ops/bootstrap-vps.sh "root@$host:/root/llm-hub-lite-bootstrap.sh"
+done
+ssh -t "root@$LEADER_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=leader /root/llm-hub-lite-bootstrap.sh'
+# Transfer the Leader's root-only shared-secrets.env and beszel-enrollment.env
+# to both followers through your one-time bootstrap process.
+ssh -t "root@$WORKER_1_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=worker-1 /root/llm-hub-lite-bootstrap.sh'
+ssh -t "root@$WORKER_2_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=worker-2 /root/llm-hub-lite-bootstrap.sh'
 ```
 
-In Woodpecker, sign in with GitHub, synchronize and activate `uptonking/llm-hub-lite`, and mark only this private repository as **trusted**. The trusted setting is required because the production agent has Docker socket access; do not enable arbitrary repositories on this agent. Confirm the project is configured for the `target=production` and `repo=uptonking/llm-hub-lite` labels.
+Set the shared LibreChat Atlas/Upstash values, Woodpecker OAuth values, and
+any optional consumer values in the
+root-only environment or bundle before running the commands. The Leader public
+IPv4 address may also be supplied as `LEADER_PUBLIC_IP` ; otherwise it is loaded
+from existing runtime configuration or the shared bundle, then prompted for.
+Each bootstrap confirms the role derived from the committed inventory.
 
-## Deployment lifecycle
+After bootstrapping the Leader, copy the root-only
+`/etc/llm-hub-lite/beszel-enrollment.env` bundle to each follower (or pass its
+base64 form as `BESZEL_ENROLLMENT_BUNDLE_B64` during follower bootstrap). The
+follower bootstrap provisions the Hub public key and permanent universal token
+idempotently; it never creates a second Hub or replaces matching credentials.
+Also copy `/etc/llm-hub-lite/shared-secrets.env` to each follower, or provide
+the same file through `PLATFORM_SECRET_BUNDLE_FILE` . Bootstrap rejects a
+runtime configuration that conflicts with the shared bundle. If no bundle is
+provided, the follower prompts for the shared values; do not accept generated
+values independently on different nodes.
+Mark only the private repository as trusted in Woodpecker. The deployment
+agent has Docker socket access and must never run untrusted repositories.
 
-`.woodpecker/deploy.yml` validates the exact commit, snapshots persistent state, stages a versioned control bundle, synchronizes application projects, and runs smoke checks. Foundation-owned changes (Compose foundation files, ingress, environment templates, workflows, systemd units, and controller scripts) are rejected by the application controller and must use the reviewed foundation workflow. Application image upgrades and foundation upgrades use separate manual workflows. A failed deployment restores the previous complete bundle, including its control pointer, image manifests, foundation files, and descriptor registry.
+The following values must be identical on every New API replica: Neon
+`NEW_API_SQL_DSN` , `NEW_API_SESSION_SECRET` , and `NEW_API_CRYPTO_SECRET` .
+Supply them as bootstrap environment variables or from the same root-only
+shared secret bundle on every node. Worker 1 is the committed New API migration
+node ( `NEW_API_NODE_TYPE=master` in its node descriptor); the other Follower
+uses `slave` . The current Leader is not a consumer node. The pinned external
+image runs startup migrations on every non-slave process and does not provide
+an advisory-lock migration gate, so keep exactly one migration node and
+upgrade it before the other replica if New API is re-enabled.
 
-The deployment runner is built locally as `llm-hub-lite/deploy-runner:current` from `ops/deploy-runner/Dockerfile`; its Alpine package versions and Compose binary are checksum-locked. The host records and verifies the immutable image ID before each deployment. Use the manual `runner-upgrade` workflow (or `/usr/local/bin/upgrade-runner` during emergency maintenance) to rebuild and verify the runner.
+Follower deployment smoke checks use the local Compose health status, while
+the Leader smoke workflow checks the public DNS endpoints. This avoids a
+Follower appearing healthy merely because its request was served by the
+Leader.
 
-`platformctl recover` is health-first and never pulls images. It starts unhealthy projects without serial Compose waits under one global recovery deadline, then reports degraded components. Docker restart policies plus `platform-recovery.service` restore the stack after a VPS reboot; periodic health checks repair drift. Generated Caddy configuration is staged and validated before it replaces the live bundle, then Caddy is explicitly reloaded during reconciliation.
+For private repositories, provision a root-only GitHub fine-grained token (or
+GitHub App token) file during first bootstrap with `GITHUB_TOKEN_FILE` . The
+controller uses non-interactive HTTPS Git transport internally. VPS SSH is
+bootstrap-only; daily delivery remains GitHub push to Woodpecker and does not
+require SSH keys or SSH connections.
 
-## Operations
+## Changing node IPs or the Leader
+
+Stable IDs are never renamed when an IP changes. A Follower address change
+requires only updates to its DNS-only origin records. A Leader address change
+is private maintenance: update `LEADER_PUBLIC_IP` in the root-only
+`/etc/llm-hub-lite/node.env` on every node and in the Leader's
+`/etc/llm-hub-lite/shared-secrets.env` , then restart
+`platform-firewall.service` on every Follower before completing the DNS
+cutover. No address change belongs in Git. Verify each origin with
+`curl --resolve <origin>:443:<new-ip> https://<origin>/...` .
+
+Leader promotion is deliberately manual because Woodpecker Server and Beszel
+Hub are SQLite controllers. Freeze deployments, restore the latest verified
+remote Restic snapshot on the candidate, set `LEADER_NODE_ID` in the policy,
+and move `CLIPROXY_PRIMARY_NODE_ID` , `NEW_API_MIGRATION_NODE_ID` , and
+`NEW_API_BACKUP_NODE_ID` to follower IDs if any currently points at the
+candidate. During the maintenance window, set the candidate's public address
+as `LEADER_PUBLIC_IP` in every node's root-only runtime configuration and in
+the candidate's shared bundle. Run `cluster-reconcile` ,
+verify with `curl --resolve` , demote the old Leader, and only then change
+public Cloudflare DNS. The recovery point is the last successful remote
+backup; there is no automatic controller failover. Restores preserve the
+target node's `/etc/llm-hub-lite/node.env` by default, preventing a snapshot
+from silently changing stable identity or address. Set `RESTORE_IDENTITY=1`
+
+only for an intentional, reviewed controller promotion.
+
+New API is the consumer HA exception: every replica uses the same Neon
+PostgreSQL DSN, `SESSION_SECRET` , and `CRYPTO_SECRET` . The workflow generator
+creates an `app-upgrade-<follower-id>` manual workflow for every follower. Run
+the migration follower first, wait for health and smoke checks, then upgrade
+the remaining followers; never upgrade two replicas concurrently. The node
+named by `NEW_API_BACKUP_NODE_ID` is the only node that runs `pg_dump` ; every
+node still backs up its local runtime and SQLite state.
+
+CLIProxyAPI is active-passive. `CLIPROXY_PRIMARY_NODE_ID` controls the first
+Caddy origin; health checks fail over to the remaining follower origins. Change
+that policy field and push it when moving the primary. Its local auth/plugin
+state is not replicated, so failover requires persisted state on the target.
+
+LibreChat accounts and conversations live in MongoDB Atlas, while shared cache
+and stream state lives in Upstash. Local Restic snapshots include LibreChat
+logs, runtime configuration, and the shared secret bundle, but do not
+automatically back up Atlas, Upstash, or R2. Set
+`LIBRECHAT_MONGO_BACKUP_ENABLED=true` and install `mongodump` on the backup
+owner to include an Atlas archive; verify that archive before treating it as
+a disaster-recovery copy.
+
+## Daily delivery
+
+Push to `main` . Woodpecker validates the exact commit, creates a verified
+backup, updates the Leader controller bundle, reconciles every follower node,
+reloads Caddy only after health checks pass, and runs public smoke tests.  Foundation changes, image upgrades, and runner upgrades remain explicit reviewed workflows.
+
+The generated manual workflows are per-node and serialized: foundation and
+runner upgrades run Leader first, then Followers; rollback runs Followers
+before the Leader. This keeps image and configuration changes consistent
+without SSH fan-out.
+
+Useful commands on a node:
 
 ```text
 platformctl status
@@ -74,34 +240,15 @@ platformctl health
 platformctl recover
 platformctl sync all
 platformctl restart all
-restart-platform all
-platformctl recreate beszel
-platformctl reload
-platformctl logs woodpecker
 platformctl backup snapshot manual
-platformctl backup prune
-platformctl backup check
 platformctl restore extract latest
-platformctl restore apply latest
-upgrade-runner
+RESTORE_SOURCE=remote RESTORE_NODE_ID=leader platformctl restore extract latest
 ```
 
-SQLite databases declared by an app descriptor's `SQLITE_PATHS` are copied with SQLite online backup and integrity-checked before Restic snapshots. Woodpecker and every Beszel SQLite database are handled the same way, with collision-safe source maps. Live database/WAL files are excluded recursively from filesystem backup. Keep the Restic password in an external password manager.
-
-Local Restic storage is the default, but it is on the same VPS and therefore is not disaster recovery. Before treating the installation as production, explicitly initialize an S3-compatible repository, provision its root-only password file, then set `RESTIC_REMOTE_ENABLED=true`, `RESTIC_REMOTE_REPOSITORY`, and `RESTIC_REMOTE_PASSWORD_FILE`; snapshots, checks, and pruning will run against both repositories. An unavailable or uninitialized remote repository fails the operation instead of being initialized implicitly.
-
-Beszel is served at `https://status.<your-domain>`. Its agent uses an outbound connection, reads Docker through a loopback-only socket proxy, and does not expose its agent port publicly. Configure `BESZEL_HEARTBEAT_URL` for an external dead-man alert if desired.
-
-## Adding an application
-
-Create `apps/<id>/manifest.env`, `compose.yml`, and `route.caddy`. The manifest must set `MANIFEST_VERSION=1` and define the disable variable, Compose project/service, network alias, digest manifest key, data directory, health endpoint, smoke URL key, and route template. `SQLITE_PATHS` is optional and lists files relative to `DATA_ROOT_REL` for online database backups. `platformctl validate` discovers descriptors automatically, removes orphaned labeled containers from deleted descriptors, and enforces the descriptor contract.
-
-Foundation files do not import or enumerate application descriptors. Add an application by adding its descriptor and image key; disable it with its declared `DISABLE_ENV` (for example `APP_NEWAPI_DISABLE=true`). Disabled projects are stopped and removed during reconciliation while their persistent data remains intact.
-
-## Daily operations
-
-Push application changes to `main` and Woodpecker validates, snapshots, deploys, reconciles, and smoke-tests the exact commit. Foundation/control-plane changes are intentionally rejected by the normal deployment workflow; use the reviewed manual `foundation-upgrade` workflow. Use `app-upgrade` for intentional application image changes, `runner-upgrade` for the deployment runner, and `rollback` for a retained release. A VPS reboot is handled by Docker restart policies plus `platform-recovery.service` and its retry timer; SSH is reserved for first bootstrap and emergency host recovery.
-
-## Security
-
-Only ports 22, 80, 443/TCP, and 443/UDP are opened. Secrets are root-readable only. The Woodpecker agent has Docker-socket access and must be restricted to this trusted repository.
+Docker restart policies, live-restore, `platform-recovery.service` , and the
+recovery timer make reboot recovery idempotent. Production snapshots require
+an initialized and verified remote Restic repository. Restic snapshots include
+runtime configuration, Caddy certificates, Woodpecker/Beszel SQLite online
+backups, release pointers, and application data without deleting live data.
+Local-only snapshots are available only when the explicit production backup
+gate is disabled for beta/development use.

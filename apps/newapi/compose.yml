@@ -1,5 +1,4 @@
 name: app-newapi
-
 services:
   newapi:
     image: ${NEW_API_IMAGE:?NEW_API_IMAGE must be digest-pinned}
@@ -12,7 +11,14 @@ services:
     command: ["--log-dir", "/app/logs"]
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      SQL_DSN: ${NEW_API_SQL_DSN:?NEW_API_SQL_DSN must be set}
       SESSION_SECRET: ${NEW_API_SESSION_SECRET:?NEW_API_SESSION_SECRET must be set}
+      CRYPTO_SECRET: ${NEW_API_CRYPTO_SECRET:?NEW_API_CRYPTO_SECRET must be set}
+      REDIS_CONN_STRING: ${NEW_API_REDIS_URL:-}
+      NODE_TYPE: ${NEW_API_NODE_TYPE:?NEW_API_NODE_TYPE must be set by the node descriptor}
+      SQL_MAX_IDLE_CONNS: ${NEW_API_SQL_MAX_IDLE_CONNS:-10}
+      SQL_MAX_OPEN_CONNS: ${NEW_API_SQL_MAX_OPEN_CONNS:-50}
+      SQL_CONN_MAX_LIFETIME: ${NEW_API_SQL_CONN_MAX_LIFETIME:-14400}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       SESSION_COOKIE_TRUSTED_URL: ${SESSION_COOKIE_TRUSTED_URL:-}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
@@ -26,7 +32,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
-
 networks:
   newapi_private:
     name: app-newapi_private

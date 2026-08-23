@@ -1,0 +1,12 @@
+{$NODE_LIBRECHAT_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy librechat-client:80 {
+    flush_interval -1
+  }
+}
+{$NODE_LIBRECHAT_ADMIN_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy librechat-admin-panel:3000 {
+    flush_interval -1
+  }
+}

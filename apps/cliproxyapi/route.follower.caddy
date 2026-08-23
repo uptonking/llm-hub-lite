@@ -1,4 +1,4 @@
-{$CLIPROXY_SITE} {
+{$NODE_CLIPROXY_ORIGIN_HOST} {
   import common_proxy
   reverse_proxy cliproxyapi:8317 {
     flush_interval -1

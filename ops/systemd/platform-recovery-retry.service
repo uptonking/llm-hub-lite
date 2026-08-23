@@ -1,7 +1,7 @@
 [Unit]
 Description=Retry llm-hub-lite Docker platform recovery
-After=platform-network.service network-online.target
-Requires=platform-network.service docker.service
+After=platform-network.service platform-firewall.service network-online.target
+Requires=platform-network.service platform-firewall.service docker.service
 Wants=network-online.target
 RequiresMountsFor=/opt/apps/llm-hub-lite /opt/platform /etc/llm-hub-lite
 

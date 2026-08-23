@@ -23,4 +23,5 @@ export PATH="$tmp/bin:$PATH" PLATFORM_ENV_FILE="$tmp/platform.env" DOCKER_CALL_L
 bash "$repo_root/ops/platform-submit.sh" deploy "0123456789abcdef0123456789abcdef01234567"
 grep -Fq -- 'run -d --name' "$tmp/docker.log"
 grep -Fq -- 'llm-hub-lite/deploy-runner:0.4.0' "$tmp/docker.log"
+grep -Fq -- '/usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro' "$tmp/docker.log"
 printf 'platform-submit tests passed\n'
