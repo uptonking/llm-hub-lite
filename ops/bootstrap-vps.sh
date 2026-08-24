@@ -592,18 +592,21 @@ if ((librechat_enabled)); then
 		prompt_required LIBRECHAT_ADMIN_PANEL_SESSION_SECRET 'Shared LibreChat admin panel session secret' 1
 	fi
 fi
-while IFS= read -r manifest; do
+for manifest in "$SOURCE_ROOT"/apps/*/manifest.env; do
 	[[ -f "$manifest" ]] || continue
 	[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower ]] || continue
 	app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 	app_enabled "$app_id" || continue
 	[[ "$NODE_ROLE" == follower && "$(app_target "$app_id")" == "$NODE_ID" ]] || continue
 	secret_keys="$(sed -n 's/^SECRET_KEYS=//p' "$manifest" | tail -n1)"
-	while IFS= read -r secret_key; do
+	old_ifs="$IFS"
+	IFS=,
+	for secret_key in $secret_keys; do
 		[[ -n "$secret_key" ]] || continue
 		prompt_required "$secret_key" "$app_id $secret_key" 1
-	done < <(printf '%s\n' "$secret_keys" | tr ',' '\n')
-done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+	done
+	IFS="$old_ifs"
+done
 if [[ "$NODE_ROLE" == leader ]]; then
 	generate_shared_secret WOODPECKER_AGENT_SECRET
 	generate_shared_secret WOODPECKER_GRPC_SECRET

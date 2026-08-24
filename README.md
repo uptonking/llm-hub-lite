@@ -332,6 +332,7 @@ Restic repository and password, LibreChat Atlas/Upstash/R2 values, and the
 Woodpecker OAuth values when prompted. For non-interactive bootstrap, provide
 the same values through environment variables or root-only files; never create
 different shared secrets independently on different nodes.
+On the Aichorouter target follower, the interactive bootstrap also prompts for `AICHOROUTER_SESSION_SECRET` and `AICHOROUTER_CRYPTO_SECRET`; these are singleton-local secrets and are intentionally not copied from the Leader.
 
 After bootstrapping the Leader, copy the root-only
 `/etc/llm-hub-lite/beszel-enrollment.env` bundle to each follower (or pass its
