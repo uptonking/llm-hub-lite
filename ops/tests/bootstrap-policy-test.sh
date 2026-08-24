@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # grep patterns intentionally match literal '$var' text
 set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 bootstrap="$repo_root/ops/bootstrap-vps.sh"

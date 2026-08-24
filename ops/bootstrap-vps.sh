@@ -721,8 +721,12 @@ if ((beszel_key_exists != beszel_token_exists)); then
 	# hub is available; never discard it during an idempotent bootstrap.
 	install -d -m 700 "$PLATFORM_ROOT/beszel/secrets/orphaned"
 	orphan_stamp="$(date -u '+%Y%m%dT%H%M%SZ').$$"
-	[[ -e "$PLATFORM_ROOT/beszel/secrets/key" ]] && mv -f -- "$PLATFORM_ROOT/beszel/secrets/key" "$PLATFORM_ROOT/beszel/secrets/orphaned/key.$orphan_stamp" || true
-	[[ -e "$PLATFORM_ROOT/beszel/secrets/token" ]] && mv -f -- "$PLATFORM_ROOT/beszel/secrets/token" "$PLATFORM_ROOT/beszel/secrets/orphaned/token.$orphan_stamp" || true
+	if [[ -e "$PLATFORM_ROOT/beszel/secrets/key" ]]; then
+		mv -f -- "$PLATFORM_ROOT/beszel/secrets/key" "$PLATFORM_ROOT/beszel/secrets/orphaned/key.$orphan_stamp"
+	fi
+	if [[ -e "$PLATFORM_ROOT/beszel/secrets/token" ]]; then
+		mv -f -- "$PLATFORM_ROOT/beszel/secrets/token" "$PLATFORM_ROOT/beszel/secrets/orphaned/token.$orphan_stamp"
+	fi
 	beszel_key_exists=0
 	beszel_token_exists=0
 fi

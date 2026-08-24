@@ -73,8 +73,12 @@ if ((key_present != token_present)); then
 	orphan_dir="$(dirname "$key_file")/orphaned"
 	install -d -m 700 "$orphan_dir"
 	orphan_stamp="$(date -u '+%Y%m%dT%H%M%SZ').$$"
-	[[ -e "$key_file" ]] && mv -f -- "$key_file" "$orphan_dir/key.$orphan_stamp" || true
-	[[ -e "$token_file" ]] && mv -f -- "$token_file" "$orphan_dir/token.$orphan_stamp" || true
+	if [[ -e "$key_file" ]]; then
+		mv -f -- "$key_file" "$orphan_dir/key.$orphan_stamp"
+	fi
+	if [[ -e "$token_file" ]]; then
+		mv -f -- "$token_file" "$orphan_dir/token.$orphan_stamp"
+	fi
 	key_present=0
 	token_present=0
 fi

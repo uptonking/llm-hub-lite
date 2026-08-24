@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # grep patterns intentionally match literal '$var' text
 set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 [[ ! -e "$repo_root/compose/foundation/woodpecker.yml" && ! -e "$repo_root/compose/foundation/beszel.yml" ]]
@@ -72,6 +73,10 @@ recover_body="$(sed -n '/^recover() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
 foundation_line="$(printf '%s\n' "$recover_body" | grep -n 'projects_foundation' | head -n1 | cut -d: -f1)"
 consumer_line="$(printf '%s\n' "$recover_body" | grep -n 'projects_apps' | head -n1 | cut -d: -f1)"
 [[ -n "$foundation_line" && -n "$consumer_line" && "$foundation_line" -lt "$consumer_line" ]]
-grep -q 'NEW_API_SITE' "$repo_root/apps/newapi/route.follower.caddy" && exit 1 || true
-grep -q 'CLIPROXY_SITE' "$repo_root/apps/cliproxyapi/route.follower.caddy" && exit 1 || true
+if grep -q 'NEW_API_SITE' "$repo_root/apps/newapi/route.follower.caddy"; then
+	exit 1
+fi
+if grep -q 'CLIPROXY_SITE' "$repo_root/apps/cliproxyapi/route.follower.caddy"; then
+	exit 1
+fi
 printf 'controller topology tests passed\n'
