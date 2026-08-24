@@ -4,7 +4,8 @@ when:
     branch: main
     path:
       include:
-        - config/cluster/**
+        - config/cluster/policy.env
+        - config/cluster/nodes/**
 
 depends_on:
   - cluster-reconcile-leader
@@ -32,4 +33,4 @@ steps:
       - /etc/llm-hub-lite:/etc/llm-hub-lite
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
     commands:
-      - /usr/local/bin/platform-submit cluster-reconcile "$CI_COMMIT_SHA"
+      - DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit cluster-reconcile "$CI_COMMIT_SHA"

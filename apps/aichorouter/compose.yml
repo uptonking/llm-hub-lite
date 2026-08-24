@@ -1,0 +1,55 @@
+name: app-aichorouter
+services:
+  aichorouter:
+    image: ${AICHOROUTER_IMAGE:?AICHOROUTER_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    mem_limit: ${AICHOROUTER_MEMORY_LIMIT:-384m}
+    cpus: ${AICHOROUTER_CPUS:-0.50}
+    pids_limit: ${AICHOROUTER_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: app-aichorouter
+    command: ["--log-dir", "/app/logs"]
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      GOMAXPROCS: ${AICHOROUTER_GOMAXPROCS:-1}
+      GOMEMLIMIT: ${AICHOROUTER_GOMEMLIMIT:-300MiB}
+      SQLITE_PATH: /data/aichorouter.db
+      SESSION_SECRET: ${AICHOROUTER_SESSION_SECRET:?AICHOROUTER_SESSION_SECRET must be set}
+      CRYPTO_SECRET: ${AICHOROUTER_CRYPTO_SECRET:?AICHOROUTER_CRYPTO_SECRET must be set}
+      NODE_TYPE: master
+      NODE_NAME: ${AICHOROUTER_NODE_NAME:-aichorouter}
+      SESSION_COOKIE_SECURE: ${AICHOROUTER_SESSION_COOKIE_SECURE:-true}
+      SESSION_COOKIE_TRUSTED_URL: ${AICHOROUTER_SITE:?AICHOROUTER_SITE must be set}
+      TRUSTED_PROXIES: ${AICHOROUTER_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
+      MEMORY_CACHE_ENABLED: ${AICHOROUTER_MEMORY_CACHE_ENABLED:-false}
+      ERROR_LOG_ENABLED: ${AICHOROUTER_ERROR_LOG_ENABLED:-false}
+      BATCH_UPDATE_ENABLED: ${AICHOROUTER_BATCH_UPDATE_ENABLED:-false}
+      SQL_MAX_IDLE_CONNS: ${AICHOROUTER_SQL_MAX_IDLE_CONNS:-1}
+      SQL_MAX_OPEN_CONNS: ${AICHOROUTER_SQL_MAX_OPEN_CONNS:-4}
+      SQL_MAX_LIFETIME: ${AICHOROUTER_SQL_MAX_LIFETIME:-60}
+      RELAY_MAX_IDLE_CONNS: ${AICHOROUTER_RELAY_MAX_IDLE_CONNS:-32}
+      RELAY_MAX_IDLE_CONNS_PER_HOST: ${AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST:-8}
+      RELAY_IDLE_CONN_TIMEOUT: ${AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT:-30}
+      MAX_REQUEST_BODY_MB: ${AICHOROUTER_MAX_REQUEST_BODY_MB:-16}
+      STREAM_SCANNER_MAX_BUFFER_MB: ${AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB:-32}
+      MAX_FILE_DOWNLOAD_MB: ${AICHOROUTER_MAX_FILE_DOWNLOAD_MB:-32}
+      SHUTDOWN_TIMEOUT_SECONDS: ${AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS:-120}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/aichorouter:/data
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/aichorouter/logs:/app/logs
+    networks: [aichorouter_private, platform_edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/status | grep -q '\"success\":true'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+networks:
+  aichorouter_private:
+    name: app-aichorouter_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

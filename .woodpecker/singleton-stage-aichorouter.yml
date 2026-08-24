@@ -4,33 +4,24 @@ when:
     branch: main
     path:
       include:
-        - apps/cliproxyapi/**
-        - apps/librechat/**
-        - apps/newapi/**
-        - config/cluster/apps/cliproxyapi.policy
-        - config/cluster/apps/librechat.policy
-        - config/cluster/apps/newapi.policy
+        - apps/aichorouter/**
+        - config/cluster/apps/aichorouter.policy
+        - ops/images.apps.prod.env
         - config/Caddyfile
-        - config/foundation-routes.d/**
         - config/routes.d/**
 
-depends_on:
-  - deploy-leader
-  - deploy-worker-1
-  - deploy-worker-2
-
 labels:
-  node: leader
+  node: worker-1
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-production
+  group: llm-hub-lite-singleton-aichorouter
 
 steps:
-  smoke:
+  stage:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -40,7 +31,6 @@ steps:
       - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite
       - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite
       - /etc/llm-hub-lite:/etc/llm-hub-lite
-      - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
+      - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
     commands:
-      - /usr/local/bin/platformctl health
-      - /usr/local/bin/platformctl smoke all
+      - SINGLETON_APP_ID=aichorouter DEPLOY_SKIP_SINGLETONS=0 /usr/local/bin/platform-submit singleton-stage "$CI_COMMIT_SHA"

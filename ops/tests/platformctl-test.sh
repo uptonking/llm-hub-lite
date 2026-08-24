@@ -16,6 +16,7 @@ NODE_NEW_API_ORIGIN_HOST=worker2-newapi.example.invalid
 NODE_CLIPROXY_ORIGIN_HOST=worker2-cpa.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
+NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
@@ -24,6 +25,7 @@ case "$*" in
   *app-librechat*) printf 'librechat-api\nlibrechat-admin-panel\nlibrechat-client\n';;
   *app-newapi*) printf 'newapi\n';;
   *app-cliproxyapi*) printf 'cliproxyapi\n';;
+  *app-aichorouter*) printf 'aichorouter\n';;
 esac
 exit 0
 EOF
@@ -60,6 +62,7 @@ grep -Fq 'LibreChat Upstash Redis URI must use TLS (rediss://)' "$repo_root/ops/
 [[ ! -e "$tmp/app/shared/runtime/config/routes.d/cliproxyapi.caddy" ]]
 grep -Fq 'lb_policy random_choose 2' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'header_up Host {http.reverse_proxy.upstream.hostport}' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+grep -Fq 'reverse_proxy https://worker1-aichorouter-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
 grep -Fq 'location = /health' "$repo_root/apps/librechat/client.nginx.conf"
 grep -Fq 'mem_limit:' "$repo_root/apps/librechat/compose.yml"
 grep -Fq 'MONGO_MAX_POOL_SIZE:' "$repo_root/apps/librechat/compose.yml"
@@ -78,13 +81,18 @@ if grep -Fq 'header_up Host {http.request.host}' "$tmp/app/shared/runtime/config
 	exit 1
 fi
 bash "$repo_root/ops/platformctl.sh" status --json | jq -e '.node == "leader" and .role == "leader"' >/dev/null
-awk -F= '{if ($1 == "DISABLED_APPS") print "DISABLED_APPS=newapi"; else print}' "$tmp/control/current/config/cluster/policy.env" >"$tmp/policy.tmp"
-mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/policy.env"
+sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
+mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
 bash "$repo_root/ops/platformctl.sh" validate
 [[ ! -e "$tmp/app/shared/runtime/config/routes.d/newapi.caddy" ]]
-awk -F= '{if ($1 == "DISABLED_APPS") print "DISABLED_APPS="; else print}' "$tmp/control/current/config/cluster/policy.env" >"$tmp/policy.tmp"
-mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/policy.env"
+sed 's/^ENABLED=.*/ENABLED=true/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
+mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
 sed -e 's/^DOMAIN_NAME=.*/DOMAIN_NAME=aichorage.de/' -e 's#^LIBRECHAT_AWS_ENDPOINT_URL=.*#LIBRECHAT_AWS_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com#' "$repo_root/.env.dev.example" >"$tmp/app/shared/.env.prod"
+cat >"$tmp/config/aichorouter.env" <<'EOF'
+AICHOROUTER_SESSION_SECRET=test-session
+AICHOROUTER_CRYPTO_SECRET=test-crypto
+AICHOROUTER_NODE_NAME=aichorouter-test
+EOF
 cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
 if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
 	printf 'production LibreChat placeholder was accepted\n' >&2
@@ -98,8 +106,11 @@ policy_backup="$tmp/policy.original"
 cp "$tmp/control/current/config/cluster/policy.env" "$policy_backup"
 {
 	sed -E '/^(CLIPROXY_PRIMARY_NODE_ID|NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' "$policy_backup"
-	printf '%s\n' 'DISABLED_APPS=newapi,cliproxyapi'
 } >"$tmp/control/current/config/cluster/policy.env"
+sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
+mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
+sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/cliproxyapi.policy" >"$tmp/policy.tmp"
+mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/cliproxyapi.policy"
 bash "$repo_root/ops/platformctl.sh" validate
 mv "$policy_backup" "$tmp/control/current/config/cluster/policy.env"
 awk -F= '{if ($1 == "NODE_ID") print "NODE_ID=rogue"; else print}' "$tmp/config/node.env" >"$tmp/node.tmp"

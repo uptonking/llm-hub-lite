@@ -34,6 +34,7 @@ source "$config_file"
 : "${GIT_DEPLOY_KEY_FILE:=$CONFIG_ROOT/deploy-key}"
 : "${GIT_KNOWN_HOSTS_FILE:=$CONFIG_ROOT/known_hosts}"
 : "${GITHUB_TOKEN_FILE:=$CONFIG_ROOT/github-token}"
+: "${SINGLETON_STATE_ROOT:=$CONFIG_ROOT/singleton-state}"
 
 env_value() {
 	local key="$1" file="${2:-$APP_ENV}"
@@ -61,9 +62,17 @@ foundation_enabled() {
 	csv_contains "$foundations" "$1" && ! csv_contains "$disabled" "$1"
 }
 app_enabled_for_image() {
-	local id="$1"
+	local id="$1" d placement target_key target
 	[[ "$(runtime_node_role)" == follower ]] || return 1
-	! csv_contains "$(policy_value DISABLED_APPS)" "$id"
+	d="$CONTROL_ROOT/current/apps/$id"
+	[[ -f "$d/manifest.env" ]] || return 1
+	[[ "$(sed -n 's/^ENABLED=//p' "$(sed -n 's/^POLICY_FILE=//p' "$d/manifest.env" | tail -n1 | sed "s#^#$CONTROL_ROOT/current/config/#")" | tail -n1)" != false ]] || return 1
+	placement="$(sed -n 's/^PLACEMENT=//p' "$d/manifest.env" | tail -n1)"
+	if [[ "$placement" == single-follower ]]; then
+		target_key="$(sed -n 's/^TARGET_NODE_KEY=//p' "$d/manifest.env" | tail -n1)"
+		target="$(sed -n "s/^$target_key=//p" "$(sed -n 's/^POLICY_FILE=//p' "$d/manifest.env" | tail -n1 | sed "s#^#$CONTROL_ROOT/current/config/#")" | tail -n1)"
+		[[ "$target" == "$(node_value NODE_ID)" ]]
+	fi
 }
 image_required() {
 	case "$1" in
@@ -75,6 +84,7 @@ image_required() {
 	NEW_API_IMAGE) app_enabled_for_image newapi ;;
 	CLIPROXY_IMAGE) app_enabled_for_image cliproxyapi ;;
 	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) app_enabled_for_image librechat ;;
+	AICHOROUTER_IMAGE) app_enabled_for_image aichorouter ;;
 	*) return 0 ;;
 	esac
 }
@@ -156,11 +166,53 @@ verify_app_scope() {
 		ops/images.apps.prod.env) ;;
 		*) die "application deployment contains foundation/control-plane change: $path; use the reviewed foundation workflow" ;;
 		esac
-		[[ "$path" != config/cluster/* ]] || die "cluster policy or inventory change requires the cluster-reconcile workflow: $path"
-		if [[ "$path" == ops/images.apps.prod.env && "$mode" != app && "$mode" != app-upgrade ]]; then
+		case "$path" in
+		config/cluster/policy.env | config/cluster/nodes/*)
+			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || die "cluster policy or inventory change requires the cluster-reconcile workflow: $path"
+			;;
+		config/cluster/apps/*) ;;
+		config/cluster/*)
+			die "unsupported cluster configuration path in application deployment: $path"
+			;;
+		esac
+		if [[ "$path" == ops/images.apps.prod.env && "$mode" != app && "$mode" != app-upgrade && "$mode" != singleton-stage && "$mode" != singleton-switch && "$mode" != singleton-stop ]]; then
 			die "unsupported image manifest change in $mode deployment: $path"
 		fi
 	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
+}
+singleton_previous_target() {
+	local release="$1" app="$2" state_file
+	state_file="$SINGLETON_STATE_ROOT/$app.previous-target"
+	if [[ -s "$state_file" ]]; then
+		sed -n '1p' "$state_file"
+		return 0
+	fi
+	singleton_release_target "$release" "$app"
+}
+singleton_release_target() {
+	local release="$1" app="$2" manifest policy_rel target_key
+	[[ -n "$release" && -f "$release/apps/$app/manifest.env" ]] || return 0
+	manifest="$release/apps/$app/manifest.env"
+	policy_rel="$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)"
+	target_key="$(sed -n 's/^TARGET_NODE_KEY=//p' "$manifest" | tail -n1)"
+	sed -n "s/^$target_key=//p" "$release/config/$policy_rel" 2>/dev/null | tail -n1
+}
+record_singleton_transitions() {
+	local old_release="$1" new_release="$2" manifest app old_target new_target state_file tmp
+	[[ -n "$old_release" && -d "$new_release/apps" ]] || return 0
+	while IFS= read -r manifest; do
+		[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower ]] || continue
+		app="$(basename "$(dirname "$manifest")")"
+		old_target="$(singleton_release_target "$old_release" "$app")"
+		new_target="$(singleton_release_target "$new_release" "$app")"
+		[[ -n "$old_target" && -n "$new_target" && "$old_target" != "$new_target" ]] || continue
+		install -d -m 700 "$SINGLETON_STATE_ROOT"
+		state_file="$SINGLETON_STATE_ROOT/$app.previous-target"
+		tmp="$(mktemp "$state_file.XXXXXX")"
+		printf '%s\n' "$old_target" >"$tmp"
+		chmod 600 "$tmp"
+		mv -f -- "$tmp" "$state_file"
+	done < <(find "$new_release/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 }
 
 prepare_release() {
@@ -255,7 +307,7 @@ prefetch_images() {
 	local mode="$1" file key image should_pull
 	local -a files=()
 	case "$mode" in
-	app | app-upgrade) files=("$APP_IMAGE_ENV") ;;
+	app | app-upgrade | singleton-stage | singleton-switch | singleton-stop) files=("$APP_IMAGE_ENV") ;;
 	foundation) files=("$FOUNDATION_IMAGE_ENV") ;;
 	cluster-reconcile | rollback) files=("$APP_IMAGE_ENV" "$FOUNDATION_IMAGE_ENV") ;;
 	*) die "unknown image prefetch mode: $mode" ;;
@@ -280,25 +332,27 @@ prefetch_images() {
 }
 
 reconcile() {
-	CONTROL_ROOT="$CONTROL_ROOT" APPS_ROOT="$CONTROL_ROOT/current/apps" FOUNDATION_ROOT="$FOUNDATION_ROOT" \
+	PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$CONTROL_ROOT" APPS_ROOT="$CONTROL_ROOT/current/apps" FOUNDATION_ROOT="$FOUNDATION_ROOT" \
 		APP_ENV="$APP_ENV" APP_IMAGE_ENV="$APP_IMAGE_ENV" FOUNDATION_IMAGE_ENV="$FOUNDATION_IMAGE_ENV" \
 		FOUNDATION_ENV_ROOT="$FOUNDATION_ROOT/env" RUNTIME_ROOT="$APP_ROOT/shared/runtime" \
 		NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" \
 		CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster/policy.env}" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
+		PLATFORM_LOCK_HELD=1 \
 		"$PLATFORMCTL_SCRIPT" sync "${DEPLOY_SYNC_SCOPE:-apps}"
 }
 
 smoke_apps() {
-	local descriptor id placement disabled
-	disabled="$(sed -n 's/^DISABLED_APPS=//p' "$CONTROL_ROOT/current/config/cluster/policy.env" | tail -n1)"
+	local descriptor id placement policy_file
 	for descriptor in "$CONTROL_ROOT/current"/apps/*; do
 		[[ -f "$descriptor/manifest.env" ]] || continue
 		id="$(basename "$descriptor")"
 		placement="$(sed -n 's/^PLACEMENT=//p' "$descriptor/manifest.env" | tail -n1)"
-		[[ "$placement" == follower ]] || continue
-		[[ ",${disabled//[[:space:]]/}," == *",$id,"* ]] && continue
-		APP_ENV="$APP_ENV" PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
+		[[ "$placement" == follower || "$placement" == single-follower ]] || continue
+		[[ "${DEPLOY_SKIP_SINGLETONS:-0}" != 1 || "$placement" != single-follower ]] || continue
+		policy_file="$(sed -n 's/^POLICY_FILE=//p' "$descriptor/manifest.env" | tail -n1)"
+		[[ "$(sed -n 's/^ENABLED=//p' "$CONTROL_ROOT/current/config/$policy_file" | tail -n1)" != false ]] || continue
+		APP_ENV="$APP_ENV" PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" PLATFORM_LOCK_HELD=1 \
 			"$PLATFORMCTL_SCRIPT" smoke "app:$descriptor" || die "smoke failed: $id"
 	done
 }
@@ -327,7 +381,7 @@ cleanup() {
 }
 
 apply() {
-	local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0
+	local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0 previous_singleton_target
 	sha_valid "$sha"
 	exec 9>"$PLATFORM_LOCK_FILE"
 	flock -w 300 9 || die 'timed out waiting for deployment lock'
@@ -343,7 +397,11 @@ apply() {
 	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
 	old_previous="$(readlink "$PREVIOUS" 2>/dev/null || true)"
 	old_app_previous="$(readlink "$APP_PREVIOUS" 2>/dev/null || true)"
-	[[ "$mode" == app || "$mode" == app-upgrade ]] && verify_app_scope "$old_current" "$release" "$mode"
+	record_singleton_transitions "$old_current" "$release"
+	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
+		previous_singleton_target="$(singleton_previous_target "$old_current" "$SINGLETON_APP_ID")"
+	fi
+	[[ "$mode" == app || "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] && verify_app_scope "$old_current" "$release" "$mode"
 	backup "pre-$mode"
 	tx="$(mktemp -d "$APP_ROOT/shared/runtime/transaction.XXXXXX")"
 	cp -f "$APP_IMAGE_ENV" "$tx/images.apps" 2>/dev/null || true
@@ -357,12 +415,15 @@ apply() {
 	atomic_link "$release" "$CURRENT"
 	atomic_link "$release" "$APP_CURRENT"
 	refresh_descriptor_registry "$release"
+	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
+		SINGLETON_PREVIOUS_TARGET="$previous_singleton_target" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-prepare "$SINGLETON_APP_ID"
+	fi
 	# Normal source deployments change application code/config only. Image
 	# changes are explicit app-upgrade operations so a routine push cannot
 	# silently move production to a new image set.
 	if [[ "$mode" == app-upgrade ]]; then
 		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
-	elif [[ "$mode" == app ]]; then
+	elif [[ "$mode" == app || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]]; then
 		merge_new_app_image_keys "$release"
 	fi
 	if [[ "$mode" == foundation || "$mode" == cluster-reconcile ]]; then
@@ -418,6 +479,20 @@ case "${1:-}" in
 deploy)
 	[[ $# -eq 2 ]] || die 'usage: deploy <sha>'
 	apply "$2" app
+	;;
+singleton-stage)
+	[[ $# -eq 2 && -n "${SINGLETON_APP_ID:-}" ]] || die 'usage: deploy-controller singleton-stage <sha>'
+	DEPLOY_SKIP_SINGLETONS=0 apply "$2" singleton-stage
+	;;
+singleton-switch)
+	[[ $# -eq 2 && -n "${SINGLETON_APP_ID:-}" ]] || die 'usage: deploy-controller singleton-switch <sha>'
+	DEPLOY_SKIP_SINGLETONS=1 apply "$2" singleton-switch
+	PLATFORM_SKIP_SINGLETONS=0 SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-switch "$SINGLETON_APP_ID"
+	;;
+singleton-stop)
+	[[ $# -eq 2 && -n "${SINGLETON_APP_ID:-}" ]] || die 'usage: deploy-controller singleton-stop <sha>'
+	DEPLOY_SKIP_SINGLETONS=1 apply "$2" singleton-stop
+	SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-stop "$SINGLETON_APP_ID"
 	;;
 foundation-upgrade)
 	[[ $# -eq 2 ]] || die 'usage: deploy-controller foundation-upgrade <sha>'

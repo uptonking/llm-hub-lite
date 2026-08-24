@@ -4,7 +4,12 @@ when:
     branch: main
     path:
       include:
-        - apps/**
+        - apps/cliproxyapi/**
+        - apps/librechat/**
+        - apps/newapi/**
+        - config/cluster/apps/cliproxyapi.policy
+        - config/cluster/apps/librechat.policy
+        - config/cluster/apps/newapi.policy
         - config/Caddyfile
         - config/foundation-routes.d/**
         - config/routes.d/**
@@ -32,4 +37,4 @@ steps:
       - /etc/llm-hub-lite:/etc/llm-hub-lite
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
     commands:
-      - /usr/local/bin/platform-submit deploy "$CI_COMMIT_SHA"
+      - DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit deploy "$CI_COMMIT_SHA"

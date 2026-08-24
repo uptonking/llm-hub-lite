@@ -190,7 +190,8 @@ apply_snapshot() {
 		printf 'restore apply must run as root\n' >&2
 		exit 1
 	}
-	local stamp target rollback_root manifest path restored_node_id
+	local stamp target rollback_root manifest path restored_node_id descriptor runtime_rel
+	local -a restore_paths
 	stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 	target="${requested_target:-$RESTORE_ROOT/apply-$stamp}"
 	extract_snapshot "$target" >/dev/null
@@ -200,6 +201,20 @@ apply_snapshot() {
 		[[ -f "$target$CONTROL_ROOT/current/config/cluster/nodes/$restored_node_id.env" ]] || die 'explicit identity restore is not present in the restored cluster inventory'
 	fi
 	install_verified_databases "$target"
+	restore_paths=(
+		"$DATA_ROOT" "$APP_ROOT/shared/runtime" "$APP_ROOT/shared/.env.prod" "$APP_ROOT/current" "$APP_ROOT/previous"
+		"$CONTROL_ROOT/current" "$CONTROL_ROOT/previous" "$CONTROL_ROOT/releases" "$CONTROL_ROOT/descriptors" "$FOUNDATION_ROOT"
+		"$PLATFORM_ROOT/caddy" "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel"
+		"$CONFIG_ROOT/platform.env" "$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/singleton-state"
+		"$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token"
+		"${RESTIC_REMOTE_PASSWORD_FILE:-$CONFIG_ROOT/restic-remote-password}" "$RESTIC_REMOTE_ENV_FILE"
+	)
+	while IFS= read -r descriptor; do
+		runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$descriptor" | tail -n1)"
+		[[ -n "$runtime_rel" ]] || continue
+		[[ "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die "unsafe runtime env path in restored manifest: $descriptor"
+		restore_paths+=("$CONFIG_ROOT/$runtime_rel")
+	done < <(find -L "$target$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null | sort)
 	"$BACKUP_SCRIPT" snapshot pre-restore
 	install -d -m 700 "$(dirname "$MAINTENANCE_FILE")"
 	printf 'started_utc=%s\nreason=restore %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$snapshot" >"$MAINTENANCE_FILE"
@@ -209,10 +224,7 @@ apply_snapshot() {
 	manifest="$rollback_root/manifest.tsv"
 	install -d -m 700 "$rollback_root"
 	: >"$manifest"
-	for path in "$DATA_ROOT" "$APP_ROOT/shared/runtime" "$APP_ROOT/shared/.env.prod" "$APP_ROOT/current" "$APP_ROOT/previous" \
-		"$CONTROL_ROOT/current" "$CONTROL_ROOT/previous" "$CONTROL_ROOT/releases" "$CONTROL_ROOT/descriptors" "$FOUNDATION_ROOT" \
-		"$PLATFORM_ROOT/caddy" "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel" \
-		"$CONFIG_ROOT/platform.env" "$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token" "${RESTIC_REMOTE_PASSWORD_FILE:-$CONFIG_ROOT/restic-remote-password}" "$RESTIC_REMOTE_ENV_FILE"; do
+	for path in "${restore_paths[@]}"; do
 		if ! swap_path "$target$path" "$path" "$rollback_root" "$manifest"; then
 			rollback_swaps "$manifest"
 			PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" start all || true

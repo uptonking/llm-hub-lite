@@ -2,13 +2,14 @@ Node descriptor files are public topology metadata. Secrets and numeric public
 addresses belong in root-only runtime files under `/etc/llm-hub-lite`, never in
 this directory.
 
-Each node must define `NODE_ID`, `NODE_NEW_API_ORIGIN_HOST`,
-`NODE_CLIPROXY_ORIGIN_HOST`, `NODE_LIBRECHAT_ORIGIN_HOST`, and
-`NODE_LIBRECHAT_ADMIN_ORIGIN_HOST`. The Leader uses consumer origin fields from
-every Follower descriptor to render its consumer Caddy routes. New API and
-LibreChat use active-active health-checked upstreams; CLIProxyAPI uses
-active-passive ordering from policy. Keep those origin names DNS-only and
-resolve them to the corresponding Follower public IP.
+Each node must define `NODE_ID` and the origin host keys declared by the active
+app manifests. The Leader uses those origin fields from every Follower
+descriptor to render Caddy routes. LibreChat and legacy New API use
+active-active health-checked upstreams; CLIProxyAPI uses active-passive ordering
+from policy. Aichorouter is a singleton: its target is stored in
+`config/cluster/apps/aichorouter.policy`, and only that Follower is deployed.
+Keep origin names DNS-only and resolve them to the corresponding Follower
+public IP.
 
 `LEADER_NODE_ID` in `../policy.env` is the only role selector. A node whose
 stable ID equals it is the Leader; every other node is a Follower. Do not add

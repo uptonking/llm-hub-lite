@@ -1,0 +1,14 @@
+{$AICHOROUTER_SITE} {
+  import common_proxy
+  reverse_proxy {$AICHOROUTER_UPSTREAM} {
+    fail_duration 30s
+    health_uri /api/status
+    health_interval 10s
+    health_timeout 3s
+    header_up Host {http.reverse_proxy.upstream.hostport}
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "aichorouter unavailable" 503
+  }
+}

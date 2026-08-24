@@ -33,6 +33,7 @@ if grep -E -q '(^|[^0-9])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9]|$)' "$repo_root/READ
 	exit 1
 fi
 grep -q '^FOUNDATION_LEADER=' "$repo_root/config/cluster/policy.env"
+for manifest in "$repo_root"/apps/*/manifest.env; do grep -q '^MANIFEST_VERSION=3$' "$manifest"; done
 grep -q '^LEADER_NODE_ID=leader$' "$repo_root/config/cluster/policy.env"
 grep -q '^REPO_SLUG=uptonking/llm-hub-lite$' "$repo_root/config/cluster/policy.env"
 grep -q '^PLACEMENT=follower$' "$repo_root/apps/newapi/manifest.env"
@@ -41,7 +42,19 @@ grep -q '^APP_ID=librechat$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^PLACEMENT=follower$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^NETWORK_ALIAS=librechat-client$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^LIBRECHAT_CLIENT_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
-grep -q '^DISABLED_APPS=newapi,cliproxyapi$' "$repo_root/config/cluster/policy.env"
+grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/newapi.policy"
+grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/cliproxyapi.policy"
+grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
+grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/aichorouter/manifest.env"
+grep -q '^AICHOROUTER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/aichorouter.policy"
+grep -q '^AICHOROUTER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -Fq 'SQLITE_PATH: /data/aichorouter.db' "$repo_root/apps/aichorouter/compose.yml"
+grep -Fq 'SQL_MAX_OPEN_CONNS: ${AICHOROUTER_SQL_MAX_OPEN_CONNS:-4}' "$repo_root/apps/aichorouter/compose.yml"
+grep -Fq 'GOMEMLIMIT: ${AICHOROUTER_GOMEMLIMIT:-300MiB}' "$repo_root/apps/aichorouter/compose.yml"
+if grep -Eiq 'REDIS_CONN_STRING|SQL_DSN|postgres|redis' "$repo_root/apps/aichorouter/compose.yml"; then
+	printf 'aichorouter must not define Redis or PostgreSQL\n' >&2
+	exit 1
+fi
 if grep -Eq 'mongodb:|meilisearch:|vectordb:|rag_api:' "$repo_root/apps/librechat/compose.yml"; then exit 1; fi
 grep -q 'LIBRECHAT_MONGO_URI' "$repo_root/apps/librechat/compose.yml"
 grep -q 'LIBRECHAT_REDIS_URI' "$repo_root/apps/librechat/compose.yml"
@@ -55,6 +68,20 @@ grep -q '^NEW_API_BACKUP_NODE_ID=worker-2$' "$repo_root/config/cluster/policy.en
 grep -q '^CLIPROXY_PRIMARY_NODE_ID=worker-1$' "$repo_root/config/cluster/policy.env"
 grep -q '^NEW_API_MIGRATION_NODE_ID=worker-1$' "$repo_root/config/cluster/policy.env"
 grep -Fq 'cluster-reconcile' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'singleton-stage' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'singleton-switch' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'singleton-stop' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'singleton-prepare' "$repo_root/ops/platformctl.sh"
+grep -Fq 'Leader route and active containers reconciled' "$repo_root/ops/platformctl.sh"
+grep -Fq 'app_policy_enabled "$(basename "$d")"' "$repo_root/ops/platformctl.sh"
+grep -Fq 'record_singleton_transitions' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'config/cluster/apps/*) ;;' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'unsupported cluster configuration path in application deployment' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'singleton-state' "$repo_root/ops/backup-platform.sh"
+if grep -Fq 'rm -f -- "$runtime_env"' "$repo_root/ops/platformctl.sh"; then
+	printf 'singleton stop must retain runtime secrets\n' >&2
+	exit 1
+fi
 grep -Fq 'firewall-reconcile.request' "$repo_root/ops/platform-submit.sh"
 grep -Fq '/var/run/docker.sock:/var/run/docker.sock' "$repo_root/.woodpecker/deploy-smoke.yml"
 grep -Fq '/run/lock/llm-hub-lite:/run/lock/llm-hub-lite' "$repo_root/.woodpecker/deploy-smoke.yml"

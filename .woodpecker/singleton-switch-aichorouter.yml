@@ -4,20 +4,14 @@ when:
     branch: main
     path:
       include:
-        - apps/cliproxyapi/**
-        - apps/librechat/**
-        - apps/newapi/**
-        - config/cluster/apps/cliproxyapi.policy
-        - config/cluster/apps/librechat.policy
-        - config/cluster/apps/newapi.policy
+        - apps/aichorouter/**
+        - config/cluster/apps/aichorouter.policy
+        - ops/images.apps.prod.env
         - config/Caddyfile
-        - config/foundation-routes.d/**
         - config/routes.d/**
 
 depends_on:
-  - deploy-leader
-  - deploy-worker-1
-  - deploy-worker-2
+  - singleton-stage-aichorouter
 
 labels:
   node: leader
@@ -27,10 +21,10 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-production
+  group: llm-hub-lite-singleton-aichorouter
 
 steps:
-  smoke:
+  switch:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -40,7 +34,7 @@ steps:
       - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite
       - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite
       - /etc/llm-hub-lite:/etc/llm-hub-lite
+      - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
     commands:
-      - /usr/local/bin/platformctl health
-      - /usr/local/bin/platformctl smoke all
+      - SINGLETON_APP_ID=aichorouter DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit singleton-switch "$CI_COMMIT_SHA"

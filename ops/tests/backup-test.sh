@@ -4,9 +4,15 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform" "$tmp/config" "$tmp/stage"
+mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter"
 printf 'test-password\n' >"$tmp/config/restic-password"
 printf 'remote-password\n' >"$tmp/config/restic-remote-password"
+cat >"$tmp/control/current/apps/aichorouter/manifest.env" <<'EOF'
+RUNTIME_ENV_FILE=aichorouter.env
+DATA_ROOT_REL=aichorouter
+SQLITE_PATHS=aichorouter.db
+EOF
+printf 'AICHOROUTER_SESSION_SECRET=test\n' >"$tmp/config/aichorouter.env"
 
 cat >"$tmp/bin/df" <<'EOF'
 #!/bin/sh
@@ -42,6 +48,7 @@ chmod +x "$tmp/bin/flock"
 export PATH="$tmp/bin:$PATH"
 export DF_CALL_LOG="$tmp/df.log" RESTIC_CALL_LOG="$tmp/restic.log"
 export APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp/platform" CONFIG_ROOT="$tmp/config"
+export CONTROL_ROOT="$tmp/control" APPS_ROOT="$tmp/control/current/apps"
 export RESTIC_REPOSITORY="$tmp/repository" RESTIC_PASSWORD_FILE="$tmp/config/restic-password"
 export BACKUP_STAGE_ROOT="$tmp/stage" BACKUP_MIN_FREE_BYTES=1048576 BACKUP_MIN_FREE_PERCENT=1
 export PLATFORM_LOCK_FILE="$tmp/platform.lock"
@@ -49,6 +56,7 @@ export PLATFORM_LOCK_FILE="$tmp/platform.lock"
 "$repo_root/ops/backup-platform.sh" snapshot portability-test
 grep -qx -- "-Pk $tmp/repository" "$tmp/df.log"
 grep -q ' backup ' "$tmp/restic.log"
+grep -q "$tmp/config/aichorouter.env" "$tmp/restic.log"
 
 if PRODUCTION_REQUIRE_REMOTE_BACKUP=true RESTIC_REMOTE_ENABLED=false \
 	"$repo_root/ops/backup-platform.sh" snapshot production-gate-test >/dev/null 2>&1; then
@@ -65,7 +73,6 @@ mkdir -p "$tmp/control/current/config/cluster/nodes"
 cat >"$tmp/control/current/config/cluster/policy.env" <<'EOF'
 NODE_IDS=leader,worker-1
 NEW_API_BACKUP_NODE_ID=leader
-DISABLED_APPS=
 EOF
 cat >"$tmp/config/node.env" <<'EOF'
 NODE_ID=leader

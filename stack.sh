@@ -61,11 +61,36 @@ cluster_upstreams() {
 	printf '%s\n' "$output"
 }
 get() {
-	local k="$1" v domain
+	local k="$1" v domain groups public_key origin_key upstream_key mode target primary_key primary host
 	v="$(sed -n "s/^$k=//p" "$env_file" | tail -n1)"
 	[[ -n "$v" ]] || v="$(sed -n "s/^$k=//p" "$node_config" 2>/dev/null | tail -n1)"
 	domain="$(sed -n 's/^DOMAIN_NAME=//p' "$env_file" | tail -n1)"
-	case "$k" in NEW_API_UPSTREAMS) [[ "$role" != leader || "$domain" == localhost || -n "${PLATFORM_ALLOW_STATIC_UPSTREAMS:-}" ]] || v="$(cluster_upstreams NODE_NEW_API_ORIGIN_HOST)" ;; CLIPROXY_UPSTREAMS) [[ "$role" != leader || "$domain" == localhost || -n "${PLATFORM_ALLOW_STATIC_UPSTREAMS:-}" ]] || v="$(cluster_upstreams NODE_CLIPROXY_ORIGIN_HOST "$(sed -n 's/^CLIPROXY_PRIMARY_NODE_ID=//p' "$policy" | tail -n1)")" ;; LIBRECHAT_UPSTREAMS) [[ "$role" != leader || "$domain" == localhost || -n "${PLATFORM_ALLOW_STATIC_UPSTREAMS:-}" ]] || v="$(cluster_upstreams NODE_LIBRECHAT_ORIGIN_HOST)" ;; LIBRECHAT_ADMIN_UPSTREAMS) [[ "$role" != leader || "$domain" == localhost || -n "${PLATFORM_ALLOW_STATIC_UPSTREAMS:-}" ]] || v="$(cluster_upstreams NODE_LIBRECHAT_ADMIN_ORIGIN_HOST)" ;; esac
+	if [[ -n "${CURRENT_ROUTE_DESCRIPTOR:-}" ]]; then
+		groups="$(sed -n 's/^ROUTE_GROUPS=//p' "$CURRENT_ROUTE_DESCRIPTOR/manifest.env" | tail -n1)"
+		while IFS='|' read -r public_key origin_key upstream_key; do
+			[[ -n "$public_key" ]] || continue
+			if [[ "$k" == "$public_key" ]]; then
+				v="$(sed -n "s/^$k=//p" "$env_file" | tail -n1)"
+			elif [[ "$k" == "$origin_key" ]]; then
+				v="$(sed -n "s/^$k=//p" "$node_config" | tail -n1)"
+			elif [[ "$k" == "$upstream_key" && "$role" == leader ]]; then
+				mode="$(sed -n 's/^UPSTREAM_MODE=//p' "$CURRENT_ROUTE_DESCRIPTOR/manifest.env" | tail -n1)"
+				case "$mode" in
+				singleton)
+					target="$(sed -n "s/^$(sed -n 's/^TARGET_NODE_KEY=//p' "$CURRENT_ROUTE_DESCRIPTOR/manifest.env" | tail -n1)=//p" "$(sed -n 's/^POLICY_FILE=//p' "$CURRENT_ROUTE_DESCRIPTOR/manifest.env" | tail -n1 | sed "s#^#$root/config/#")" | tail -n1)"
+					host="$(sed -n "s/^$origin_key=//p" "$root/config/cluster/nodes/$target.env" | tail -n1)"
+					v="https://$host"
+					;;
+				active-active) v="$(cluster_upstreams "$origin_key")" ;;
+				active-passive)
+					primary_key="$(sed -n 's/^PRIMARY_NODE_KEY=//p' "$CURRENT_ROUTE_DESCRIPTOR/manifest.env" | tail -n1)"
+					primary="$(sed -n "s/^$primary_key=//p" "$policy" | tail -n1)"
+					v="$(cluster_upstreams "$origin_key" "$primary")"
+					;;
+				esac
+			fi
+		done < <(printf '%s\n' "$groups" | tr ';' '\n')
+	fi
 	printf '%s\n' "$v"
 }
 csv_has() {
@@ -73,11 +98,23 @@ csv_has() {
 	[[ "$c" == *",$2,"* ]]
 }
 foundations() { [[ "$role" == leader ]] && sed -n 's/^FOUNDATION_LEADER=//p' "$policy" || sed -n 's/^FOUNDATION_FOLLOWER=//p' "$policy"; }
-disabled_apps() { sed -n 's/^DISABLED_APPS=//p' "$policy"; }
 app_dirs() { find "$root/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; | sort; }
 app_placement() { sed -n 's/^PLACEMENT=//p' "$1/manifest.env" | tail -n1; }
-app_active() { [[ "$(app_placement "$1")" == follower && "$role" == follower ]] && ! csv_has "$(disabled_apps)" "$(basename "$1")"; }
-app_route_active() { [[ "$(app_placement "$1")" == follower ]] && { [[ "$role" == leader ]] || app_active "$1"; } && ! csv_has "$(disabled_apps)" "$(basename "$1")"; }
+app_policy_file() { sed -n 's/^POLICY_FILE=//p' "$1/manifest.env" | tail -n1 | sed "s#^#$root/config/#"; }
+app_policy_value() { sed -n "s/^$2=//p" "$(app_policy_file "$1")" 2>/dev/null | tail -n1; }
+app_active() {
+	local d="$1" target
+	[[ "$(app_policy_value "$d" ENABLED)" != false ]] || return 1
+	case "$(app_placement "$d")" in
+	follower) [[ "$role" == follower ]] ;;
+	single-follower)
+		target="$(app_policy_value "$d" "$(sed -n 's/^TARGET_NODE_KEY=//p' "$d/manifest.env" | tail -n1)")"
+		[[ "$role" == follower && "$node_id" == "$target" ]]
+		;;
+	*) return 1 ;;
+	esac
+}
+app_route_active() { [[ "$(app_placement "$1")" == follower || "$(app_placement "$1")" == single-follower ]] && { [[ "$role" == leader ]] || app_active "$1"; } && [[ "$(app_policy_value "$1" ENABLED)" != false ]]; }
 foundation_file() { case "$1" in caddy) echo caddy.yml ;; woodpecker-controller) echo woodpecker-controller.yml ;; woodpecker-worker) echo woodpecker-worker.yml ;; woodpecker-deployer) echo woodpecker-deployer.yml ;; beszel-controller) echo beszel-controller.yml ;; beszel-worker) echo beszel-worker.yml ;; esac }
 foundation_env() { case "$1" in caddy) echo "$root/ops/foundation/caddy.env.example" ;; woodpecker-*) echo "$root/ops/foundation/woodpecker.env.example" ;; *) echo "$root/ops/foundation/beszel.env.example" ;; esac }
 fc() {
@@ -85,8 +122,11 @@ fc() {
 	command=("${compose_bin[@]}" --env-file "$env_file" --env-file "$(foundation_env "$n")" --env-file "$image_foundation" --env-file "$node_config" -f "$root/compose/foundation/$(foundation_file "$n")")
 }
 ac() {
-	local d="$1"
-	command=("${compose_bin[@]}" --env-file "$env_file" --env-file "$node_config" --env-file "$image_apps" -p "$(sed -n 's/^COMPOSE_PROJECT=//p' "$d/manifest.env")" -f "$d/compose.yml")
+	local d="$1" runtime_env
+	command=("${compose_bin[@]}" --env-file "$env_file" --env-file "$node_config" --env-file "$image_apps")
+	runtime_env="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$d/manifest.env" | tail -n1)"
+	[[ -z "$runtime_env" || ! -f "/etc/llm-hub-lite/$runtime_env" ]] || command+=(--env-file "/etc/llm-hub-lite/$runtime_env")
+	command+=(-p "$(sed -n 's/^COMPOSE_PROJECT=//p' "$d/manifest.env")" -f "$d/compose.yml")
 }
 render() {
 	local s="$runtime/config" d a t
@@ -100,6 +140,7 @@ render() {
 	done < <(grep -oE '\{\$[A-Z0-9_]+\}' "$f" | sed 's/[^A-Z0-9_]//g' | sort -u); done < <(find "$s" -type f -name '*.caddy' -print)
 	while IFS= read -r d; do
 		app_route_active "$d" || continue
+		CURRENT_ROUTE_DESCRIPTOR="$d"
 		a="$(basename "$d")"
 		[[ "$role" == leader ]] && t="$(sed -n 's/^ROUTE_TEMPLATE_LEADER=//p' "$d/manifest.env")" || t="$(sed -n 's/^ROUTE_TEMPLATE_FOLLOWER=//p' "$d/manifest.env")"
 		cp "$d/$t" "$s/routes.d/$a.caddy"
@@ -108,6 +149,7 @@ render() {
 			sed "s|{\$${k}}|${v//&/\\&}|g" "$s/routes.d/$a.caddy" >"$s/routes.d/$a.caddy.tmp"
 			mv "$s/routes.d/$a.caddy.tmp" "$s/routes.d/$a.caddy"
 		done < <(grep -oE '\{\$[A-Z0-9_]+\}' "$s/routes.d/$a.caddy" | sed 's/[^A-Z0-9_]//g' | sort -u)
+		unset CURRENT_ROUTE_DESCRIPTOR
 	done < <(app_dirs)
 	[[ "$role" == leader ]] || rm -f "$s/foundation-routes.d/woodpecker.caddy" "$s/foundation-routes.d/woodpecker-grpc.caddy" "$s/foundation-routes.d/beszel.caddy"
 }

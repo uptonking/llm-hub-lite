@@ -1,6 +1,6 @@
 # llm-hub-lite
 
-Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, and LibreChat.
+Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, LibreChat. Optional single-node deployment is also supported.
 
 ## Architecture
 
@@ -46,9 +46,15 @@ installed on the VPS and reused by all backup timers. Prefer a separate remote
 repository or backend prefix for each stable node ID. Shared repositories are
 supported: snapshots and retention are scoped by the `node:<NODE_ID>` tag.
 
-Service disablement is committed in `config/cluster/policy.env` ; there are no
+Service disablement is committed in each app's `config/cluster/apps/*.policy`
+
+file; there are no
 per-service `*_DISABLE` switches. Foundation placement is policy-controlled;
-consumer placement is declared by `PLACEMENT=follower` in each app manifest.
+consumer placement is declared by `PLACEMENT=follower` or
+`PLACEMENT=single-follower` in each v3 app manifest. A follower app is deployed
+on every follower; a single-follower app is deployed only on the follower named
+by its manifest `TARGET_NODE_KEY` , with the value stored in the app policy file
+declared by `POLICY_FILE` (for example `config/cluster/apps/aichorouter.policy` ).
 When a consumer is active, the Leader can generate the initial shared random
 secrets once, while every Follower must receive the same values from the
 root-only bundle or explicit environment variables. A non-interactive
@@ -57,7 +63,17 @@ consumers do not require their database or application secrets.
 To add a consumer, add an app descriptor under `apps/<id>/` , its two route
 templates, Compose file, and digest-pinned image key. No second placement list
 is required. The next normal push deploys it to every follower and adds its
-load-balanced route on the Leader.
+load-balanced route on the Leader. For a stateful service that does not need
+HA, use `PLACEMENT=single-follower` , declare `ROUTE_GROUPS` , `SECRET_KEYS` , and
+`MOVE_MODE=fresh` , and provide a dedicated origin field in every follower
+descriptor. Generated stage/switch/stop workflows deploy the selected target,
+switch the Leader after a health check, and stop old containers while retaining
+their data and runtime secrets. A target move starts with a fresh data
+directory; any previous local state is archived for manual recovery. The
+controller records an in-progress target transition under
+`/etc/llm-hub-lite/singleton-state` so an overlapping normal application
+workflow cannot accidentally reuse stale SQLite data; the marker is removed
+after the staged target is prepared.
 
 New API and CLIProxyAPI remain as dormant manifests and are disabled by the
 committed policy. LibreChat is enabled on Followers and is published at
@@ -72,6 +88,55 @@ intentionally omits local MongoDB, Redis, Meilisearch, RAG, and pgvector.
 Registration is enabled by default as an explicit product choice. URL-encode
 reserved characters in Atlas and Upstash credentials before placing them in
 the connection URI.
+
+Aichorouter is the enabled singleton example at `aichorouter.aichorage.de` .
+It uses the upstream New API image with one container, a bind-mounted SQLite
+database at `data/prod/aichorouter/aichorouter.db` , and no Redis, PostgreSQL,
+or other local dependency. `SESSION_SECRET` and `CRYPTO_SECRET` are stored in
+`/etc/llm-hub-lite/aichorouter.env` on the selected follower. The image is
+memory-capped and has no host-published port; all public traffic enters through
+the Leader's Caddy route. SQLite is intentionally local and is not replicated,
+so a target move is intentionally a fresh local deployment. Previous local
+state is retained in an archive directory until manually removed.
+
+The default low-resource profile gives Aichorouter `0.50` CPU, `384m` container
+memory, one Go runtime thread ( `GOMAXPROCS=1` ), and a `300MiB` Go heap limit.
+SQLite is limited to one idle and four open connections; relay pools, request
+body buffers, stream buffers, and downloads are bounded, while the optional
+memory cache, error log, and batch updater remain disabled. These defaults are
+set in `.env.prod` ; override the `AICHOROUTER_*` values there only when measured
+load requires it. Keep `AICHOROUTER_GOMEMLIMIT` below the container memory limit
+and leave at least enough headroom for the Go runtime and SQLite pages.
+
+Select its follower interactively before committing a policy change:
+
+```bash
+ops/configure-single-follower.sh aichorouter
+git diff -- config/cluster/apps/aichorouter.policy
+git add config/cluster/apps/aichorouter.policy && git commit -m 'target aichorouter follower' && git push
+```
+
+On the selected follower, provision its root-only secrets once:
+
+```bash
+sudo /opt/platform/control/current/ops/configure-app-secrets.sh aichorouter
+```
+
+The helper reads `SECRET_KEYS` , `RUNTIME_ENV_FILE` , and `POLICY_FILE` from the
+manifest, so a future singleton can use the same command without adding a new
+script branch. Moving a singleton does not copy secrets or data to the new
+Follower. The stage job creates a fresh `DATA_ROOT/DATA_ROOT_REL` directory and
+retains any previous directory as `*.retained.<UTC timestamp>` ; the stop jobs
+remove only old containers. After verifying the new deployment, manual cleanup
+is deliberately explicit: stop the old project first, inspect the retained
+directory, then remove that exact directory and the old runtime file under
+`/etc/llm-hub-lite` when it is no longer needed.
+
+The generated Woodpecker singleton workflow stages the new image/configuration
+on that follower, switches the Leader route, then stops old singleton
+containers in stable node order. Data and runtime secrets are retained. Normal
+application workflows set `DEPLOY_SKIP_SINGLETONS=1` and never start a
+singleton on the wrong node.
 
 The minimal LibreChat profile runs exactly three containers on each Follower:
 the API, admin panel, and Nginx client. The API is capped at 512 MiB and 384
@@ -109,14 +174,19 @@ cp .env.dev.example .env.dev
     - Woodpecker agent
     - Beszel agent
     - LibreChat
+    - Aichorouter (the default singleton target)
 - Follower worker-2:
-    - Same services as worker-1
+    - Caddy
+    - Woodpecker agent
+    - Beszel agent
+    - LibreChat
 
 SSH is used only for this one-time host bootstrap. Before starting, prepare the
 three VPS hosts, Cloudflare DNS, and the R2 Restic repositories. The Leader
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
 files are transferred to Followers before they start. Public domains
-`ci` , `ci-grpc` , `status` , `chat` , and `chat-admin` point to the Leader. The
+`ci` , `ci-grpc` , `status` , `chat` , `chat-admin` , and `aichorouter` point to
+the Leader. The
 DNS-only origins using the `worker1-` prefix point to Worker 1, while the
 stable-ID `worker2-` origin records point to Worker 2. The `leader` stable ID is
 the public Leader and therefore does not need a private origin record for
@@ -176,7 +246,6 @@ for host in "$LEADER" "$WORKER_1" "$WORKER_2"; do
                 /etc/llm-hub-lite/restic-remote-password'
 done
 
-# bootstrap work_1
 ssh -t "root@$LEADER" \
   "NODE_ID=leader \
     LEADER_PUBLIC_IP=$LEADER \
@@ -403,8 +472,12 @@ Push consumer application changes to `main` . Woodpecker validates the exact com
 backup, updates the Leader controller bundle, reconciles every follower node,
 reloads Caddy only after health checks pass, and runs public smoke tests.  Foundation changes, image upgrades, and runner upgrades remain explicit reviewed workflows.
 
-The automatic push workflows are intentionally limited to `apps/**` and the
-non-cluster Caddy route/config files. Changes under `ops/` ,
+The automatic push workflows are intentionally limited to enabled
+non-singleton app paths under `apps/<id>/` , their policy files under
+`config/cluster/apps/` , and the non-cluster Caddy route/config files. Singleton
+app changes use their generated stage/switch/stop workflow chain instead;
+they are excluded from the normal rollout to prevent concurrent deployments.
+Changes under `ops/` ,
 `compose/foundation/` , foundation image manifests, or the deployment runner do
 not start a consumer rollout. After pushing those reviewed control-plane
 changes, run the generated manual `foundation-upgrade-leader` workflow and let
@@ -421,7 +494,8 @@ Consumer source, manifests, and application Compose files under `apps/` are
 included in this path. Non-cluster committed runtime configuration under
 `config/` (including Caddy and route files) is also rendered and reloaded by
 this path. The committed cluster policy and node inventory under
-`config/cluster/` use the separate `cluster-reconcile` path. Foundation Compose
+`config/cluster/policy.env` and `config/cluster/nodes/` use the separate
+`cluster-reconcile` path. Foundation Compose
 files, foundation images, deployment scripts, and runner images remain explicit
 reviewed workflows; they are deliberately rejected by an ordinary consumer
 deployment.
@@ -436,6 +510,9 @@ Runtime secrets and external service values in `/etc/llm-hub-lite/` and
 GitHub pushes. Change those values on each affected node through the approved
 maintenance/bootstrap process, then run `platformctl sync apps` (or the
 appropriate foundation workflow) and verify health before ending maintenance.
+Manifest-declared singleton runtime env files are included in Restic snapshots
+and restore swaps, but are still never copied between Followers during a fresh
+singleton move.
 
 The generated manual workflows are per-node and serialized: foundation and
 runner upgrades run Leader first, then Followers; rollback runs Followers

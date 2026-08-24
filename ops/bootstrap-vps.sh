@@ -39,6 +39,24 @@ LIBRECHAT_AWS_SECRET_ACCESS_KEY="${LIBRECHAT_AWS_SECRET_ACCESS_KEY:-}"
 LIBRECHAT_AWS_REGION="${LIBRECHAT_AWS_REGION:-auto}"
 LIBRECHAT_AWS_BUCKET_NAME="${LIBRECHAT_AWS_BUCKET_NAME:-}"
 LIBRECHAT_AWS_FORCE_PATH_STYLE="${LIBRECHAT_AWS_FORCE_PATH_STYLE:-true}"
+AICHOROUTER_MEMORY_LIMIT="${AICHOROUTER_MEMORY_LIMIT:-384m}"
+AICHOROUTER_CPUS="${AICHOROUTER_CPUS:-0.50}"
+AICHOROUTER_PIDS_LIMIT="${AICHOROUTER_PIDS_LIMIT:-256}"
+AICHOROUTER_GOMAXPROCS="${AICHOROUTER_GOMAXPROCS:-1}"
+AICHOROUTER_GOMEMLIMIT="${AICHOROUTER_GOMEMLIMIT:-300MiB}"
+AICHOROUTER_MEMORY_CACHE_ENABLED="${AICHOROUTER_MEMORY_CACHE_ENABLED:-false}"
+AICHOROUTER_ERROR_LOG_ENABLED="${AICHOROUTER_ERROR_LOG_ENABLED:-false}"
+AICHOROUTER_BATCH_UPDATE_ENABLED="${AICHOROUTER_BATCH_UPDATE_ENABLED:-false}"
+AICHOROUTER_SQL_MAX_IDLE_CONNS="${AICHOROUTER_SQL_MAX_IDLE_CONNS:-1}"
+AICHOROUTER_SQL_MAX_OPEN_CONNS="${AICHOROUTER_SQL_MAX_OPEN_CONNS:-4}"
+AICHOROUTER_SQL_MAX_LIFETIME="${AICHOROUTER_SQL_MAX_LIFETIME:-60}"
+AICHOROUTER_RELAY_MAX_IDLE_CONNS="${AICHOROUTER_RELAY_MAX_IDLE_CONNS:-32}"
+AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST="${AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST:-8}"
+AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT="${AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT:-30}"
+AICHOROUTER_MAX_REQUEST_BODY_MB="${AICHOROUTER_MAX_REQUEST_BODY_MB:-16}"
+AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB="${AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB:-32}"
+AICHOROUTER_MAX_FILE_DOWNLOAD_MB="${AICHOROUTER_MAX_FILE_DOWNLOAD_MB:-32}"
+AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS="${AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS:-120}"
 WOODPECKER_AGENT_SECRET="${WOODPECKER_AGENT_SECRET:-}"
 WOODPECKER_GRPC_SECRET="${WOODPECKER_GRPC_SECRET:-}"
 WOODPECKER_GITHUB_CLIENT="${WOODPECKER_GITHUB_CLIENT:-}"
@@ -116,7 +134,20 @@ image_required() {
 	NEW_API_IMAGE) ((newapi_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
 	CLIPROXY_IMAGE) ((cliproxy_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
 	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) ((librechat_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
-	*) return 0 ;;
+	AICHOROUTER_IMAGE) ((aichorouter_enabled)) ;;
+	*)
+		while IFS= read -r manifest; do
+			while IFS= read -r image_key; do
+				[[ "$image_key" == "$key" ]] || continue
+				app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+				app_enabled "$app_id" || return 1
+				[[ "$NODE_ROLE" == follower ]] || return 1
+				[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" != single-follower || "$(app_target "$app_id")" == "$NODE_ID" ]] || return 1
+				return 0
+			done < <(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1 | tr ' ' '\n')
+		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+		return 0
+		;;
 	esac
 }
 valid_ipv4() {
@@ -475,14 +506,29 @@ leader_node_id="$(sed -n 's/^LEADER_NODE_ID=//p' "$policy_file" | tail -n1)"
 [[ -n "$leader_node_id" ]] || die 'cluster policy is missing LEADER_NODE_ID'
 NODE_ROLE=leader
 [[ "$NODE_ID" == "$leader_node_id" ]] || NODE_ROLE=follower
-disabled_apps=",$(sed -n 's/^DISABLED_APPS=//p' "$policy_file" | tail -n1 | tr -d '[:space:]'),"
-app_enabled() { [[ "$disabled_apps" != *",$1,"* ]]; }
+app_policy_file() {
+	local app="$1" rel
+	rel="$(sed -n 's/^POLICY_FILE=//p' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"
+	printf '%s/config/%s\n' "$SOURCE_ROOT" "$rel"
+}
+app_enabled() {
+	local app="$1" file
+	file="$(app_policy_file "$app")"
+	[[ "$(sed -n 's/^ENABLED=//p' "$file" | tail -n1)" != false ]]
+}
+app_target() {
+	local app="$1" key
+	key="$(sed -n 's/^TARGET_NODE_KEY=//p' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"
+	sed -n "s/^$key=//p" "$(app_policy_file "$app")" | tail -n1
+}
 newapi_enabled=0
 app_enabled newapi && newapi_enabled=1
 cliproxy_enabled=0
 app_enabled cliproxyapi && cliproxy_enabled=1
 librechat_enabled=0
 app_enabled librechat && librechat_enabled=1
+aichorouter_enabled=0
+[[ "$NODE_ROLE" == follower && "$(app_target aichorouter)" == "$NODE_ID" ]] && app_enabled aichorouter && aichorouter_enabled=1
 inventory_file="$SOURCE_ROOT/config/cluster/nodes/$NODE_ID.env"
 [[ -f "$inventory_file" ]] || die "node is absent from cluster inventory: $NODE_ID"
 prompt_required LEADER_PUBLIC_IP 'Leader public IPv4 address'
@@ -534,6 +580,18 @@ if ((librechat_enabled)); then
 		prompt_required LIBRECHAT_ADMIN_PANEL_SESSION_SECRET 'Shared LibreChat admin panel session secret' 1
 	fi
 fi
+while IFS= read -r manifest; do
+	[[ -f "$manifest" ]] || continue
+	[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower ]] || continue
+	app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+	app_enabled "$app_id" || continue
+	[[ "$NODE_ROLE" == follower && "$(app_target "$app_id")" == "$NODE_ID" ]] || continue
+	secret_keys="$(sed -n 's/^SECRET_KEYS=//p' "$manifest" | tail -n1)"
+	while IFS= read -r secret_key; do
+		[[ -n "$secret_key" ]] || continue
+		prompt_required "$secret_key" "$app_id $secret_key" 1
+	done < <(printf '%s\n' "$secret_keys" | tr ',' '\n')
+done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 if [[ "$NODE_ROLE" == leader ]]; then
 	generate_shared_secret WOODPECKER_AGENT_SECRET
 	generate_shared_secret WOODPECKER_GRPC_SECRET
@@ -584,13 +642,22 @@ if [[ ! -f "$app_env" ]]; then
 		printf 'LIBRECHAT_MONGO_URI=%s\nLIBRECHAT_REDIS_URI=%s\nLIBRECHAT_JWT_SECRET=%s\nLIBRECHAT_JWT_REFRESH_SECRET=%s\nLIBRECHAT_ADMIN_PANEL_SESSION_SECRET=%s\nLIBRECHAT_AWS_ENDPOINT_URL=%s\nLIBRECHAT_AWS_ACCESS_KEY_ID=%s\nLIBRECHAT_AWS_SECRET_ACCESS_KEY=%s\nLIBRECHAT_AWS_REGION=%s\nLIBRECHAT_AWS_BUCKET_NAME=%s\nLIBRECHAT_AWS_FORCE_PATH_STYLE=%s\n' "$LIBRECHAT_MONGO_URI" "$LIBRECHAT_REDIS_URI" "$LIBRECHAT_JWT_SECRET" "$LIBRECHAT_JWT_REFRESH_SECRET" "$LIBRECHAT_ADMIN_PANEL_SESSION_SECRET" "$LIBRECHAT_AWS_ENDPOINT_URL" "$LIBRECHAT_AWS_ACCESS_KEY_ID" "$LIBRECHAT_AWS_SECRET_ACCESS_KEY" "$LIBRECHAT_AWS_REGION" "$LIBRECHAT_AWS_BUCKET_NAME" "$LIBRECHAT_AWS_FORCE_PATH_STYLE"
 		printf 'NEW_API_SITE=https://newapi.%s\nCLIPROXY_SITE=https://cpa.%s\nLIBRECHAT_DOMAIN_CLIENT=https://chat.%s\nLIBRECHAT_DOMAIN_SERVER=https://chat.%s\nLIBRECHAT_ADMIN_PANEL_URL=https://chat-admin.%s\nWOODPECKER_SITE=https://ci.%s\nBESZEL_SITE=https://status.%s\nSESSION_COOKIE_TRUSTED_URL=https://newapi.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME"
 		printf 'WOODPECKER_GRPC_SITE=https://ci-grpc.%s\n' "$DOMAIN_NAME"
+		printf 'AICHOROUTER_SITE=https://aichorouter.%s\n' "$DOMAIN_NAME"
 	} >"$app_env"
 fi
 for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "PRODUCTION_REQUIRE_REMOTE_BACKUP=true"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
 remove_key "$app_env" NODE_ROLE
 remove_key "$app_env" LEADER_PUBLIC_IP
 ensure_key "$app_env" WOODPECKER_GRPC_SITE "https://ci-grpc.$DOMAIN_NAME"
+ensure_key "$app_env" AICHOROUTER_SITE "https://aichorouter.$DOMAIN_NAME"
 for pair in \
+	"AICHOROUTER_MEMORY_LIMIT=$AICHOROUTER_MEMORY_LIMIT" "AICHOROUTER_CPUS=$AICHOROUTER_CPUS" "AICHOROUTER_PIDS_LIMIT=$AICHOROUTER_PIDS_LIMIT" \
+	"AICHOROUTER_GOMAXPROCS=$AICHOROUTER_GOMAXPROCS" "AICHOROUTER_GOMEMLIMIT=$AICHOROUTER_GOMEMLIMIT" \
+	"AICHOROUTER_MEMORY_CACHE_ENABLED=$AICHOROUTER_MEMORY_CACHE_ENABLED" "AICHOROUTER_ERROR_LOG_ENABLED=$AICHOROUTER_ERROR_LOG_ENABLED" "AICHOROUTER_BATCH_UPDATE_ENABLED=$AICHOROUTER_BATCH_UPDATE_ENABLED" \
+	"AICHOROUTER_SQL_MAX_IDLE_CONNS=$AICHOROUTER_SQL_MAX_IDLE_CONNS" "AICHOROUTER_SQL_MAX_OPEN_CONNS=$AICHOROUTER_SQL_MAX_OPEN_CONNS" "AICHOROUTER_SQL_MAX_LIFETIME=$AICHOROUTER_SQL_MAX_LIFETIME" \
+	"AICHOROUTER_RELAY_MAX_IDLE_CONNS=$AICHOROUTER_RELAY_MAX_IDLE_CONNS" "AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST=$AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST" "AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT=$AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT" \
+	"AICHOROUTER_MAX_REQUEST_BODY_MB=$AICHOROUTER_MAX_REQUEST_BODY_MB" "AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB=$AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB" "AICHOROUTER_MAX_FILE_DOWNLOAD_MB=$AICHOROUTER_MAX_FILE_DOWNLOAD_MB" \
+	"AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS=$AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS" \
 	"LIBRECHAT_MONGO_URI=$LIBRECHAT_MONGO_URI" "LIBRECHAT_REDIS_URI=$LIBRECHAT_REDIS_URI" \
 	"LIBRECHAT_JWT_SECRET=$LIBRECHAT_JWT_SECRET" "LIBRECHAT_JWT_REFRESH_SECRET=$LIBRECHAT_JWT_REFRESH_SECRET" \
 	"LIBRECHAT_ADMIN_PANEL_SESSION_SECRET=$LIBRECHAT_ADMIN_PANEL_SESSION_SECRET" "LIBRECHAT_FILE_STRATEGY=s3" \
@@ -608,6 +675,22 @@ for pair in \
 	ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"
 done
 chmod 600 "$app_env"
+
+while IFS= read -r manifest; do
+	[[ -f "$manifest" ]] || continue
+	[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower ]] || continue
+	app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+	app_enabled "$app_id" || continue
+	[[ "$NODE_ROLE" == follower && "$(app_target "$app_id")" == "$NODE_ID" ]] || continue
+	runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
+	runtime_file="$CONFIG_ROOT/$runtime_rel"
+	secret_keys="$(sed -n 's/^SECRET_KEYS=//p' "$manifest" | tail -n1)"
+	while IFS= read -r secret_key; do
+		[[ -n "$secret_key" ]] || continue
+		set_key "$runtime_file" "$secret_key" "${!secret_key}"
+	done < <(printf '%s\n' "$secret_keys" | tr ',' '\n')
+	chmod 600 "$runtime_file"
+done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 for shared_key in NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE; do
 	shared_value="${!shared_key:-}"
 	[[ -n "$shared_value" ]] || continue
@@ -812,7 +895,7 @@ for foundation_file in woodpecker-controller.yml woodpecker-worker.yml woodpecke
 done
 
 install -d -m 700 /usr/local/libexec
-for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
+for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-secrets enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
 	cat >"/usr/local/bin/$script" <<EOF
 #!/bin/sh
 exec /opt/platform/control/current/ops/$script.sh "\$@"
@@ -880,7 +963,8 @@ PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot p
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet\n' >&2
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet\n' >&2
 print_bootstrap_summary() {
-	local foundation consumers disabled origin_host admin_origin_host
+	local foundation consumers disabled origin_host admin_origin_host aichorouter_origin_host
+	local aichorouter_enabled="${aichorouter_enabled:-0}"
 	foundation='Caddy, Beszel Agent'
 	consumers='none'
 	disabled='none'
@@ -891,10 +975,12 @@ print_bootstrap_summary() {
 		if ((librechat_enabled)); then consumers='LibreChat'; fi
 		if ((newapi_enabled)); then [[ "$consumers" == none ]] && consumers='New API' || consumers+=', New API'; fi
 		if ((cliproxy_enabled)); then [[ "$consumers" == none ]] && consumers='CLIProxyAPI' || consumers+=', CLIProxyAPI'; fi
+		if ((aichorouter_enabled)); then [[ "$consumers" == none ]] && consumers='Aichorouter' || consumers+=', Aichorouter'; fi
 	fi
 	if ((!newapi_enabled)); then disabled='New API'; fi
 	if ((!cliproxy_enabled)); then [[ "$disabled" == none ]] && disabled='CLIProxyAPI' || disabled+=', CLIProxyAPI'; fi
 	if ((!librechat_enabled)); then [[ "$disabled" == none ]] && disabled='LibreChat' || disabled+=', LibreChat'; fi
+	if ((!aichorouter_enabled)); then [[ "$disabled" == none ]] && disabled='Aichorouter (not on this node)' || disabled+=', Aichorouter (not on this node)'; fi
 
 	printf '\nBootstrap complete.\n\n'
 	printf 'Node\n  ID: %s\n  Role: %s\n\n' "$NODE_ID" "$NODE_ROLE"
@@ -907,12 +993,17 @@ print_bootstrap_summary() {
 			printf '  LibreChat: https://chat.%s (available after a Follower is healthy)\n' "$DOMAIN_NAME"
 			printf '  LibreChat admin: https://chat-admin.%s (available after a Follower is healthy)\n' "$DOMAIN_NAME"
 		fi
+		printf '  Aichorouter: https://aichorouter.%s (available after its selected Follower is healthy)\n' "$DOMAIN_NAME"
 	else
 		if ((librechat_enabled)); then
 			origin_host="$(sed -n 's/^NODE_LIBRECHAT_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
 			admin_origin_host="$(sed -n 's/^NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
 			[[ -n "$origin_host" ]] && printf '  LibreChat origin: https://%s\n' "$origin_host"
 			[[ -n "$admin_origin_host" ]] && printf '  LibreChat admin origin: https://%s\n' "$admin_origin_host"
+			if ((aichorouter_enabled)); then
+				aichorouter_origin_host="$(sed -n 's/^NODE_AICHOROUTER_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
+				[[ -n "$aichorouter_origin_host" ]] && printf '  Aichorouter origin: https://%s\n' "$aichorouter_origin_host"
+			fi
 		else
 			printf '  No consumer endpoints are enabled on this node.\n'
 		fi

@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 mode="${1:-}"
 sha="${2:-}"
-[[ "$mode" =~ ^(deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback)$ ]] || {
-	printf 'usage: platform-submit {deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback} <sha-or-previous>\n' >&2
+[[ "$mode" =~ ^(deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|singleton-stage|singleton-switch|singleton-stop)$ ]] || {
+	printf 'usage: platform-submit {deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|singleton-stage|singleton-switch|singleton-stop} <sha-or-previous>\n' >&2
 	exit 2
 }
 [[ -n "$sha" ]] || {
@@ -32,6 +32,8 @@ docker run -d --name "$job" \
 	-v /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite \
 	-v /run/lock/llm-hub-lite:/run/lock/llm-hub-lite \
 	-v /etc/llm-hub-lite:/etc/llm-hub-lite \
+	-e DEPLOY_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" \
+	-e SINGLETON_APP_ID="${SINGLETON_APP_ID:-}" \
 	-v /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro \
 	-v /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro \
 	-v /usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro \

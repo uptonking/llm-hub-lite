@@ -74,7 +74,9 @@ NODE_TAG="node:$NODE_ID"
 NEW_API_BACKUP_NODE_ID="$(policy_value NEW_API_BACKUP_NODE_ID)"
 NEW_API_BACKUP_NODE_ID="${NEW_API_BACKUP_NODE_ID:-$NODE_ID}"
 newapi_enabled=1
-csv_has "$(policy_value DISABLED_APPS)" newapi && newapi_enabled=0
+newapi_manifest="$CONTROL_ROOT/current/apps/newapi/manifest.env"
+newapi_policy_rel="$(sed -n 's/^POLICY_FILE=//p' "$newapi_manifest" 2>/dev/null | tail -n1 || true)"
+[[ "$(env_value ENABLED "$CONTROL_ROOT/current/config/$newapi_policy_rel")" == false ]] && newapi_enabled=0
 if ((newapi_enabled == 1)) && [[ -f "$CLUSTER_POLICY_FILE" ]]; then
 	csv_has "$(policy_value NODE_IDS)" "$NEW_API_BACKUP_NODE_ID" || {
 		printf 'NEW_API_BACKUP_NODE_ID is absent from cluster inventory: %s\n' "$NEW_API_BACKUP_NODE_ID" >&2
@@ -280,8 +282,17 @@ snapshot() {
 		"$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel" "$CONFIG_ROOT/platform.env"
 		"$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env"
 		"$CONFIG_ROOT/images.apps.previous.env" "$CONFIG_ROOT/images.foundation.previous.env"
-		"$CONFIG_ROOT/image-history" "$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/node.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token" "$CONFIG_ROOT/restic-password" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$STAGE_ROOT/sqlite" "$STAGE_ROOT/postgres" "$STAGE_ROOT/mongodb" "$STAGE_ROOT/manifest.txt"
+		"$CONFIG_ROOT/image-history" "$CONFIG_ROOT/singleton-state" "$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/node.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token" "$CONFIG_ROOT/restic-password" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$STAGE_ROOT/sqlite" "$STAGE_ROOT/postgres" "$STAGE_ROOT/mongodb" "$STAGE_ROOT/manifest.txt"
 	)
+	while IFS= read -r descriptor; do
+		runtime_rel="$(descriptor_value "$descriptor" RUNTIME_ENV_FILE)"
+		[[ -n "$runtime_rel" ]] || continue
+		safe_relative "$runtime_rel" || {
+			printf 'unsafe runtime env path in app manifest: %s\n' "$descriptor" >&2
+			return 1
+		}
+		paths+=("$CONFIG_ROOT/$runtime_rel")
+	done < <(descriptor_ids)
 	existing=()
 	for path in "${paths[@]}"; do [[ -e "$path" || -L "$path" ]] && existing+=("$path"); done
 	excludes=(
