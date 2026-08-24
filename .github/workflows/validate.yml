@@ -48,7 +48,8 @@ jobs:
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker-worker.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel-worker.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/images.apps.prod.env -f apps/newapi/compose.yml config --quiet
-          docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cliproxyapi/compose.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/aichorouter/compose.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cpapi/compose.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/images.apps.prod.env -f apps/librechat/compose.yml config --quiet
       - name: Validate Caddyfile
         run: |

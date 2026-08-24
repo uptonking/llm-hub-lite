@@ -9,7 +9,7 @@ cp "$repo_root/config/cluster/policy.env" "$tmp/policy.env"
 
 # Disabled consumers must not require their migration, primary, or backup
 # policy fields. The remaining deployment workflows are still generated.
-sed -E '/^(CLIPROXY_PRIMARY_NODE_ID|NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' \
+sed -E '/^(NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' \
 	"$tmp/policy.env" >"$tmp/policy-disabled.env"
 CLUSTER_POLICY_FILE="$tmp/policy-disabled.env" WOODPECKER_WORKFLOW_ROOT="$tmp/disabled" \
 	"$repo_root/ops/generate-woodpecker-workflows.sh" generate
@@ -35,6 +35,10 @@ if grep -Fq '        - apps/aichorouter/**' "$tmp/disabled/deploy-leader.yml"; t
 fi
 grep -Fq '        - config/routes.d/**' "$tmp/disabled/deploy-leader.yml"
 grep -Fq '        - ops/images.apps.prod.env' "$tmp/disabled/singleton-stage-aichorouter.yml"
+if grep -Fq '        - config/Caddyfile' "$tmp/disabled/singleton-stage-aichorouter.yml" || grep -Fq '        - config/routes.d/**' "$tmp/disabled/singleton-stage-aichorouter.yml"; then
+	printf 'singleton workflows must not own shared Caddy configuration paths\n' >&2
+	exit 1
+fi
 if grep -Fq 'config/cluster/apps/aichorouter.policy' "$tmp/disabled/deploy-smoke.yml"; then
 	printf 'singleton-only app policy must not trigger aggregate normal smoke workflow\n' >&2
 	exit 1

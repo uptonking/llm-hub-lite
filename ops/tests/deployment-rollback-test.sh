@@ -34,6 +34,9 @@ EOF
 cat >"$tmp/bin/docker" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${DOCKER_CALL_LOG:?}"
+case "$*" in
+  *"ps -aq --filter label=com.docker.compose.project=app-aichorouter"*) printf 'removed-aichorouter-container\n';;
+esac
 exit 0
 EOF
 cat >"$tmp/bin/flock" <<'EOF'
@@ -52,7 +55,7 @@ cp "$repo_root/ops/foundation"/*.env.example "$platform_root/foundation/env/"
 cat >"$config_root/node.env" <<'EOF'
 NODE_ID=leader
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi-origin.example.invalid
-NODE_CLIPROXY_ORIGIN_HOST=worker2-cpa-origin.example.invalid
+NODE_CPAPI_ORIGIN_HOST=worker2-cpapi-origin.example.invalid
 EOF
 cat >"$tmp/config.env" <<EOF
 APP_ROOT=$app_root
@@ -88,6 +91,13 @@ if grep -Eq '^pull (calciumion/new-api|eceasy/cli-proxy-api)' "$tmp/docker.log";
 	printf 'application deployment pulled an image for a disabled consumer\n' >&2
 	exit 1
 fi
+
+git -C "$work" rm --quiet -r apps/aichorouter
+git -C "$work" -c commit.gpgsign=false commit --quiet -m remove-singleton
+git -C "$work" push --quiet origin HEAD:main
+sha_removed="$(git -C "$work" rev-parse HEAD)"
+bash "$repo_root/ops/deploy-controller.sh" deploy "$sha_removed" >/dev/null
+grep -Fqx 'rm -f removed-aichorouter-container' "$tmp/docker.log"
 
 printf '\nrollback test change\n' >>"$work/README.md"
 git -C "$work" add README.md

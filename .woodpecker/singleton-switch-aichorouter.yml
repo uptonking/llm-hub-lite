@@ -7,8 +7,6 @@ when:
         - apps/aichorouter/**
         - config/cluster/apps/aichorouter.policy
         - ops/images.apps.prod.env
-        - config/Caddyfile
-        - config/routes.d/**
 
 depends_on:
   - singleton-stage-aichorouter

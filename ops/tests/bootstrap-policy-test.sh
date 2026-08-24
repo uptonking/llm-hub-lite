@@ -30,16 +30,16 @@ grep -Fq 'unable to clone $MAIN_BRANCH after $attempt attempts' "$bootstrap"
 grep -Fq 'source root already exists but is not a Git checkout' "$bootstrap"
 grep -Fq 'Skipping image for disabled or inactive service' "$bootstrap"
 grep -Fq 'merge_image_manifest' "$bootstrap"
-image_function="$(sed -n '/^csv_contains() {/,/^}/p; /^bootstrap_foundation_enabled() {/,/^}/p; /^image_required() {/,/^}/p' "$bootstrap")"
-image_selection="$(IMAGE_FUNCTION="$image_function" bash -c '
+image_function="$(sed -n '/^csv_contains() {/,/^}/p; /^bootstrap_foundation_enabled() {/,/^}/p; /^app_policy_file() {/,/^}/p; /^app_enabled() {/,/^}/p; /^app_target() {/,/^}/p; /^image_required() {/,/^}/p' "$bootstrap")"
+image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bash -c '
 	set -Eeuo pipefail
 	eval "$IMAGE_FUNCTION"
 	tmp_policy="$(mktemp)"
 	trap '\''rm -f "$tmp_policy"'\'' EXIT
 	printf "FOUNDATION_FOLLOWER=beszel-worker,woodpecker-worker\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
-	policy_file="$tmp_policy" NODE_ROLE=follower
-	newapi_enabled=0 cliproxy_enabled=0 librechat_enabled=1
-	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CLIPROXY_IMAGE; do
+	policy_file="$tmp_policy" NODE_ROLE=follower NODE_ID=worker-1
+	newapi_enabled=0 librechat_enabled=1
+	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE; do
 		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
 	done
 ')"
@@ -48,27 +48,28 @@ grep -Fqx 'BESZEL_AGENT_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'WOODPECKER_AGENT_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'LIBRECHAT_API_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$image_selection"
-grep -Fqx 'CLIPROXY_IMAGE=skipped' <<<"$image_selection"
-leader_image_selection="$(IMAGE_FUNCTION="$image_function" bash -c '
+grep -Fqx 'CPAPI_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'AICHOROUTER_IMAGE=required' <<<"$image_selection"
+leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bash -c '
 	set -Eeuo pipefail
 	eval "$IMAGE_FUNCTION"
 	tmp_policy="$(mktemp)"
 	trap '\''rm -f "$tmp_policy"'\'' EXIT
 	printf "FOUNDATION_LEADER=caddy,woodpecker-controller,woodpecker-deployer,beszel-controller,beszel-worker\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
-	policy_file="$tmp_policy" NODE_ROLE=leader
-	newapi_enabled=1 cliproxy_enabled=1 librechat_enabled=1
-	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CLIPROXY_IMAGE; do
+	policy_file="$tmp_policy" NODE_ROLE=leader NODE_ID=leader
+	newapi_enabled=1 librechat_enabled=1
+	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE; do
 		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
 	done
 ')"
 grep -Fqx 'CADDY_IMAGE=required' <<<"$leader_image_selection"
 grep -Fqx 'LIBRECHAT_API_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$leader_image_selection"
-grep -Fqx 'CLIPROXY_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'CPAPI_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'AICHOROUTER_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fq 'if [[ "$NODE_ROLE" == leader ]]; then' "$bootstrap"
 grep -Fq 'missing cluster policy' "$bootstrap"
 grep -Fq 'newapi_enabled=0' "$bootstrap"
-grep -Fq 'cliproxy_enabled=0' "$bootstrap"
 grep -Fq 'librechat_enabled=0' "$bootstrap"
 grep -Fq 'prompt_required LIBRECHAT_MONGO_URI' "$bootstrap"
 grep -Fq 'prompt_required LIBRECHAT_REDIS_URI' "$bootstrap"
@@ -77,6 +78,8 @@ grep -Fq 'for manifest in "$SOURCE_ROOT"/apps/*/manifest.env' "$bootstrap"
 grep -Fq 'generate_shared_secret LIBRECHAT_JWT_SECRET' "$bootstrap"
 grep -Fq 'prompt_required NEW_API_SQL_DSN' "$bootstrap"
 grep -Fq 'prompt_required NEW_API_SESSION_SECRET' "$bootstrap"
+grep -Fq 'load_runtime_value "$secret_key" "$runtime_file"' "$bootstrap"
+grep -Fq 'prompt_required "$secret_key" "$app_id $secret_key" 1' "$bootstrap"
 grep -Fq 'generate_shared_secret WOODPECKER_AGENT_SECRET' "$bootstrap"
 grep -Fq "prompt_required LEADER_PUBLIC_IP 'Leader public IPv4 address'" "$bootstrap"
 grep -Fq "set_key \"\$CONFIG_ROOT/node.env\" LEADER_PUBLIC_IP \"\$LEADER_PUBLIC_IP\"" "$bootstrap"
@@ -104,7 +107,7 @@ leader_summary="$(SUMMARY_FUNCTION="$summary_function" INVENTORY_FILE="$summary_
 	set -Eeuo pipefail
 	eval "$SUMMARY_FUNCTION"
 	NODE_ID=leader NODE_ROLE=leader DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
-	librechat_enabled=1 newapi_enabled=0 cliproxy_enabled=0
+	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
 grep -Fq 'Foundation: Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer' <<<"$leader_summary"
@@ -115,7 +118,7 @@ follower_summary="$(SUMMARY_FUNCTION="$summary_function" INVENTORY_FILE="$summar
 	set -Eeuo pipefail
 	eval "$SUMMARY_FUNCTION"
 	NODE_ID=worker-1 NODE_ROLE=follower DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
-	librechat_enabled=1 newapi_enabled=0 cliproxy_enabled=0
+	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
 grep -Fq 'Foundation: Caddy, Beszel Agent, Woodpecker Agent' <<<"$follower_summary"

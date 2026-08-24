@@ -37,20 +37,36 @@ for manifest in "$repo_root"/apps/*/manifest.env; do grep -q '^MANIFEST_VERSION=
 grep -q '^LEADER_NODE_ID=leader$' "$repo_root/config/cluster/policy.env"
 grep -q '^REPO_SLUG=uptonking/llm-hub-lite$' "$repo_root/config/cluster/policy.env"
 grep -q '^PLACEMENT=follower$' "$repo_root/apps/newapi/manifest.env"
-grep -q '^PLACEMENT=follower$' "$repo_root/apps/cliproxyapi/manifest.env"
+grep -q '^APP_ID=cpapi$' "$repo_root/apps/cpapi/manifest.env"
+grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^APP_ID=librechat$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^PLACEMENT=follower$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^NETWORK_ALIAS=librechat-client$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^LIBRECHAT_CLIENT_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/newapi.policy"
-grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/cliproxyapi.policy"
+grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^AICHOROUTER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/aichorouter.policy"
 grep -q '^AICHOROUTER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^CPAPI_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -Fq 'SQLITE_PATH: /data/aichorouter.db' "$repo_root/apps/aichorouter/compose.yml"
 grep -Fq 'SQL_MAX_OPEN_CONNS: ${AICHOROUTER_SQL_MAX_OPEN_CONNS:-4}' "$repo_root/apps/aichorouter/compose.yml"
 grep -Fq 'GOMEMLIMIT: ${AICHOROUTER_GOMEMLIMIT:-300MiB}' "$repo_root/apps/aichorouter/compose.yml"
+grep -Fq 'CPAPI_MANAGEMENT_KEY' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'CPAPI_API_KEY' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'config-seed.sha256' "$repo_root/apps/cpapi/compose.yml"
+if grep -Fq 'test: ["CMD", "bash"' "$repo_root/apps/cpapi/compose.yml"; then
+	printf 'CPAPI must not require Bash for its healthcheck\n' >&2
+	exit 1
+fi
+grep -Fq 'mem_limit: ${CPAPI_MEMORY_LIMIT:-256m}' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'cpus: ${CPAPI_CPUS:-0.25}' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'pids_limit: ${CPAPI_PIDS_LIMIT:-128}' "$repo_root/apps/cpapi/compose.yml"
+if grep -Eq 'ports:' "$repo_root/apps/cpapi/compose.yml"; then
+	printf 'CPAPI must not publish a host port\n' >&2
+	exit 1
+fi
 if grep -Eiq 'REDIS_CONN_STRING|SQL_DSN|postgres|redis' "$repo_root/apps/aichorouter/compose.yml"; then
 	printf 'aichorouter must not define Redis or PostgreSQL\n' >&2
 	exit 1
@@ -61,20 +77,29 @@ grep -q 'LIBRECHAT_REDIS_URI' "$repo_root/apps/librechat/compose.yml"
 grep -q '/librechat/images:/app/client/public/images' "$repo_root/apps/librechat/compose.yml"
 grep -q '/librechat/uploads:/app/uploads' "$repo_root/apps/librechat/compose.yml"
 grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/newapi/manifest.env"
-grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/cliproxyapi/manifest.env"
+grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/cpapi/manifest.env"
+grep -q '^HEALTH_MODE=process$' "$repo_root/apps/cpapi/manifest.env"
+grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/aichorouter/manifest.env"
+grep -Fq 'singleton-transition-fail' "$repo_root/ops/platformctl.sh"
+grep -Fq 'transition_begin' "$repo_root/ops/platformctl.sh"
+grep -Fq 'cluster-reconcile-worker-2' "$repo_root/.woodpecker/singleton-stage-cpapi.yml"
 grep -q '^NEW_API_NODE_TYPE=master$' "$repo_root/config/cluster/nodes/worker-1.env"
 grep -q '^NEW_API_NODE_TYPE=slave$' "$repo_root/config/cluster/nodes/worker-2.env"
 grep -q '^NEW_API_BACKUP_NODE_ID=worker-2$' "$repo_root/config/cluster/policy.env"
-grep -q '^CLIPROXY_PRIMARY_NODE_ID=worker-1$' "$repo_root/config/cluster/policy.env"
 grep -q '^NEW_API_MIGRATION_NODE_ID=worker-1$' "$repo_root/config/cluster/policy.env"
 grep -Fq 'cluster-reconcile' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-stage' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-switch' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-stop' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-prepare' "$repo_root/ops/platformctl.sh"
+grep -Fq 'app_in_reconcile_scope' "$repo_root/ops/platformctl.sh"
+grep -Fq 'PLATFORM_FORCE_SINGLETON_ACTION' "$repo_root/ops/platformctl.sh"
+grep -Fq 'singleton-origin-smoke' "$repo_root/ops/platformctl.sh"
 grep -Fq 'Leader route and active containers reconciled' "$repo_root/ops/platformctl.sh"
 grep -Fq 'app_policy_enabled "$(basename "$d")"' "$repo_root/ops/platformctl.sh"
 grep -Fq 'record_singleton_transitions' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'singleton_prepare_failed' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'singleton-origin-smoke' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'config/cluster/apps/*) ;;' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'unsupported cluster configuration path in application deployment' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-state' "$repo_root/ops/backup-platform.sh"
@@ -103,7 +128,11 @@ consumer_line="$(printf '%s\n' "$recover_body" | grep -n 'projects_apps' | head 
 if grep -q 'NEW_API_SITE' "$repo_root/apps/newapi/route.follower.caddy"; then
 	exit 1
 fi
-if grep -q 'CLIPROXY_SITE' "$repo_root/apps/cliproxyapi/route.follower.caddy"; then
+if find "$repo_root/apps/cliproxyapi" "$repo_root/config/cluster/apps/cliproxyapi.policy" -type f -print -quit 2>/dev/null | grep -q .; then
+	exit 1
+fi
+if rg -n 'CLIPROXY|cliproxy|cpa\.aichorage\.de' "$repo_root" --hidden --glob '!.git/**' --glob '!ops/tests/**' --glob '!ops/images.apps.prod.env' >/dev/null 2>&1; then
+	printf 'legacy CPA references remain in the repository\n' >&2
 	exit 1
 fi
 printf 'controller topology tests passed\n'

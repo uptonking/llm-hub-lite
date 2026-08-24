@@ -26,8 +26,10 @@ BESZEL_ENROLLMENT_BUNDLE_B64="${BESZEL_ENROLLMENT_BUNDLE_B64:-}"
 NEW_API_SESSION_SECRET="${NEW_API_SESSION_SECRET:-}"
 NEW_API_CRYPTO_SECRET="${NEW_API_CRYPTO_SECRET:-}"
 NEW_API_SQL_DSN="${NEW_API_SQL_DSN:-}"
-CLIPROXY_API_KEY="${CLIPROXY_API_KEY:-}"
-CLIPROXY_MANAGEMENT_KEY="${CLIPROXY_MANAGEMENT_KEY:-}"
+AICHOROUTER_SESSION_SECRET="${AICHOROUTER_SESSION_SECRET:-}"
+AICHOROUTER_CRYPTO_SECRET="${AICHOROUTER_CRYPTO_SECRET:-}"
+CPAPI_API_KEY="${CPAPI_API_KEY:-}"
+CPAPI_MANAGEMENT_KEY="${CPAPI_MANAGEMENT_KEY:-}"
 LIBRECHAT_MONGO_URI="${LIBRECHAT_MONGO_URI:-}"
 LIBRECHAT_REDIS_URI="${LIBRECHAT_REDIS_URI:-}"
 LIBRECHAT_JWT_SECRET="${LIBRECHAT_JWT_SECRET:-}"
@@ -124,7 +126,7 @@ pull_image() {
 	done
 }
 image_required() {
-	local key="$1"
+	local key="$1" manifest image_key app_id
 	case "$key" in
 	CADDY_IMAGE) return 0 ;;
 	WOODPECKER_SERVER_IMAGE) bootstrap_foundation_enabled woodpecker-controller ;;
@@ -132,9 +134,7 @@ image_required() {
 	BESZEL_HUB_IMAGE) bootstrap_foundation_enabled beszel-controller ;;
 	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) bootstrap_foundation_enabled beszel-worker ;;
 	NEW_API_IMAGE) ((newapi_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
-	CLIPROXY_IMAGE) ((cliproxy_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
 	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) ((librechat_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
-	AICHOROUTER_IMAGE) ((aichorouter_enabled)) ;;
 	*)
 		while IFS= read -r manifest; do
 			while IFS= read -r image_key; do
@@ -146,7 +146,7 @@ image_required() {
 				return 0
 			done < <(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1 | tr ' ' '\n')
 		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
-		return 0
+		return 1
 		;;
 	esac
 }
@@ -266,13 +266,13 @@ generate_shared_secret() {
 if [[ -z "$LEADER_PUBLIC_IP" && -r "$CONFIG_ROOT/node.env" ]]; then
 	LEADER_PUBLIC_IP="$(sed -n 's/^LEADER_PUBLIC_IP=//p' "$CONFIG_ROOT/node.env" 2>/dev/null | tail -n1)"
 fi
-for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
+for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
 	load_bundle_value "$shared_key"
 done
-for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET WOODPECKER_GITHUB_CLIENT WOODPECKER_GITHUB_SECRET; do
+for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET WOODPECKER_GITHUB_CLIENT WOODPECKER_GITHUB_SECRET; do
 	clear_placeholder "$shared_key"
 done
-for runtime_key in NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY; do
+for runtime_key in NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN; do
 	load_runtime_value "$runtime_key" "$app_env"
 done
 for runtime_key in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET; do
@@ -535,12 +535,12 @@ app_target() {
 }
 newapi_enabled=0
 app_enabled newapi && newapi_enabled=1
-cliproxy_enabled=0
-app_enabled cliproxyapi && cliproxy_enabled=1
 librechat_enabled=0
 app_enabled librechat && librechat_enabled=1
 aichorouter_enabled=0
 [[ "$NODE_ROLE" == follower && "$(app_target aichorouter)" == "$NODE_ID" ]] && app_enabled aichorouter && aichorouter_enabled=1
+cpapi_enabled=0
+[[ "$NODE_ROLE" == follower && "$(app_target cpapi)" == "$NODE_ID" ]] && app_enabled cpapi && cpapi_enabled=1
 inventory_file="$SOURCE_ROOT/config/cluster/nodes/$NODE_ID.env"
 [[ -f "$inventory_file" ]] || die "node is absent from cluster inventory: $NODE_ID"
 prompt_required LEADER_PUBLIC_IP 'Leader public IPv4 address'
@@ -561,15 +561,6 @@ if ((newapi_enabled)); then
 	else
 		prompt_required NEW_API_SESSION_SECRET 'Shared New API SESSION_SECRET' 1
 		prompt_required NEW_API_CRYPTO_SECRET 'Shared New API CRYPTO_SECRET' 1
-	fi
-fi
-if ((cliproxy_enabled)); then
-	if [[ "$NODE_ROLE" == leader ]]; then
-		generate_shared_secret CLIPROXY_API_KEY
-		generate_shared_secret CLIPROXY_MANAGEMENT_KEY
-	else
-		prompt_required CLIPROXY_API_KEY 'Shared CLIProxyAPI API key' 1
-		prompt_required CLIPROXY_MANAGEMENT_KEY 'Shared CLIProxyAPI management key' 1
 	fi
 fi
 if ((librechat_enabled)); then
@@ -599,10 +590,14 @@ for manifest in "$SOURCE_ROOT"/apps/*/manifest.env; do
 	app_enabled "$app_id" || continue
 	[[ "$NODE_ROLE" == follower && "$(app_target "$app_id")" == "$NODE_ID" ]] || continue
 	secret_keys="$(sed -n 's/^SECRET_KEYS=//p' "$manifest" | tail -n1)"
+	runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
+	runtime_file="$CONFIG_ROOT/$runtime_rel"
 	old_ifs="$IFS"
 	IFS=,
 	for secret_key in $secret_keys; do
 		[[ -n "$secret_key" ]] || continue
+		load_runtime_value "$secret_key" "$runtime_file"
+		clear_placeholder "$secret_key"
 		prompt_required "$secret_key" "$app_id $secret_key" 1
 	done
 	IFS="$old_ifs"
@@ -653,18 +648,28 @@ if [[ ! -f "$app_env" ]]; then
 		printf 'DATA_ROOT=%s/shared/data/prod\nTZ=Asia/Shanghai\n' "$APP_ROOT"
 		printf 'RESTIC_REMOTE_ENABLED=%s\nRESTIC_REMOTE_REPOSITORY=%s\nRESTIC_REMOTE_PASSWORD_FILE=%s\nRESTIC_REMOTE_ENV_FILE=%s\nPRODUCTION_REQUIRE_REMOTE_BACKUP=%s\n' "$RESTIC_REMOTE_ENABLED" "$RESTIC_REMOTE_REPOSITORY" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$PRODUCTION_REQUIRE_REMOTE_BACKUP"
 		printf 'NODE_ID=%s\nCLUSTER_POLICY_FILE=%s\nNODE_CONFIG_FILE=%s/node.env\n' "$NODE_ID" "$CONTROL_ROOT/current/config/cluster/policy.env" "$CONFIG_ROOT"
-		printf 'NEW_API_SESSION_SECRET=%s\nNEW_API_CRYPTO_SECRET=%s\nNEW_API_SQL_DSN=%s\nCLIPROXY_API_KEY=%s\nCLIPROXY_MANAGEMENT_KEY=%s\n' "${NEW_API_SESSION_SECRET:-}" "${NEW_API_CRYPTO_SECRET:-}" "${NEW_API_SQL_DSN:-}" "${CLIPROXY_API_KEY:-}" "${CLIPROXY_MANAGEMENT_KEY:-}"
+		printf 'NEW_API_SESSION_SECRET=%s\nNEW_API_CRYPTO_SECRET=%s\nNEW_API_SQL_DSN=%s\n' "${NEW_API_SESSION_SECRET:-}" "${NEW_API_CRYPTO_SECRET:-}" "${NEW_API_SQL_DSN:-}"
 		printf 'LIBRECHAT_MONGO_URI=%s\nLIBRECHAT_REDIS_URI=%s\nLIBRECHAT_JWT_SECRET=%s\nLIBRECHAT_JWT_REFRESH_SECRET=%s\nLIBRECHAT_ADMIN_PANEL_SESSION_SECRET=%s\nLIBRECHAT_AWS_ENDPOINT_URL=%s\nLIBRECHAT_AWS_ACCESS_KEY_ID=%s\nLIBRECHAT_AWS_SECRET_ACCESS_KEY=%s\nLIBRECHAT_AWS_REGION=%s\nLIBRECHAT_AWS_BUCKET_NAME=%s\nLIBRECHAT_AWS_FORCE_PATH_STYLE=%s\n' "$LIBRECHAT_MONGO_URI" "$LIBRECHAT_REDIS_URI" "$LIBRECHAT_JWT_SECRET" "$LIBRECHAT_JWT_REFRESH_SECRET" "$LIBRECHAT_ADMIN_PANEL_SESSION_SECRET" "$LIBRECHAT_AWS_ENDPOINT_URL" "$LIBRECHAT_AWS_ACCESS_KEY_ID" "$LIBRECHAT_AWS_SECRET_ACCESS_KEY" "$LIBRECHAT_AWS_REGION" "$LIBRECHAT_AWS_BUCKET_NAME" "$LIBRECHAT_AWS_FORCE_PATH_STYLE"
-		printf 'NEW_API_SITE=https://newapi.%s\nCLIPROXY_SITE=https://cpa.%s\nLIBRECHAT_DOMAIN_CLIENT=https://chat.%s\nLIBRECHAT_DOMAIN_SERVER=https://chat.%s\nLIBRECHAT_ADMIN_PANEL_URL=https://chat-admin.%s\nWOODPECKER_SITE=https://ci.%s\nBESZEL_SITE=https://status.%s\nSESSION_COOKIE_TRUSTED_URL=https://newapi.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME"
+		printf 'NEW_API_SITE=https://newapi.%s\nLIBRECHAT_DOMAIN_CLIENT=https://chat.%s\nLIBRECHAT_DOMAIN_SERVER=https://chat.%s\nLIBRECHAT_ADMIN_PANEL_URL=https://chat-admin.%s\nWOODPECKER_SITE=https://ci.%s\nBESZEL_SITE=https://status.%s\nSESSION_COOKIE_TRUSTED_URL=https://newapi.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME"
 		printf 'WOODPECKER_GRPC_SITE=https://ci-grpc.%s\n' "$DOMAIN_NAME"
-		printf 'AICHOROUTER_SITE=https://aichorouter.%s\n' "$DOMAIN_NAME"
+		while IFS= read -r manifest; do
+			public_key="$(sed -n 's/^PUBLIC_URL_KEY=//p' "$manifest" | tail -n1)"
+			public_host="$(sed -n 's/^PUBLIC_HOST=//p' "$manifest" | tail -n1)"
+			[[ -n "$public_key" && -n "$public_host" ]] || continue
+			printf '%s=https://%s.%s\n' "$public_key" "$public_host" "$DOMAIN_NAME"
+		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 	} >"$app_env"
 fi
 for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "PRODUCTION_REQUIRE_REMOTE_BACKUP=true"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
 remove_key "$app_env" NODE_ROLE
 remove_key "$app_env" LEADER_PUBLIC_IP
 ensure_key "$app_env" WOODPECKER_GRPC_SITE "https://ci-grpc.$DOMAIN_NAME"
-ensure_key "$app_env" AICHOROUTER_SITE "https://aichorouter.$DOMAIN_NAME"
+while IFS= read -r manifest; do
+	public_key="$(sed -n 's/^PUBLIC_URL_KEY=//p' "$manifest" | tail -n1)"
+	public_host="$(sed -n 's/^PUBLIC_HOST=//p' "$manifest" | tail -n1)"
+	[[ -n "$public_key" && -n "$public_host" ]] || continue
+	ensure_key "$app_env" "$public_key" "https://$public_host.$DOMAIN_NAME"
+done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 for pair in \
 	"AICHOROUTER_MEMORY_LIMIT=$AICHOROUTER_MEMORY_LIMIT" "AICHOROUTER_CPUS=$AICHOROUTER_CPUS" "AICHOROUTER_PIDS_LIMIT=$AICHOROUTER_PIDS_LIMIT" \
 	"AICHOROUTER_GOMAXPROCS=$AICHOROUTER_GOMAXPROCS" "AICHOROUTER_GOMEMLIMIT=$AICHOROUTER_GOMEMLIMIT" \
@@ -706,7 +711,7 @@ while IFS= read -r manifest; do
 	done < <(printf '%s\n' "$secret_keys" | tr ',' '\n')
 	chmod 600 "$runtime_file"
 done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
-for shared_key in NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE; do
+for shared_key in NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE; do
 	shared_value="${!shared_key:-}"
 	[[ -n "$shared_value" ]] || continue
 	existing_value="$(sed -n "s/^${shared_key}=//p" "$app_env" | tail -n1)"
@@ -871,8 +876,6 @@ if [[ "$NODE_ROLE" == leader && ! -s "$CONFIG_ROOT/shared-secrets.env" ]]; then
 		printf 'NEW_API_SESSION_SECRET=%s\n' "$(sed -n 's/^NEW_API_SESSION_SECRET=//p' "$app_env" | tail -n1)"
 		printf 'NEW_API_CRYPTO_SECRET=%s\n' "$(sed -n 's/^NEW_API_CRYPTO_SECRET=//p' "$app_env" | tail -n1)"
 		printf 'NEW_API_SQL_DSN=%s\n' "$(sed -n 's/^NEW_API_SQL_DSN=//p' "$app_env" | tail -n1)"
-		printf 'CLIPROXY_API_KEY=%s\n' "$(sed -n 's/^CLIPROXY_API_KEY=//p' "$app_env" | tail -n1)"
-		printf 'CLIPROXY_MANAGEMENT_KEY=%s\n' "$(sed -n 's/^CLIPROXY_MANAGEMENT_KEY=//p' "$app_env" | tail -n1)"
 		printf 'LIBRECHAT_MONGO_URI=%s\n' "$(sed -n 's/^LIBRECHAT_MONGO_URI=//p' "$app_env" | tail -n1)"
 		printf 'LIBRECHAT_REDIS_URI=%s\n' "$(sed -n 's/^LIBRECHAT_REDIS_URI=//p' "$app_env" | tail -n1)"
 		printf 'LIBRECHAT_AWS_ENDPOINT_URL=%s\nLIBRECHAT_AWS_ACCESS_KEY_ID=%s\nLIBRECHAT_AWS_SECRET_ACCESS_KEY=%s\nLIBRECHAT_AWS_REGION=%s\nLIBRECHAT_AWS_BUCKET_NAME=%s\nLIBRECHAT_AWS_FORCE_PATH_STYLE=%s\n' "$(sed -n 's/^LIBRECHAT_AWS_ENDPOINT_URL=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_ACCESS_KEY_ID=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_SECRET_ACCESS_KEY=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_REGION=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_BUCKET_NAME=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_FORCE_PATH_STYLE=//p' "$app_env" | tail -n1)"
@@ -978,7 +981,7 @@ PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot p
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet\n' >&2
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet\n' >&2
 print_bootstrap_summary() {
-	local foundation consumers disabled origin_host admin_origin_host aichorouter_origin_host
+	local foundation consumers disabled origin_host admin_origin_host aichorouter_origin_host cpapi_origin_host
 	local aichorouter_enabled="${aichorouter_enabled:-0}"
 	foundation='Caddy, Beszel Agent'
 	consumers='none'
@@ -989,13 +992,13 @@ print_bootstrap_summary() {
 		foundation='Caddy, Beszel Agent, Woodpecker Agent'
 		if ((librechat_enabled)); then consumers='LibreChat'; fi
 		if ((newapi_enabled)); then [[ "$consumers" == none ]] && consumers='New API' || consumers+=', New API'; fi
-		if ((cliproxy_enabled)); then [[ "$consumers" == none ]] && consumers='CLIProxyAPI' || consumers+=', CLIProxyAPI'; fi
 		if ((aichorouter_enabled)); then [[ "$consumers" == none ]] && consumers='Aichorouter' || consumers+=', Aichorouter'; fi
+		if ((cpapi_enabled)); then [[ "$consumers" == none ]] && consumers='CPAPI' || consumers+=', CPAPI'; fi
 	fi
 	if ((!newapi_enabled)); then disabled='New API'; fi
-	if ((!cliproxy_enabled)); then [[ "$disabled" == none ]] && disabled='CLIProxyAPI' || disabled+=', CLIProxyAPI'; fi
 	if ((!librechat_enabled)); then [[ "$disabled" == none ]] && disabled='LibreChat' || disabled+=', LibreChat'; fi
 	if ((!aichorouter_enabled)); then [[ "$disabled" == none ]] && disabled='Aichorouter (not on this node)' || disabled+=', Aichorouter (not on this node)'; fi
+	if ((!cpapi_enabled)); then [[ "$disabled" == none ]] && disabled='CPAPI (not on this node)' || disabled+=', CPAPI (not on this node)'; fi
 
 	printf '\nBootstrap complete.\n\n'
 	printf 'Node\n  ID: %s\n  Role: %s\n\n' "$NODE_ID" "$NODE_ROLE"
@@ -1009,6 +1012,7 @@ print_bootstrap_summary() {
 			printf '  LibreChat admin: https://chat-admin.%s (available after a Follower is healthy)\n' "$DOMAIN_NAME"
 		fi
 		printf '  Aichorouter: https://aichorouter.%s (available after its selected Follower is healthy)\n' "$DOMAIN_NAME"
+		printf '  CPAPI: https://cpapi.%s (available after its selected Follower is healthy)\n' "$DOMAIN_NAME"
 	else
 		if ((librechat_enabled)); then
 			origin_host="$(sed -n 's/^NODE_LIBRECHAT_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
@@ -1018,6 +1022,10 @@ print_bootstrap_summary() {
 			if ((aichorouter_enabled)); then
 				aichorouter_origin_host="$(sed -n 's/^NODE_AICHOROUTER_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
 				[[ -n "$aichorouter_origin_host" ]] && printf '  Aichorouter origin: https://%s\n' "$aichorouter_origin_host"
+			fi
+			if ((cpapi_enabled)); then
+				cpapi_origin_host="$(sed -n 's/^NODE_CPAPI_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
+				[[ -n "$cpapi_origin_host" ]] && printf '  CPAPI origin: https://%s\n' "$cpapi_origin_host"
 			fi
 		else
 			printf '  No consumer endpoints are enabled on this node.\n'

@@ -5,8 +5,10 @@ this directory.
 Each node must define `NODE_ID` and the origin host keys declared by the active
 app manifests. The Leader uses those origin fields from every Follower
 descriptor to render Caddy routes. LibreChat and legacy New API use
-active-active health-checked upstreams; CLIProxyAPI uses active-passive ordering
-from policy. Aichorouter is a singleton: its target is stored in
+active-active health-checked upstreams. Aichorouter and CPAPI are singleton
+services: each target is stored in its app policy, and only that Follower is
+deployed. Their local state is intentionally not replicated. The Aichorouter
+target is stored in
 `config/cluster/apps/aichorouter.policy`, and only that Follower is deployed.
 Keep origin names DNS-only and resolve them to the corresponding Follower
 public IP.
@@ -26,10 +28,6 @@ startup schema migrations. The pinned external image does not provide a
 cross-process migration lock, so upgrade the migration node first and wait for
 health before upgrading another replica. All replicas must use the same Neon
 DSN, `SESSION_SECRET`, and `CRYPTO_SECRET`.
-
-`CLIPROXY_PRIMARY_NODE_ID` identifies the preferred follower for the
-active-passive CLIProxyAPI route. Its origin is rendered first in the Leader's
-Caddy route; health checks fail over to the other follower origins.
 
 `NEW_API_BACKUP_NODE_ID` in `../policy.env` designates the one node that runs
 the scheduled Neon `pg_dump`. Change it together with any manual Leader

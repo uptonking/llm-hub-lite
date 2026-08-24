@@ -102,7 +102,6 @@ app_active() {
 	id="$(basename "$d")"
 	placement="$(app_placement "$d")"
 	app_policy_enabled "$id" || return 1
-	[[ "${PLATFORM_SKIP_SINGLETONS:-0}" != 1 || "$placement" != single-follower ]] || return 1
 	case "$placement" in
 	follower) [[ "$(node_role)" == follower ]] ;;
 	single-follower)
@@ -111,6 +110,11 @@ app_active() {
 		;;
 	*) return 1 ;;
 	esac
+}
+app_in_reconcile_scope() {
+	local d="$1"
+	app_active "$d" || return 1
+	[[ "${PLATFORM_SKIP_SINGLETONS:-0}" != 1 || "$(app_placement "$d")" != single-follower ]]
 }
 app_route_active() {
 	local id="$(basename "$1")"
@@ -171,7 +175,7 @@ cluster_upstreams() {
 	echo "$output"
 }
 effective_value() {
-	local k="$1" v d target target_file mode groups public_key origin_key upstream_key primary_key primary
+	local k="$1" v d target target_file mode groups public_key origin_key upstream_key primary_key primary public_host domain state_file previous_target
 	d="${CURRENT_ROUTE_DESCRIPTOR:-}"
 	v="$(env_value "$k")"
 	[[ -n "$v" ]] || v="$(node_value "$k")"
@@ -181,6 +185,13 @@ effective_value() {
 			[[ -n "$public_key" ]] || continue
 			if [[ "$k" == "$public_key" ]]; then
 				v="$(app_value "$d" "$k")"
+				if [[ -z "$v" ]]; then
+					public_host="$(descriptor_value "$d" PUBLIC_HOST)"
+					domain="$(env_value DOMAIN_NAME)"
+					if [[ -n "$public_host" && -n "$domain" ]]; then
+						if [[ "$domain" == localhost ]]; then v="http://${public_host}.localhost"; else v="https://${public_host}.${domain}"; fi
+					fi
+				fi
 			elif [[ "$k" == "$origin_key" ]]; then
 				v="$(node_value "$k")"
 			elif [[ "$k" == "$upstream_key" && "$(node_role)" == leader ]]; then
@@ -188,6 +199,11 @@ effective_value() {
 				case "$mode" in
 				singleton)
 					target="$(app_target_node "$d")"
+					if [[ "${PLATFORM_SKIP_SINGLETONS:-0}" == 1 && "$(node_role)" == leader ]]; then
+						state_file="$(singleton_state_file "$d")"
+						previous_target="$(sed -n '1p' "$state_file" 2>/dev/null || true)"
+						[[ -z "$previous_target" ]] || target="$previous_target"
+					fi
 					target_file="$CONTROL_ROOT/current/config/cluster/nodes/$target.env"
 					v="https://$(env_value "$origin_key" "$target_file")"
 					;;
@@ -254,7 +270,7 @@ commit_routes() {
 	unset RUNTIME_CONFIG_CANDIDATE
 }
 validate_cluster() {
-	local node file primary migration backup origin d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 cliproxy_enabled=0
+	local node file migration backup origin d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0
 	need_file "$CLUSTER_POLICY_FILE"
 	need_file "$NODE_CONFIG_FILE"
 	[[ "$(policy_value CLUSTER_CONFIG_VERSION)" == 1 ]] || die 'unsupported cluster policy version'
@@ -289,15 +305,9 @@ validate_cluster() {
 	[[ "$node_count" -eq "$(printf '%s\n' "$(policy_value NODE_IDS)" | tr ',' '\n' | sed '/^$/d' | sort -u | wc -l | tr -d ' ')" ]] || die 'NODE_IDS contains duplicate entries'
 	csv_has "$(policy_value NODE_IDS)" "$(leader_node_id)" || die 'LEADER_NODE_ID is absent from NODE_IDS'
 	app_policy_enabled newapi && newapi_enabled=1
-	app_policy_enabled cliproxyapi && cliproxy_enabled=1
 	if ((newapi_enabled == 1)); then
 		backup="$(policy_value NEW_API_BACKUP_NODE_ID)"
 		csv_has "$(policy_value NODE_IDS)" "$backup" || die 'NEW_API_BACKUP_NODE_ID is absent from NODE_IDS'
-	fi
-	if ((cliproxy_enabled == 1)); then
-		primary="$(policy_value CLIPROXY_PRIMARY_NODE_ID)"
-		csv_has "$(policy_value NODE_IDS)" "$primary" || die 'CLIPROXY_PRIMARY_NODE_ID is absent from NODE_IDS'
-		[[ "$primary" != "$(leader_node_id)" ]] || die 'CLIPROXY_PRIMARY_NODE_ID must be a follower'
 	fi
 	if ((newapi_enabled == 1)); then
 		migration="$(policy_value NEW_API_MIGRATION_NODE_ID)"
@@ -313,23 +323,25 @@ validate_cluster() {
 }
 validate_descriptor() {
 	local d="$1" k v rel alias services compose_file yaml_file nginx_file
-	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
+	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
 	done
 	case "$(descriptor_value "$d" SMOKE_LOCAL)" in public | healthcheck) ;; *) die "SMOKE_LOCAL must be public or healthcheck in $d/manifest.env" ;; esac
+	case "$(descriptor_value "$d" HEALTH_MODE)" in healthcheck | process) ;; *) die "HEALTH_MODE must be healthcheck or process in $d/manifest.env" ;; esac
 	[[ "$(descriptor_value "$d" MANIFEST_VERSION)" == 3 ]] || die 'unsupported app manifest version'
 	case "$(descriptor_value "$d" PLACEMENT)" in
 	follower)
 		[[ "$(descriptor_value "$d" UPSTREAM_MODE)" == active-active || "$(descriptor_value "$d" UPSTREAM_MODE)" == active-passive ]] || die "follower app must use active upstream mode: $d"
 		;;
 	single-follower)
-		for k in TARGET_NODE_KEY RUNTIME_ENV_FILE SECRET_KEYS MOVE_MODE; do
+		for k in TARGET_NODE_KEY RUNTIME_ENV_FILE SECRET_KEYS MOVE_MODE PUBLIC_URL_KEY PUBLIC_HOST; do
 			[[ -n "$(descriptor_value "$d" "$k")" ]] || die "$k is required for singleton app $d/manifest.env"
 		done
 		[[ "$(descriptor_value "$d" UPSTREAM_MODE)" == singleton ]] || die 'singleton app must use UPSTREAM_MODE=singleton'
 		[[ "$(app_target_node "$d")" != "$(leader_node_id)" ]] || die "singleton app target must be a follower: $d"
 		csv_has "$(policy_value NODE_IDS)" "$(app_target_node "$d")" || die "singleton app target is absent from inventory: $d"
+		[[ "$(descriptor_value "$d" PUBLIC_HOST)" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "invalid PUBLIC_HOST in singleton app $d/manifest.env"
 		if app_policy_enabled "$(basename "$d")" && [[ "$(node_role)" == follower && "$(node_id)" == "$(app_target_node "$d")" ]]; then
 			[[ -f "$(app_runtime_env_file "$d")" ]] || die "missing runtime env file for active singleton app: $d"
 		fi
@@ -352,17 +364,17 @@ validate_descriptor() {
 	need_file "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)"
 	grep -Fq "$alias" "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" || die "follower route does not target NETWORK_ALIAS in $d/manifest.env"
 	for k in $(descriptor_value "$d" IMAGE_KEYS); do [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && -n "$(env_value "$k" "$APP_IMAGE_ENV")" ]] || die "$k missing from image manifest"; done
-	if app_active "$d"; then
+	if app_in_reconcile_scope "$d"; then
 		app_compose "$d"
 		services="$("${compose_command[@]}" config --services 2>/dev/null || true)"
 		[[ -n "$services" ]] || die "unable to evaluate active Compose project: $d"
 		printf '%s\n' "$services" | grep -Fxq "$(descriptor_value "$d" SERVICE_NAME)" || die "SERVICE_NAME is absent from Compose project: $d"
 	fi
-	if [[ "$(basename "$d")" == newapi ]] && app_active "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
+	if [[ "$(basename "$d")" == newapi ]] && app_in_reconcile_scope "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
 		[[ "$(env_value NEW_API_SQL_DSN)" =~ ^postgres(ql)?:// ]] || die 'production New API requires a postgres:// or postgresql:// DSN'
 		[[ "$(env_value NEW_API_SQL_DSN)" != *replace-with* && "$(env_value NEW_API_SESSION_SECRET)" != *replace-with* && "$(env_value NEW_API_CRYPTO_SECRET)" != *replace-with* ]] || die 'production New API secrets and DSN must be configured'
 	fi
-	if [[ "$(basename "$d")" == librechat ]] && app_active "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
+	if [[ "$(basename "$d")" == librechat ]] && app_in_reconcile_scope "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
 		for k in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_BUCKET_NAME; do
 			[[ -n "$(env_value "$k")" && "$(env_value "$k")" != replace-with-* ]] || die "production LibreChat requires $k"
 		done
@@ -380,13 +392,21 @@ validate_descriptor() {
 			[[ -n "$k" ]] || continue
 			grep -Fq "$k" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "SQLite path is absent from Compose: $k"
 		done < <(printf '%s\n' "$(descriptor_value "$d" SQLITE_PATHS)" | tr ',' '\n')
-		if app_active "$d"; then
+		if app_in_reconcile_scope "$d"; then
 			while IFS= read -r k; do
 				[[ -n "$k" ]] || continue
 				[[ -n "$(app_value "$d" "$k")" ]] || die "production SQLite app requires $k"
 				! placeholder_value "$(app_value "$d" "$k")" || die "production SQLite app placeholder is not allowed: $k"
 			done < <(printf '%s\n' "$(descriptor_value "$d" SECRET_KEYS)" | tr ',' '\n')
 		fi
+	fi
+	if [[ "$(descriptor_value "$d" PLACEMENT)" == single-follower && "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true ]]; then
+		while IFS= read -r k; do
+			[[ -n "$k" ]] || continue
+			value="$(app_value "$d" "$k")"
+			[[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "active singleton requires a non-empty single-line secret: $k"
+			! placeholder_value "$value" || die "active singleton secret placeholder is not allowed: $k"
+		done < <(printf '%s\n' "$(descriptor_value "$d" SECRET_KEYS)" | tr ',' '\n')
 	fi
 	if [[ "$(basename "$d")" == librechat ]]; then
 		compose_file="$d/$(descriptor_value "$d" COMPOSE_FILE)"
@@ -421,7 +441,7 @@ projects_foundation() {
 }
 projects_apps() {
 	local d
-	while IFS= read -r d; do app_active "$d" && printf 'app:%s\n' "$d"; done < <(descriptor_ids)
+	while IFS= read -r d; do app_in_reconcile_scope "$d" && printf 'app:%s\n' "$d"; done < <(descriptor_ids)
 }
 all_projects() {
 	printf 'caddy\nwoodpecker-controller\nwoodpecker-worker\nwoodpecker-deployer\nbeszel-controller\nbeszel-worker\n'
@@ -466,7 +486,16 @@ validate() {
 }
 project_enabled() {
 	[[ "$1" == caddy ]] && return 0
-	[[ "$1" == app:* ]] && app_active "${1#app:}" || foundation_active "$1"
+	if [[ "$1" == app:* ]]; then
+		# Normal application reconciliation deliberately skips singleton start and
+		# stop operations. Explicit singleton-stop sets the force flag below.
+		if [[ "${PLATFORM_SKIP_SINGLETONS:-0}" == 1 && "${PLATFORM_FORCE_SINGLETON_ACTION:-0}" != 1 && "$(app_placement "${1#app:}")" == single-follower ]]; then
+			return 0
+		fi
+		app_active "${1#app:}"
+	else
+		foundation_active "$1"
+	fi
 }
 beszel_enrollment_pending() {
 	[[ "$1" == beszel-worker && (! -s "$(env_value BESZEL_KEY_FILE "$FOUNDATION_ENV_ROOT/beszel.env")" || ! -s "$(env_value BESZEL_TOKEN_FILE "$FOUNDATION_ENV_ROOT/beszel.env")") ]]
@@ -480,14 +509,21 @@ project_ids() {
 	"${compose_command[@]}" ps --all -q
 }
 project_is_healthy() {
-	local ids id state
+	local ids id state health_mode=process
 	project_enabled "$1" || return 0
+	if [[ "$1" == app:* ]]; then
+		health_mode="$(descriptor_value "${1#app:}" HEALTH_MODE)"
+	fi
 	ids="$(project_ids "$1")"
 	[[ -n "$ids" ]] || return 1
 	while IFS= read -r id; do
 		[[ -n "$id" ]] || continue
 		state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
-		[[ "$state" == 'running healthy' || "$state" == 'running none' ]] || return 1
+		if [[ "$health_mode" == healthcheck ]]; then
+			[[ "$state" == 'running healthy' ]] || return 1
+		else
+			[[ "$state" == 'running healthy' || "$state" == 'running none' ]] || return 1
+		fi
 	done <<<"$ids"
 }
 report_compose_failure() {
@@ -584,11 +620,11 @@ recover() {
 	local p
 	while IFS= read -r p; do start_project "$p"; done < <(projects_foundation)
 	health_scope foundation || die 'foundation recovery failed'
-	commit_routes
-	reload_caddy
 	while IFS= read -r p; do start_project "$p" || printf 'platformctl: consumer start failed: %s\n' "$p" >&2; done < <(projects_apps)
 	stop_inactive
 	health_scope consumers || printf 'platformctl: consumer recovery is incomplete; foundation remains healthy and recovery will retry\n' >&2
+	commit_routes
+	reload_caddy
 }
 sync() {
 	local scope="${1:-all}" p
@@ -598,13 +634,13 @@ sync() {
 		while IFS= read -r p; do start_project "$p"; done < <(projects_foundation)
 		health_scope foundation || die 'foundation synchronization failed'
 	fi
-	commit_routes
-	reload_caddy
 	if [[ "$scope" == apps || "$scope" == all ]]; then
 		while IFS= read -r p; do start_project "$p"; done < <(projects_apps)
 		stop_inactive
 		health_scope consumers
 	fi
+	commit_routes
+	reload_caddy
 }
 restart_project() {
 	local p="$1"
@@ -664,16 +700,43 @@ singleton_descriptor() {
 	die "unknown singleton app: $wanted"
 }
 singleton_state_file() { printf '%s/%s.previous-target\n' "$SINGLETON_STATE_ROOT" "$(basename "$1")"; }
+singleton_transition_file() { printf '%s/%s.transition.env\n' "$SINGLETON_STATE_ROOT" "$(basename "$1")"; }
+transition_value() {
+	local key="$1" file="$2"
+	[[ -r "$file" ]] || return 0
+	sed -n "s/^${key}=//p" "$file" | tail -n1
+}
+transition_set() {
+	local file="$1" key="$2" value="$3" tmp
+	install -d -m 700 "$SINGLETON_STATE_ROOT"
+	tmp="$(mktemp "$file.XXXXXX")"
+	if [[ -f "$file" ]]; then sed "/^${key}=/d" "$file" >"$tmp"; fi
+	printf '%s=%s\n' "$key" "$value" >>"$tmp"
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$file"
+}
+transition_begin() {
+	local file="$1" app="$2" old_target="$3" new_target="$4" release="$5" archive="$6" tmp
+	install -d -m 700 "$SINGLETON_STATE_ROOT"
+	tmp="$(mktemp "$file.XXXXXX")"
+	{
+		printf 'VERSION=1\nAPP_ID=%s\nOLD_TARGET=%s\nNEW_TARGET=%s\nRELEASE_SHA=%s\nPHASE=archiving\n' "$app" "$old_target" "$new_target" "$release"
+		printf 'ARCHIVE_PATH=%s\nSTARTED_UTC=%s\nUPDATED_UTC=%s\n' "$archive" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+	} >"$tmp"
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$file"
+}
 singleton_route_keys() {
 	local d="$1" groups
 	groups="$(descriptor_value "$d" ROUTE_GROUPS)"
 	printf '%s\n' "$groups" | tr ';' '\n' | head -n1
 }
 singleton_prepare() {
-	local d="$1" previous="${SINGLETON_PREVIOUS_TARGET:-}" target base rel root archive state_file
+	local d="$1" previous="${SINGLETON_PREVIOUS_TARGET:-}" target base rel root archive state_file journal release phase journal_target journal_release
 	[[ "$(node_role)" == follower ]] || die 'singleton prepare must run on a follower'
 	d="$(singleton_descriptor "$d")"
 	state_file="$(singleton_state_file "$d")"
+	journal="$(singleton_transition_file "$d")"
 	[[ -n "$previous" ]] || previous="$(cat "$state_file" 2>/dev/null || true)"
 	target="$(app_target_node "$d")"
 	[[ "$(node_id)" == "$target" ]] || die 'singleton prepare must run on the configured target'
@@ -681,27 +744,76 @@ singleton_prepare() {
 		rm -f -- "$state_file"
 		return 0
 	fi
+	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
 	base="$(data_root)"
 	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
 	[[ "$rel" != /* && "$rel" != *..* && "$rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die "unsafe singleton data path: $rel"
 	root="$base/$rel"
+	journal_target="$(transition_value NEW_TARGET "$journal")"
+	journal_release="$(transition_value RELEASE_SHA "$journal")"
+	phase="$(transition_value PHASE "$journal")"
+	if [[ "$journal_target" == "$target" && "$journal_release" == "$release" && "$phase" != failed && "$phase" != completed ]]; then
+		archive="$(transition_value ARCHIVE_PATH "$journal")"
+		if [[ -n "$archive" && -e "$archive" && ! -e "$root" ]]; then install -d -m 700 "$root"; fi
+		if [[ "$phase" == prepared || "$phase" == origin-healthy ]]; then
+			rm -f -- "$state_file"
+			return 0
+		fi
+	fi
 	if [[ ! -d "$root" ]]; then
+		archive="$root.retained.$(date -u '+%Y%m%dT%H%M%SZ')"
+		transition_begin "$journal" "$(basename "$d")" "$previous" "$target" "$release" "$archive"
+		install -d -m 700 "$root"
+		transition_set "$journal" PHASE prepared
 		rm -f -- "$state_file"
 		return 0
 	fi
 	if ! find "$root" -mindepth 1 -print -quit | grep -q .; then
+		transition_begin "$journal" "$(basename "$d")" "$previous" "$target" "$release" ""
+		transition_set "$journal" PHASE prepared
 		rm -f -- "$state_file"
 		return 0
 	fi
 	stop_project "app:$d" || die "unable to stop existing singleton before fresh prepare"
 	archive="$root.retained.$(date -u '+%Y%m%dT%H%M%SZ')"
+	transition_begin "$journal" "$(basename "$d")" "$previous" "$target" "$release" "$archive"
 	mv -- "$root" "$archive"
 	install -d -m 700 "$root"
+	transition_set "$journal" PHASE prepared
 	rm -f -- "$state_file"
 	printf 'archived previous singleton data at %s and created fresh path %s\n' "$archive" "$root"
 }
+singleton_origin_smoke() {
+	local d="$1" target origin_key origin health expected response journal release
+	[[ "$(node_role)" == follower ]] || die 'singleton origin smoke must run on a follower'
+	d="$(singleton_descriptor "$d")"
+	target="$(app_target_node "$d")"
+	[[ "$(node_id)" == "$target" ]] || die 'singleton origin smoke must run on the configured target'
+	IFS='|' read -r _ origin_key _ <<EOF
+$(singleton_route_keys "$d")
+EOF
+	origin="$(node_value "$origin_key")"
+	health="$(descriptor_value "$d" HEALTH_URL)"
+	expected="$(descriptor_value "$d" HEALTH_EXPECT)"
+	[[ -n "$origin" && -n "$health" ]] || die "singleton origin smoke is missing origin or health path: $(basename "$d")"
+	response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
+	[[ -z "$expected" || "$response" == *"$expected"* ]] || die "singleton origin response did not match HEALTH_EXPECT: $(basename "$d")"
+	journal="$(singleton_transition_file "$d")"
+	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
+	if [[ "$(transition_value RELEASE_SHA "$journal")" == "$release" ]]; then transition_set "$journal" PHASE origin-healthy; fi
+}
+singleton_transition_fail() {
+	local d="$1" journal
+	[[ "$(node_role)" == follower ]] || die 'singleton transition failure must run on a follower'
+	d="$(singleton_descriptor "$d")"
+	journal="$(singleton_transition_file "$d")"
+	[[ -f "$journal" ]] || return 0
+	transition_set "$journal" PHASE failed
+	transition_set "$journal" FAILED_UTC "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+	printf 'singleton transition marked failed; retained journal at %s\n' "$journal" >&2
+}
 singleton_switch() {
-	local d="$1" target origin_key origin public_key public_url enabled
+	local d="$1" target origin_key origin public_key public_url enabled public_host domain journal release previous state_file
 	[[ "$(node_role)" == leader ]] || die 'singleton switch must run on the Leader'
 	d="$(singleton_descriptor "$d")"
 	target="$(app_target_node "$d")"
@@ -719,19 +831,41 @@ EOF
 	curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin$(descriptor_value "$d" HEALTH_URL)" >/dev/null || die "singleton origin is unhealthy: $origin"
 	PLATFORM_SKIP_SINGLETONS=0 sync apps
 	public_url="$(app_value "$d" "$public_key")"
+	if [[ -z "$public_url" ]]; then
+		public_host="$(descriptor_value "$d" PUBLIC_HOST)"
+		domain="$(env_value DOMAIN_NAME)"
+		if [[ -n "$public_host" && -n "$domain" ]]; then
+			if [[ "$domain" == localhost ]]; then public_url="http://${public_host}.localhost"; else public_url="https://${public_host}.${domain}"; fi
+		fi
+	fi
 	[[ -z "$public_url" ]] || curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "${public_url%/}$(descriptor_value "$d" HEALTH_URL)" >/dev/null || die 'singleton public smoke failed'
+	journal="$(singleton_transition_file "$d")"
+	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
+	install -d -m 700 "$SINGLETON_STATE_ROOT"
+	state_file="$(singleton_state_file "$d")"
+	previous="$(cat "$state_file" 2>/dev/null || true)"
+	if [[ ! -f "$journal" ]]; then transition_begin "$journal" "$(basename "$d")" "$previous" "$target" "$release" ""; fi
+	transition_set "$journal" RELEASE_SHA "$release"
+	transition_set "$journal" PHASE switched
+	transition_set "$journal" SWITCHED_UTC "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+	rm -f -- "$state_file"
 }
 singleton_stop() {
-	local d="$1" rel root base runtime_env state_file
+	local d="$1" rel root base runtime_env state_file journal
 	[[ "$(node_role)" == follower ]] || die 'singleton stop must run on a follower'
 	d="$(singleton_descriptor "$d")"
 	state_file="$(singleton_state_file "$d")"
+	journal="$(singleton_transition_file "$d")"
 	[[ "$(node_id)" == "$(app_target_node "$d")" && "$(app_policy_enabled "$(basename "$d")" && printf true || printf false)" == true ]] && {
 		printf 'retained active singleton %s on configured target %s\n' "$(basename "$d")" "$(node_id)"
+		if [[ "${SINGLETON_FINAL_STOP:-0}" == 1 && -f "$journal" ]]; then
+			transition_set "$journal" PHASE completed
+			transition_set "$journal" COMPLETED_UTC "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+		fi
 		return 0
 	}
 	app_active "$d" && return 0
-	stop_project "app:$d" || die "unable to stop singleton containers for $(basename "$d")"
+	PLATFORM_FORCE_SINGLETON_ACTION=1 stop_project "app:$d" || die "unable to stop singleton containers for $(basename "$d")"
 	rm -f -- "$state_file"
 	base="$(data_root)"
 	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
@@ -740,6 +874,10 @@ singleton_stop() {
 	case "$root" in "$base"/*) ;; *) die 'refusing to report data outside DATA_ROOT' ;; esac
 	runtime_env="$(app_runtime_env_file "$d")"
 	printf 'stopped singleton %s; retained data at %s%s\n' "$(basename "$d")" "$root" "${runtime_env:+ and runtime secrets at $runtime_env}"
+	if [[ "${SINGLETON_FINAL_STOP:-0}" == 1 && -f "$journal" ]]; then
+		transition_set "$journal" PHASE completed
+		transition_set "$journal" COMPLETED_UTC "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+	fi
 }
 op="${1:-status}"
 case "$op" in status | health | validate) ;; *) acquire_lock ;; esac
@@ -764,7 +902,15 @@ singleton-prepare)
 	[[ -n "${2:-}" ]] || die 'usage: platformctl singleton-prepare <app-id>'
 	singleton_prepare "$2"
 	;;
+singleton-origin-smoke)
+	[[ -n "${2:-}" ]] || die 'usage: platformctl singleton-origin-smoke <app-id>'
+	singleton_origin_smoke "$2"
+	;;
+singleton-transition-fail)
+	[[ -n "${2:-}" ]] || die 'usage: platformctl singleton-transition-fail <app-id>'
+	singleton_transition_fail "$2"
+	;;
 smoke) [[ "${2:-}" == all ]] && while IFS= read -r d; do app_route_active "$d" && smoke_project "$d"; done < <(descriptor_ids) || {
 	[[ "${2:-}" == app:* ]] || die 'usage: platformctl smoke {all|app:<descriptor>}'
 	smoke_project "${2#app:}"
-} ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|status|health|recover|ensure-network|start|sync|restart|recreate|stop|singleton-prepare|singleton-switch|singleton-stop|smoke|maintenance|reload|backup|restore}' ;; esac
+} ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|status|health|recover|ensure-network|start|sync|restart|recreate|stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|maintenance|reload|backup|restore}' ;; esac

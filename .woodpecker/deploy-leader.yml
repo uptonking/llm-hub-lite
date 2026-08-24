@@ -4,10 +4,8 @@ when:
     branch: main
     path:
       include:
-        - apps/cliproxyapi/**
         - apps/librechat/**
         - apps/newapi/**
-        - config/cluster/apps/cliproxyapi.policy
         - config/cluster/apps/librechat.policy
         - config/cluster/apps/newapi.policy
         - config/Caddyfile

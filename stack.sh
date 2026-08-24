@@ -61,7 +61,7 @@ cluster_upstreams() {
 	printf '%s\n' "$output"
 }
 get() {
-	local k="$1" v domain groups public_key origin_key upstream_key mode target primary_key primary host
+	local k="$1" v domain groups public_key origin_key upstream_key mode target primary_key primary host public_host
 	v="$(sed -n "s/^$k=//p" "$env_file" | tail -n1)"
 	[[ -n "$v" ]] || v="$(sed -n "s/^$k=//p" "$node_config" 2>/dev/null | tail -n1)"
 	domain="$(sed -n 's/^DOMAIN_NAME=//p' "$env_file" | tail -n1)"
@@ -71,6 +71,12 @@ get() {
 			[[ -n "$public_key" ]] || continue
 			if [[ "$k" == "$public_key" ]]; then
 				v="$(sed -n "s/^$k=//p" "$env_file" | tail -n1)"
+				if [[ -z "$v" ]]; then
+					public_host="$(sed -n 's/^PUBLIC_HOST=//p' "$CURRENT_ROUTE_DESCRIPTOR/manifest.env" | tail -n1)"
+					if [[ -n "$public_host" && -n "$domain" ]]; then
+						if [[ "$domain" == localhost ]]; then v="http://${public_host}.localhost"; else v="https://${public_host}.${domain}"; fi
+					fi
+				fi
 			elif [[ "$k" == "$origin_key" ]]; then
 				v="$(sed -n "s/^$k=//p" "$node_config" | tail -n1)"
 			elif [[ "$k" == "$upstream_key" && "$role" == leader ]]; then

@@ -10,8 +10,15 @@ umask 077
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 app_id="${1:-}"
 config_root="${CONFIG_ROOT:-/etc/llm-hub-lite}"
+reset_config=0
+if [[ "${2:-}" == --reset-config ]]; then
+	reset_config=1
+elif [[ -n "${2:-}" ]]; then
+	printf 'usage: %s <app-id> [--reset-config]\n' "$0" >&2
+	exit 2
+fi
 [[ -n "$app_id" ]] || {
-	printf 'usage: %s <app-id>\n' "$0" >&2
+	printf 'usage: %s <app-id> [--reset-config]\n' "$0" >&2
 	exit 2
 }
 manifest="$root/apps/$app_id/manifest.env"
@@ -80,6 +87,10 @@ while IFS= read -r key; do
 		printf '%s is required\n' "$key" >&2
 		exit 1
 	}
+	[[ "$secret_value" != *$'\n'* && "$secret_value" != *$'\r'* ]] || {
+		printf '%s must be a single-line value\n' "$key" >&2
+		exit 1
+	}
 	tmp_key="$(mktemp "$(dirname "$runtime")/.key.XXXXXX")"
 	sed "/^${key}=/d" "$runtime_tmp" >"$tmp_key"
 	printf '%s=%s\n' "$key" "$secret_value" >>"$tmp_key"
@@ -90,3 +101,20 @@ chmod 600 "$runtime_tmp"
 mv -f "$runtime_tmp" "$runtime"
 trap - EXIT
 printf 'Wrote %s with mode 600 for %s.\n' "$runtime" "$app_id"
+if ((reset_config)); then
+	app_env="${APP_ENV:-/opt/apps/llm-hub-lite/shared/.env.prod}"
+	data_root="$(sed -n 's/^DATA_ROOT=//p' "$app_env" 2>/dev/null | tail -n1)"
+	data_root="${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}"
+	data_rel="$(value DATA_ROOT_REL)"
+	marker_rel="$(value CONFIG_RESET_MARKER_REL)"
+	marker_rel="${marker_rel:-.reset-config}"
+	[[ "$data_rel" != /* && "$data_rel" != *..* && "$data_rel" =~ ^[A-Za-z0-9._/-]+$ && "$marker_rel" != /* && "$marker_rel" != *..* && "$marker_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || {
+		printf 'invalid data or reset marker path\n' >&2
+		exit 1
+	}
+	marker="$data_root/$data_rel/$marker_rel"
+	install -d -m 700 "$(dirname "$marker")"
+	: >"$marker"
+	chmod 600 "$marker"
+	printf 'Queued a one-shot configuration reset marker at %s.\n' "$marker"
+fi

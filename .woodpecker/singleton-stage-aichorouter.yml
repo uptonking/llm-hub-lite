@@ -7,8 +7,9 @@ when:
         - apps/aichorouter/**
         - config/cluster/apps/aichorouter.policy
         - ops/images.apps.prod.env
-        - config/Caddyfile
-        - config/routes.d/**
+
+depends_on:
+  - cluster-reconcile-worker-2
 
 labels:
   node: worker-1

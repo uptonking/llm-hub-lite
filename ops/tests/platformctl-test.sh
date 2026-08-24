@@ -10,10 +10,14 @@ for f in "$repo_root"/compose/foundation/*.yml; do cp "$f" "$tmp/foundation/"; d
 cp "$repo_root"/ops/foundation/*.env.example "$tmp/foundation/env/"
 cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
 cp "$repo_root"/ops/images.*.prod.env "$tmp/config/"
+cat >"$tmp/config/cpapi.env" <<'EOF'
+CPAPI_API_KEY=test-api-key
+CPAPI_MANAGEMENT_KEY=test-management-key
+EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi.example.invalid
-NODE_CLIPROXY_ORIGIN_HOST=worker2-cpa.example.invalid
+NODE_CPAPI_ORIGIN_HOST=worker2-cpapi.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
@@ -24,7 +28,7 @@ case "$*" in *" ps --all -q"*) printf 'container-id\n';; esac
 case "$*" in
   *app-librechat*) printf 'librechat-api\nlibrechat-admin-panel\nlibrechat-client\n';;
   *app-newapi*) printf 'newapi\n';;
-  *app-cliproxyapi*) printf 'cliproxyapi\n';;
+  *app-cpapi*) printf 'cpapi\n';;
   *app-aichorouter*) printf 'aichorouter\n';;
 esac
 exit 0
@@ -56,10 +60,12 @@ bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'Do not evaluate an inactive app' "$repo_root/ops/platformctl.sh"
 grep -Fq -- '--force-recreate --wait' "$repo_root/ops/platformctl.sh"
 grep -Fq 'Compose project state after failed health wait' "$repo_root/ops/platformctl.sh"
+grep -Fq 'app_in_reconcile_scope' "$repo_root/ops/platformctl.sh"
+grep -Fq 'singleton-origin-smoke' "$repo_root/ops/platformctl.sh"
 grep -Fq 'oom={{.State.OOMKilled}}' "$repo_root/ops/platformctl.sh"
 grep -Fq 'LibreChat Upstash Redis URI must use TLS (rediss://)' "$repo_root/ops/platformctl.sh"
 [[ -f "$tmp/app/shared/runtime/config/Caddyfile" ]]
-[[ ! -e "$tmp/app/shared/runtime/config/routes.d/cliproxyapi.caddy" ]]
+grep -Fq 'cpapi.localhost' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
 grep -Fq 'lb_policy random_choose 2' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'header_up Host {http.reverse_proxy.upstream.hostport}' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'reverse_proxy https://worker1-aichorouter-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
@@ -102,15 +108,23 @@ cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
 bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'librechat-client:80' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 bash "$repo_root/ops/platformctl.sh" smoke "app:$tmp/control/current/apps/librechat"
+cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.original"
+sed 's/^CPAPI_TARGET_NODE_ID=.*/CPAPI_TARGET_NODE_ID=worker-2/' "$tmp/cpapi-policy.original" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+mkdir -p "$tmp/config/singleton-state"
+printf 'worker-1\n' >"$tmp/config/singleton-state/cpapi.previous-target"
+PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate
+grep -Fq 'reverse_proxy https://worker1-cpapi-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
+cp "$tmp/cpapi-policy.original" "$tmp/control/current/config/cluster/apps/cpapi.policy"
 policy_backup="$tmp/policy.original"
 cp "$tmp/control/current/config/cluster/policy.env" "$policy_backup"
 {
-	sed -E '/^(CLIPROXY_PRIMARY_NODE_ID|NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' "$policy_backup"
+	sed -E '/^(NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' "$policy_backup"
 } >"$tmp/control/current/config/cluster/policy.env"
 sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
 mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
-sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/cliproxyapi.policy" >"$tmp/policy.tmp"
-mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/cliproxyapi.policy"
+sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/cpapi.policy" >"$tmp/policy.tmp"
+mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/cpapi.policy"
 bash "$repo_root/ops/platformctl.sh" validate
 mv "$policy_backup" "$tmp/control/current/config/cluster/policy.env"
 awk -F= '{if ($1 == "NODE_ID") print "NODE_ID=rogue"; else print}' "$tmp/config/node.env" >"$tmp/node.tmp"

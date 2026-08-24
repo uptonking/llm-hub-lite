@@ -1,0 +1,6 @@
+{$NODE_CPAPI_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy cpapi:8317 {
+    flush_interval -1
+  }
+}

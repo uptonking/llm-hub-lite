@@ -7,8 +7,6 @@ when:
         - apps/aichorouter/**
         - config/cluster/apps/aichorouter.policy
         - ops/images.apps.prod.env
-        - config/Caddyfile
-        - config/routes.d/**
 
 depends_on:
   - singleton-stop-aichorouter-worker-1
@@ -37,4 +35,4 @@ steps:
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
     commands:
-      - SINGLETON_APP_ID=aichorouter DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit singleton-stop "$CI_COMMIT_SHA"
+      - SINGLETON_APP_ID=aichorouter DEPLOY_SKIP_SINGLETONS=1 SINGLETON_FINAL_STOP=1 /usr/local/bin/platform-submit singleton-stop "$CI_COMMIT_SHA"

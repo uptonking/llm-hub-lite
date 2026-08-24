@@ -1,0 +1,66 @@
+name: app-cpapi
+services:
+  cpapi:
+    image: ${CPAPI_IMAGE:?CPAPI_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    mem_limit: ${CPAPI_MEMORY_LIMIT:-256m}
+    cpus: ${CPAPI_CPUS:-0.25}
+    pids_limit: ${CPAPI_PIDS_LIMIT:-128}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: app-cpapi
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      GOMAXPROCS: ${CPAPI_GOMAXPROCS:-1}
+      GOMEMLIMIT: ${CPAPI_GOMEMLIMIT:-192MiB}
+    working_dir: /CLIProxyAPI
+    command:
+      - sh
+      - -eu
+      - -c
+      - >-
+        mkdir -p /runtime/auths /runtime/plugins; seed=/run/configs/cpapi_config_seed; config=/runtime/config.yaml; seed_hash_file=/runtime/.config-seed.sha256; seed_hash="$$(sha256sum "$$seed" | awk '{print $$1}')"; current_hash="$$(sed -n '1p' "$$seed_hash_file" 2>/dev/null || true)"; if [ ! -f "$$config" ] || [ "$$seed_hash" != "$$current_hash" ] || [ -f /runtime/.reset-config ]; then if [ -f "$$config" ]; then cp "$$config" "$$config.backup.$$(date -u +%Y%m%dT%H%M%SZ)"; fi; tmp="$$config.tmp.$$"; cp "$$seed" "$$tmp"; chmod 600 "$$tmp"; mv -f "$$tmp" "$$config"; printf '%s\n' "$$seed_hash" >"$$seed_hash_file"; chmod 600 "$$seed_hash_file"; rm -f /runtime/.reset-config; fi; exec ./CLIProxyAPI --config /runtime/config.yaml
+    configs:
+      - source: cpapi_config_seed
+        target: /run/configs/cpapi_config_seed
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/cpapi:/runtime
+    networks: [cpapi_private, platform_edge]
+configs:
+  cpapi_config_seed:
+    content: |
+      host: ""
+      port: 8317
+      tls:
+        enable: false
+      remote-management:
+        allow-remote: true
+        secret-key: "${CPAPI_MANAGEMENT_KEY:?CPAPI_MANAGEMENT_KEY must be set}"
+        disable-control-panel: false
+        disable-auto-update-panel: true
+      auth-dir: "/runtime/auths"
+      api-keys:
+        - "${CPAPI_API_KEY:?CPAPI_API_KEY must be set}"
+      debug: false
+      pprof:
+        enable: false
+      plugins:
+        enabled: false
+        dir: "/runtime/plugins"
+      commercial-mode: true
+      logging-to-file: false
+      logs-max-total-size-mb: 50
+      error-logs-max-files: 5
+      usage-statistics-enabled: false
+      request-retry: 1
+      max-retry-credentials: 2
+      max-retry-interval: 15
+      save-cooldown-status: false
+networks:
+  cpapi_private:
+    name: app-cpapi_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

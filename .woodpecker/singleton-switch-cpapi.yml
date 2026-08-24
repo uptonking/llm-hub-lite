@@ -4,13 +4,12 @@ when:
     branch: main
     path:
       include:
-        - config/cluster/policy.env
-        - config/cluster/nodes/**
-        - apps/aichorouter/**
         - apps/cpapi/**
-        - config/cluster/apps/aichorouter.policy
         - config/cluster/apps/cpapi.policy
+        - ops/images.apps.prod.env
 
+depends_on:
+  - singleton-stage-cpapi
 
 labels:
   node: leader
@@ -20,10 +19,10 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-cluster-reconcile
+  group: llm-hub-lite-singleton-cpapi
 
 steps:
-  reconcile:
+  switch:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -34,5 +33,6 @@ steps:
       - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite
       - /etc/llm-hub-lite:/etc/llm-hub-lite
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
+      - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
     commands:
-      - DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit cluster-reconcile "$CI_COMMIT_SHA"
+      - SINGLETON_APP_ID=cpapi DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit singleton-switch "$CI_COMMIT_SHA"

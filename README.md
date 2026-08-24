@@ -73,10 +73,15 @@ directory; any previous local state is archived for manual recovery. The
 controller records an in-progress target transition under
 `/etc/llm-hub-lite/singleton-state` so an overlapping normal application
 workflow cannot accidentally reuse stale SQLite data; the marker is removed
-after the staged target is prepared.
+after the staged target is prepared. The journal records the old and new
+targets, release SHA, archive path, and phase (`prepared`, `origin-healthy`,
+`switched`, or `failed`). A failed stage leaves the old Leader route serving
+and preserves the journal/archive for an idempotent retry; do not delete the
+journal until the target has been verified or deliberately rolled back.
 
-New API and CLIProxyAPI remain as dormant manifests and are disabled by the
-committed policy. LibreChat is enabled on Followers and is published at
+Legacy New API remains as a dormant manifest and is disabled by the committed
+policy. CPAPI is an enabled singleton consumer at `cpapi.aichorage.de` and is
+unrelated to the legacy New API. LibreChat is enabled on Followers and is published at
 `chat.aichorage.de` and `chat-admin.aichorage.de` . It uses MongoDB Atlas and
 Upstash Redis; provide `LIBRECHAT_MONGO_URI` and `LIBRECHAT_REDIS_URI` (plus
 the generated JWT and admin-panel secrets) in the root-only bundle or during
@@ -120,6 +125,7 @@ On the selected follower, provision its root-only secrets once:
 
 ```bash
 sudo /opt/platform/control/current/ops/configure-app-secrets.sh aichorouter
+sudo /opt/platform/control/current/ops/configure-app-secrets.sh cpapi
 ```
 
 The helper reads `SECRET_KEYS` , `RUNTIME_ENV_FILE` , and `POLICY_FILE` from the
@@ -133,10 +139,24 @@ directory, then remove that exact directory and the old runtime file under
 `/etc/llm-hub-lite` when it is no longer needed.
 
 The generated Woodpecker singleton workflow stages the new image/configuration
-on that follower, switches the Leader route, then stops old singleton
-containers in stable node order. Data and runtime secrets are retained. Normal
-application workflows set `DEPLOY_SKIP_SINGLETONS=1` and never start a
-singleton on the wrong node.
+on that follower, verifies its origin health, switches the Leader route, then
+stops old singleton containers in stable node order. Data and runtime secrets
+are retained. Normal application workflows set `DEPLOY_SKIP_SINGLETONS=1` and
+leave configured singleton containers untouched; they only reconcile normal
+follower applications such as LibreChat.
+
+CPAPI's checked-in configuration seed is reconciled by hash at container start.
+Provider/auth state under its runtime directory is retained. To rotate the
+management or API key and deliberately replace the persisted configuration,
+run this on the selected follower during maintenance:
+
+```bash
+sudo /opt/platform/control/current/ops/configure-app-secrets.sh cpapi --reset-config
+sudo platformctl recreate app:/opt/platform/control/current/apps/cpapi
+```
+
+The reset marker is consumed once and the previous config is saved beside the
+new one. A normal restart does not reset CPAPI configuration.
 
 The minimal LibreChat profile runs exactly three containers on each Follower:
 the API, admin panel, and Nginx client. The API is capped at 512 MiB and 384
@@ -175,6 +195,7 @@ cp .env.dev.example .env.dev
     - Beszel agent
     - LibreChat
     - Aichorouter (the default singleton target)
+    - CPAPI (the default singleton target)
 - Follower worker-2:
     - Caddy
     - Woodpecker agent
@@ -332,7 +353,11 @@ Restic repository and password, LibreChat Atlas/Upstash/R2 values, and the
 Woodpecker OAuth values when prompted. For non-interactive bootstrap, provide
 the same values through environment variables or root-only files; never create
 different shared secrets independently on different nodes.
-On the Aichorouter target follower, the interactive bootstrap also prompts for `AICHOROUTER_SESSION_SECRET` and `AICHOROUTER_CRYPTO_SECRET`; these are singleton-local secrets and are intentionally not copied from the Leader.
+On the Aichorouter and CPAPI target follower, the interactive bootstrap also
+prompts for `AICHOROUTER_SESSION_SECRET`, `AICHOROUTER_CRYPTO_SECRET`,
+`CPAPI_API_KEY`, and `CPAPI_MANAGEMENT_KEY`; these singleton-local secrets are
+intentionally not copied from the Leader. The CPAPI management panel is enabled
+and protected by its management key.
 
 After bootstrapping the Leader, copy the root-only
 `/etc/llm-hub-lite/beszel-enrollment.env` bundle to each follower (or pass its
@@ -430,8 +455,8 @@ cutover. No address change belongs in Git. Verify each origin with
 Leader promotion is deliberately manual because Woodpecker Server and Beszel
 Hub are SQLite controllers. Freeze deployments, restore the latest verified
 remote Restic snapshot on the candidate, set `LEADER_NODE_ID` in the policy,
-and move `CLIPROXY_PRIMARY_NODE_ID` , `NEW_API_MIGRATION_NODE_ID` , and
-`NEW_API_BACKUP_NODE_ID` to follower IDs if any currently points at the
+and move `NEW_API_MIGRATION_NODE_ID` and `NEW_API_BACKUP_NODE_ID` to follower
+IDs if either currently points at the
 candidate. During the maintenance window, set the candidate's public address
 as `LEADER_PUBLIC_IP` in every node's root-only runtime configuration and in
 the candidate's shared bundle. Run `cluster-reconcile` ,
@@ -451,10 +476,14 @@ the remaining followers; never upgrade two replicas concurrently. The node
 named by `NEW_API_BACKUP_NODE_ID` is the only node that runs `pg_dump` ; every
 node still backs up its local runtime and SQLite state.
 
-CLIProxyAPI is active-passive. `CLIPROXY_PRIMARY_NODE_ID` controls the first
-Caddy origin; health checks fail over to the remaining follower origins. Change
-that policy field and push it when moving the primary. Its local auth/plugin
-state is not replicated, so failover requires persisted state on the target.
+CPAPI is a separate singleton consumer at `cpapi.aichorage.de`, unrelated to
+the retained legacy New API. Its target follower is stored in the CPAPI app
+policy, and its local auth/configuration state is intentionally not replicated.
+Moving it is a fresh deployment with data loss allowed; provision its API and
+management keys on the target follower before running the generated singleton
+stage/switch workflow. The management panel remains enabled and is protected
+by `CPAPI_MANAGEMENT_KEY`. CPAPI has no host-published ports and no Redis or
+database dependency; its default profile is capped at 256 MiB and 0.25 CPU.
 
 LibreChat accounts and conversations live in MongoDB Atlas, while shared cache
 and stream state lives in Upstash. Local Restic snapshots include LibreChat
@@ -506,7 +535,10 @@ this path. The committed cluster policy and node inventory under
 `cluster-reconcile` path. Foundation Compose
 files, foundation images, deployment scripts, and runner images remain explicit
 reviewed workflows; they are deliberately rejected by an ordinary consumer
-deployment.
+deployment. Singleton source or target-policy changes also trigger the
+generated `cluster-reconcile` chain first; singleton stage waits for that chain
+before preparing the selected Follower, preventing a placement change from
+racing inventory reconciliation.
 
 The rollout is ordered rather than a distributed transaction. If a node is
 offline or fails health checks, its deployment rolls back locally and the

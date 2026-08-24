@@ -75,17 +75,26 @@ app_enabled_for_image() {
 	fi
 }
 image_required() {
-	case "$1" in
+	local key="$1" descriptor image_key app_id
+	case "$key" in
 	CADDY_IMAGE) return 0 ;;
 	WOODPECKER_SERVER_IMAGE) foundation_enabled woodpecker-controller ;;
 	WOODPECKER_AGENT_IMAGE) foundation_enabled woodpecker-worker || foundation_enabled woodpecker-deployer ;;
 	BESZEL_HUB_IMAGE) foundation_enabled beszel-controller ;;
 	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) foundation_enabled beszel-worker ;;
 	NEW_API_IMAGE) app_enabled_for_image newapi ;;
-	CLIPROXY_IMAGE) app_enabled_for_image cliproxyapi ;;
 	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) app_enabled_for_image librechat ;;
-	AICHOROUTER_IMAGE) app_enabled_for_image aichorouter ;;
-	*) return 0 ;;
+	*)
+		while IFS= read -r descriptor; do
+			while IFS= read -r image_key; do
+				[[ "$image_key" == "$key" ]] || continue
+				app_id="$(sed -n 's/^APP_ID=//p' "$descriptor" | tail -n1)"
+				app_enabled_for_image "$app_id"
+				return
+			done < <(sed -n 's/^IMAGE_KEYS=//p' "$descriptor" | tail -n1 | tr ' ' '\n')
+		done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+		return 1
+		;;
 	esac
 }
 
@@ -213,6 +222,21 @@ record_singleton_transitions() {
 		chmod 600 "$tmp"
 		mv -f -- "$tmp" "$state_file"
 	done < <(find "$new_release/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+}
+stop_removed_projects() {
+	local old_release="$1" new_release="$2" manifest app project id
+	[[ -n "$old_release" && -d "$old_release/apps" ]] || return 0
+	while IFS= read -r manifest; do
+		app="$(basename "$(dirname "$manifest")")"
+		[[ -f "$new_release/apps/$app/manifest.env" ]] && continue
+		project="$(sed -n 's/^COMPOSE_PROJECT=//p' "$manifest" | tail -n1)"
+		[[ "$project" =~ ^app-[a-z0-9-]+$ ]] || continue
+		while IFS= read -r id; do
+			[[ -n "$id" ]] || continue
+			log "stopping removed application project $project"
+			docker rm -f "$id" >/dev/null 2>&1 || die "unable to stop removed application project: $project"
+		done < <(docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null || true)
+	done < <(find "$old_release/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 }
 
 prepare_release() {
@@ -381,7 +405,7 @@ cleanup() {
 }
 
 apply() {
-	local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0 previous_singleton_target
+	local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0 previous_singleton_target singleton_prepare_failed=0
 	sha_valid "$sha"
 	exec 9>"$PLATFORM_LOCK_FILE"
 	flock -w 300 9 || die 'timed out waiting for deployment lock'
@@ -403,6 +427,7 @@ apply() {
 	fi
 	[[ "$mode" == app || "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] && verify_app_scope "$old_current" "$release" "$mode"
 	backup "pre-$mode"
+	stop_removed_projects "$old_current" "$release"
 	tx="$(mktemp -d "$APP_ROOT/shared/runtime/transaction.XXXXXX")"
 	cp -f "$APP_IMAGE_ENV" "$tx/images.apps" 2>/dev/null || true
 	cp -f "$FOUNDATION_IMAGE_ENV" "$tx/images.foundation" 2>/dev/null || true
@@ -416,7 +441,9 @@ apply() {
 	atomic_link "$release" "$APP_CURRENT"
 	refresh_descriptor_registry "$release"
 	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
-		SINGLETON_PREVIOUS_TARGET="$previous_singleton_target" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-prepare "$SINGLETON_APP_ID"
+		if ! SINGLETON_PREVIOUS_TARGET="$previous_singleton_target" SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-prepare "$SINGLETON_APP_ID"; then
+			singleton_prepare_failed=1
+		fi
 	fi
 	# Normal source deployments change application code/config only. Image
 	# changes are explicit app-upgrade operations so a routine push cannot
@@ -441,7 +468,10 @@ apply() {
 	sync_scope=apps
 	[[ "$mode" == foundation ]] && sync_scope=foundation
 	[[ "$mode" == cluster-reconcile || "$mode" == rollback ]] && sync_scope=all
-	if prefetch_images "$mode" && DEPLOY_SYNC_SCOPE="$sync_scope" reconcile && smoke_apps; then
+	if ((singleton_prepare_failed == 0)) && prefetch_images "$mode" && DEPLOY_SYNC_SCOPE="$sync_scope" reconcile && smoke_apps && {
+		[[ "$mode" != singleton-stage || -z "${SINGLETON_APP_ID:-}" ]] ||
+			SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-origin-smoke "$SINGLETON_APP_ID"
+	}; then
 		cleanup
 		rm -rf -- "$tx"
 		log "deployment succeeded: $sha ($mode)"
@@ -465,6 +495,9 @@ apply() {
 	[[ -d "$tx/descriptors" ]] && cp -a "$tx/descriptors" "$CONTROL_ROOT/descriptors"
 	rm -rf -- "$tx"
 	DEPLOY_SYNC_SCOPE=all reconcile || true
+	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
+		SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-transition-fail "$SINGLETON_APP_ID" || true
+	fi
 	return 1
 }
 
@@ -487,7 +520,7 @@ singleton-stage)
 singleton-switch)
 	[[ $# -eq 2 && -n "${SINGLETON_APP_ID:-}" ]] || die 'usage: deploy-controller singleton-switch <sha>'
 	DEPLOY_SKIP_SINGLETONS=1 apply "$2" singleton-switch
-	PLATFORM_SKIP_SINGLETONS=0 SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-switch "$SINGLETON_APP_ID"
+	PLATFORM_SKIP_SINGLETONS=0 SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-switch "$SINGLETON_APP_ID"
 	;;
 singleton-stop)
 	[[ $# -eq 2 && -n "${SINGLETON_APP_ID:-}" ]] || die 'usage: deploy-controller singleton-stop <sha>'
