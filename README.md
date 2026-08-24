@@ -148,11 +148,6 @@ for node in leader worker-1 worker-2; do
 done
 ```
 
-When the bootstrap prompts for `Remote Restic repository` , enter the matching
-`$RESTIC_BASE/<node-id>` value. Alternatively pass
-`RESTIC_REMOTE_REPOSITORY` , `RESTIC_REMOTE_ENV_SOURCE_FILE` , and
-`RESTIC_REMOTE_PASSWORD_FILE` in the bootstrap environment.
-
 The three-node bootstrap order is Leader ( `leader` ), then Follower
 `worker-1` , then Follower `worker-2` :
 
@@ -160,6 +155,8 @@ The three-node bootstrap order is Leader ( `leader` ), then Follower
 LEADER='<leader-host-or-ip>'
 WORKER_1='<worker-1-host-or-ip>'
 WORKER_2='<worker-2-host-or-ip>'
+
+set -Eeuo pipefail
 
 for host in "$LEADER" "$WORKER_1" "$WORKER_2"; do
   ssh "root@$host" 'install -d -m 700 /etc/llm-hub-lite'
@@ -331,8 +328,7 @@ The confirmed run logs each systemd stop, Docker container stop/removal, network
 The confirmed command stops and removes this stack's containers, empty stack-owned networks, systemd units, installed wrappers, generated Caddy and application state, releases, runtime secrets, and `/etc/llm-hub-lite` data. It
 does not run `docker system prune` , delete unrelated containers or networks, change UFW/iptables rules, remove `/swapfile` , or contact any remote service.
 
-Local encrypted Restic data under `/opt/backups/llm-hub-lite` is preserved by default. Delete it only after verifying the remote repository and any required
-restore points:
+Local encrypted Restic data under `/opt/backups/llm-hub-lite` is preserved by default. Delete it only after verifying the remote repository and any required restore points:
 
 ```bash
 /root/clean-vps.sh --confirm --delete-local-backups
