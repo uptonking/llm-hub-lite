@@ -233,6 +233,39 @@ controller uses non-interactive HTTPS Git transport internally. VPS SSH is
 bootstrap-only; daily delivery remains GitHub push to Woodpecker and does not
 require SSH keys or SSH connections.
 
+## Clean up deployment
+
+To redeploy a VPS from a clean local stack state, copy `ops/clean-vps.sh` to a temporary location outside `/opt/platform` (for example `/root/clean-vps.sh`)
+and run it separately on each host. Start with the read-only inventory:
+
+```bash
+chmod 700 /root/clean-vps.sh
+/root/clean-vps.sh --dry-run
+```
+
+Review the complete list, then confirm the destructive cleanup interactively:
+
+```bash
+/root/clean-vps.sh --confirm
+```
+
+The confirmed run logs each systemd stop, Docker container stop/removal, network removal, wrapper deletion, and managed path deletion.
+
+The confirmed command stops and removes this stack's containers, empty stack-owned networks, systemd units, installed wrappers, generated Caddy and application state, releases, runtime secrets, and `/etc/llm-hub-lite` data. It
+does not run `docker system prune`, delete unrelated containers or networks, change UFW/iptables rules, remove `/swapfile`, or contact any remote service.
+
+Local encrypted Restic data under `/opt/backups/llm-hub-lite` is preserved by default. Delete it only after verifying the remote repository and any required
+restore points:
+
+```bash
+/root/clean-vps.sh --confirm --delete-local-backups
+```
+
+The cleanup removes local Restic password/remote-environment files under `/etc/llm-hub-lite` along with the rest of the stack configuration. Keep a separate protected copy of those credentials if you intend to inspect or restore the preserved local repository later.
+
+Docker images are also preserved for a fast redeploy. To remove only images referenced by this stack when they are not used by another container, add `--delete-images`. Remote Restic/R2 objects, MongoDB Atlas data, Upstash data,
+Cloudflare DNS, and firewall policy are always outside the cleanup scope.
+
 ## Changing node IPs or the Leader
 
 Stable IDs are never renamed when an IP changes. A Follower address change

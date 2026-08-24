@@ -32,6 +32,7 @@ jobs:
         run: |
           ops/tests/stack-test.sh
           ops/tests/backup-test.sh
+          ops/tests/clean-vps-test.sh
           ops/tests/workflow-generator-test.sh
           ops/tests/enroll-beszel-test.sh
           ops/tests/firewall-test.sh
