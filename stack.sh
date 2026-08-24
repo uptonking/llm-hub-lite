@@ -127,7 +127,7 @@ validate() {
 		ac "$d"
 		"${command[@]}" config --quiet
 	done < <(app_dirs)
-	docker run --rm --pull=never --env-file "$env_file" -v "$runtime/config:/etc/caddy:ro" "$(sed -n 's/^CADDY_IMAGE=//p' "$image_foundation")" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+	docker run --rm --env-file "$env_file" -v "$runtime/config:/etc/caddy:ro" "$(sed -n 's/^CADDY_IMAGE=//p' "$image_foundation")" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 }
 up() {
 	validate
