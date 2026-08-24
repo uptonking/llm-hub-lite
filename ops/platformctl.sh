@@ -354,17 +354,37 @@ project_is_healthy() {
 		[[ "$state" == 'running healthy' || "$state" == 'running none' ]] || return 1
 	done <<<"$ids"
 }
+report_compose_failure() {
+	local id
+	printf 'platformctl: Compose project state after failed health wait:\n' >&2
+	"${compose_command[@]}" ps --all >&2 || true
+	while IFS= read -r id; do
+		[[ -n "$id" ]] || continue
+		docker inspect --format 'container={{.Name}} status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{{range .State.Health.Log}}{{printf "\n  health exit=%d output=%q" .ExitCode .Output}}{{end}}' "$id" >&2 || true
+	done < <("${compose_command[@]}" ps --all -q 2>/dev/null || true)
+}
+compose_up_wait() {
+	if "${compose_command[@]}" up -d --pull never --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$@"; then
+		return 0
+	fi
+	report_compose_failure
+	printf 'platformctl: project did not become healthy; recreating it once\n' >&2
+	if ! "${compose_command[@]}" up -d --pull never --force-recreate --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$@"; then
+		report_compose_failure
+		return 1
+	fi
+}
 start_project() {
 	local p="$1"
 	project_enabled "$p" || return
 	ensure_network
 	if beszel_enrollment_pending "$p"; then
 		foundation_compose "$p"
-		"${compose_command[@]}" up -d --pull never --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT" beszel-socket-proxy
+		compose_up_wait beszel-socket-proxy
 		return
 	fi
 	[[ "$p" == app:* ]] && app_compose "${p#app:}" || foundation_compose "$p"
-	"${compose_command[@]}" up -d --pull never --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT"
+	compose_up_wait
 }
 stop_project() {
 	local p="$1" project

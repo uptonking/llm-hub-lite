@@ -15,6 +15,11 @@ Leader derives consumer upstreams from every follower entry in
 `config/cluster/nodes/*.env` ; adding a follower therefore does not require
 editing a Caddy route. Keep origin records DNS-only and restrict follower
 Docker-published HTTPS/HTTP3 to the Leader IP with the `DOCKER-USER` chain.
+UFW keeps TCP and UDP port 443 allowed on every node. The Docker restriction
+is scoped to the detected default-route interface so it cannot block outbound
+HTTPS from Woodpecker, LibreChat, or deployment containers. Set
+`PLATFORM_PUBLIC_INTERFACE` in `/etc/llm-hub-lite/platform.env` only when the
+VPS public ingress does not use its default-route interface.
 Set `REPO_SLUG` in `config/cluster/policy.env` to the GitHub owner/repository
 that runs this stack; generated Woodpecker labels use that value.
 

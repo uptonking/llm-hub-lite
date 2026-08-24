@@ -14,7 +14,11 @@ if grep -Fq 'ufw --force delete allow 443' "$bootstrap"; then
 	exit 1
 fi
 grep -Fq '/usr/local/bin/configure-firewall' "$bootstrap"
+grep -Fq 'docker run --rm --network "$edge_network" llm-hub-lite/deploy-runner:current' "$bootstrap"
+grep -Fq 'curl --http2' "$bootstrap"
+grep -Fq 'container HTTPS preflight failed' "$bootstrap"
 grep -Fq 'Older bootstraps nested Hub and agent state' "$bootstrap"
+grep -Fq 'migrate_legacy_woodpecker_layout' "$bootstrap"
 grep -Fq 'if [[ "$NODE_ROLE" == leader ]]; then' "$bootstrap"
 grep -Fq 'missing cluster policy' "$bootstrap"
 grep -Fq 'newapi_enabled=0' "$bootstrap"
@@ -118,6 +122,27 @@ migration_result="$(MIGRATION_FUNCTIONS="$migration_functions" bash -c '
 ')"
 [[ "$migration_result" == migrated ]] || {
 	printf 'legacy Beszel layout migration failed\n' >&2
+	exit 1
+}
+woodpecker_migration_functions="$(sed -n '/^directory_has_entries() {/p; /^move_directory_contents() {/,/^}/p; /^migrate_legacy_woodpecker_layout() {/,/^}/p' "$bootstrap")"
+woodpecker_migration_result="$(MIGRATION_FUNCTIONS="$woodpecker_migration_functions" bash -c '
+	set -Eeuo pipefail
+	eval "$MIGRATION_FUNCTIONS"
+	die() { printf "%s\n" "$*" >&2; return 1; }
+	docker() { return 0; }
+	PLATFORM_ROOT="$(mktemp -d)"
+	trap '\''rm -rf "$PLATFORM_ROOT"'\'' EXIT
+	mkdir -p "$PLATFORM_ROOT/woodpecker/agent/agent" "$PLATFORM_ROOT/woodpecker/agent/deployer"
+	printf worker >"$PLATFORM_ROOT/woodpecker/agent/agent/agent.conf"
+	printf deployer >"$PLATFORM_ROOT/woodpecker/agent/deployer/agent.conf"
+	migrate_legacy_woodpecker_layout
+	[[ -f "$PLATFORM_ROOT/woodpecker/agent/agent.conf" ]]
+	[[ -f "$PLATFORM_ROOT/woodpecker/deployer/agent.conf" ]]
+	[[ ! -e "$PLATFORM_ROOT/woodpecker/agent/agent" && ! -e "$PLATFORM_ROOT/woodpecker/agent/deployer" ]]
+	printf "migrated\n"
+')"
+[[ "$woodpecker_migration_result" == migrated ]] || {
+	printf 'legacy Woodpecker layout migration failed\n' >&2
 	exit 1
 }
 ssh_port_function="$(sed -n '/^detect_ssh_port() {/,/^}/p' "$bootstrap")"

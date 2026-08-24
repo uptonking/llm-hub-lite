@@ -9,6 +9,8 @@ if grep -Fq '${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker}/data:/var/lib/woo
 fi
 grep -Fq '${BESZEL_DATA_ROOT:-/opt/platform/beszel/hub}:/beszel_data' "$repo_root/compose/foundation/beszel-controller.yml"
 grep -Fq '${BESZEL_AGENT_DATA_ROOT:-/opt/platform/beszel/agent}:/var/lib/beszel-agent' "$repo_root/compose/foundation/beszel-worker.yml"
+grep -Fq '${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker/agent}:/etc/woodpecker' "$repo_root/compose/foundation/woodpecker-worker.yml"
+grep -Fq '${WOODPECKER_DEPLOYER_CONFIG_ROOT:-/opt/platform/woodpecker/deployer}:/etc/woodpecker' "$repo_root/compose/foundation/woodpecker-deployer.yml"
 for woodpecker_compose in "$repo_root"/compose/foundation/woodpecker-*.yml; do
 	awk '
 		/^  woodpecker_private:$/ { in_network=1; next }

@@ -24,6 +24,21 @@ valid_ipv4() {
 		[[ "$octet" =~ ^[0-9]+$ ]] && ((10#$octet <= 255)) || return 1
 	done
 }
+public_interface() {
+	local interface="${PLATFORM_PUBLIC_INTERFACE:-}"
+	if [[ -z "$interface" ]]; then
+		interface="$(ip -4 route show default | awk '{for (field = 1; field <= NF; field++) if ($field == "dev") {print $(field + 1); exit}}')"
+	fi
+	[[ "$interface" =~ ^[A-Za-z0-9_.:-]+$ ]] || {
+		printf 'configure-firewall: unable to determine a valid public network interface\n' >&2
+		return 1
+	}
+	ip link show dev "$interface" >/dev/null 2>&1 || {
+		printf 'configure-firewall: public network interface does not exist: %s\n' "$interface" >&2
+		return 1
+	}
+	printf '%s\n' "$interface"
+}
 node_id="${NODE_ID:-$(value NODE_ID "$NODE_CONFIG_FILE")}"
 leader_id="$(value LEADER_NODE_ID "$CLUSTER_POLICY_FILE")"
 [[ -n "$node_id" && -n "$leader_id" ]] || {
@@ -63,18 +78,23 @@ valid_ipv4 "$LEADER_PUBLIC_IP" || {
 	printf 'configure-firewall: valid runtime LEADER_PUBLIC_IP is required for followers\n' >&2
 	exit 1
 }
+command -v ip >/dev/null 2>&1 || {
+	printf 'configure-firewall: ip is required on followers\n' >&2
+	exit 1
+}
+PUBLIC_INTERFACE="$(public_interface)"
 
-# Docker evaluates DOCKER-USER before its own published-port rules. Allow the
-# Leader to reach follower HTTPS, then drop all other published HTTPS traffic.
+# Docker evaluates DOCKER-USER for both ingress and container egress. Scope the
+# policy to the public ingress interface so outbound HTTPS remains available.
 iptables -N "$chain" 2>/dev/null || true
 iptables -F "$chain"
 iptables -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-iptables -A "$chain" -s "$LEADER_PUBLIC_IP" -p tcp --dport 443 -j RETURN
-iptables -A "$chain" -s "$LEADER_PUBLIC_IP" -p udp --dport 443 -j RETURN
-iptables -A "$chain" -p tcp --dport 443 -j DROP
-iptables -A "$chain" -p udp --dport 443 -j DROP
+iptables -A "$chain" -i "$PUBLIC_INTERFACE" -s "$LEADER_PUBLIC_IP" -p tcp --dport 443 -j RETURN
+iptables -A "$chain" -i "$PUBLIC_INTERFACE" -s "$LEADER_PUBLIC_IP" -p udp --dport 443 -j RETURN
+iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p tcp --dport 443 -j DROP
+iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p udp --dport 443 -j DROP
 while iptables -C DOCKER-USER -j "$chain" 2>/dev/null; do iptables -D DOCKER-USER -j "$chain"; done
 iptables -I DOCKER-USER 1 -j "$chain"
 
-printf 'Docker published-port policy applied for the configured Leader address\n'
+printf 'Docker published-port policy applied on public interface %s for the configured Leader address\n' "$PUBLIC_INTERFACE"
 rm -f -- "$REQUEST_FILE"

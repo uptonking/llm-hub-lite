@@ -298,10 +298,23 @@ migrate_legacy_beszel_layout() {
 	move_directory_contents "$PLATFORM_ROOT/beszel/hub/hub" "$PLATFORM_ROOT/beszel/hub"
 	move_directory_contents "$PLATFORM_ROOT/beszel/hub/agent" "$PLATFORM_ROOT/beszel/agent"
 }
+migrate_legacy_woodpecker_layout() {
+	local component container
+	if ! directory_has_entries "$PLATFORM_ROOT/woodpecker/agent/agent" && ! directory_has_entries "$PLATFORM_ROOT/woodpecker/agent/deployer"; then
+		return 0
+	fi
+	for component in foundation-woodpecker-worker foundation-woodpecker-deployer; do
+		while IFS= read -r container; do
+			[[ -n "$container" ]] && docker stop --time 120 "$container" >/dev/null
+		done < <(docker ps -q --filter "label=com.aichorage.component=$component")
+	done
+	move_directory_contents "$PLATFORM_ROOT/woodpecker/agent/agent" "$PLATFORM_ROOT/woodpecker/agent"
+	move_directory_contents "$PLATFORM_ROOT/woodpecker/agent/deployer" "$PLATFORM_ROOT/woodpecker/deployer"
+}
 
 need apt-get
 bootstrap_packages=()
-for pair in curl:curl gpg:gnupg git:git openssl:openssl ufw:ufw iptables:iptables tar:tar flock:util-linux; do
+for pair in curl:curl gpg:gnupg git:git openssl:openssl ufw:ufw iptables:iptables ip:iproute2 tar:tar flock:util-linux; do
 	command="${pair%%:*}"
 	package="${pair#*:}"
 	command -v "$command" >/dev/null 2>&1 || bootstrap_packages+=("$package")
@@ -310,7 +323,7 @@ if ((${#bootstrap_packages[@]})); then
 	apt-get update
 	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates "${bootstrap_packages[@]}"
 fi
-for command in git curl openssl install systemctl apt-get sha256sum ufw iptables base64 tar gpg dpkg cmp; do need "$command"; done
+for command in git curl openssl install systemctl apt-get sha256sum ufw iptables ip base64 tar gpg dpkg cmp; do need "$command"; done
 install_docker
 need docker
 missing=()
@@ -336,7 +349,7 @@ detect_ssh_port
 
 install -d -m 700 "$APP_ROOT/shared/data/prod" "$APP_ROOT/shared/data/prod/librechat/uploads" "$APP_ROOT/shared/data/prod/librechat/images" "$APP_ROOT/shared/data/prod/librechat/skills" "$APP_ROOT/shared/data/prod/librechat/logs" "$APP_ROOT/shared/data/prod/librechat/data" "$APP_ROOT/shared/runtime" "$APP_ROOT/shared/logs" \
 	"$PLATFORM_ROOT" "$PLATFORM_ROOT/caddy/data" "$PLATFORM_ROOT/caddy/config" \
-	"$PLATFORM_ROOT/woodpecker/data" "$PLATFORM_ROOT/woodpecker/agent" \
+	"$PLATFORM_ROOT/woodpecker/data" "$PLATFORM_ROOT/woodpecker/agent" "$PLATFORM_ROOT/woodpecker/deployer" \
 	"$PLATFORM_ROOT/beszel/hub" "$PLATFORM_ROOT/beszel/agent" "$PLATFORM_ROOT/beszel/secrets" \
 	"$CONTROL_ROOT/releases" "$FOUNDATION_ROOT/env" "$CONFIG_ROOT/image-history" \
 	/opt/backups/llm-hub-lite/repository /opt/backups/llm-hub-lite/restores /run/lock/llm-hub-lite
@@ -344,6 +357,8 @@ install -d -m 700 "$APP_ROOT/shared/data/prod" "$APP_ROOT/shared/data/prod/libre
 install -d -o 1000 -g 1000 -m 700 "$PLATFORM_ROOT/woodpecker/data"
 # Older bootstraps nested Hub and agent state below the Hub data directory.
 migrate_legacy_beszel_layout
+# Older bootstraps appended agent/deployer to an already component-specific path.
+migrate_legacy_woodpecker_layout
 
 if [[ -n "$DEPLOY_SSH_KEY_FILE" ]]; then
 	[[ -s "$DEPLOY_SSH_KEY_FILE" ]] || die "deployment key does not exist: $DEPLOY_SSH_KEY_FILE"
@@ -556,7 +571,7 @@ if [[ ! -f "$woodpecker_env" ]]; then
 		[[ -n "$oauth_client" && -n "$oauth_secret" ]] || die 'OAuth credentials are required'
 	fi
 	{
-		printf 'WOODPECKER_DATA_ROOT=%s/data\nWOODPECKER_AGENT_CONFIG_ROOT=%s/agent\nWOODPECKER_HOST=https://ci.%s\nWOODPECKER_ADMIN=%s\n' "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/woodpecker" "$DOMAIN_NAME" "$WOODPECKER_ADMIN"
+		printf 'WOODPECKER_DATA_ROOT=%s/data\nWOODPECKER_AGENT_CONFIG_ROOT=%s/agent\nWOODPECKER_DEPLOYER_CONFIG_ROOT=%s/deployer\nWOODPECKER_HOST=https://ci.%s\nWOODPECKER_ADMIN=%s\n' "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/woodpecker" "$DOMAIN_NAME" "$WOODPECKER_ADMIN"
 		printf 'WOODPECKER_GITHUB_CLIENT=%s\nWOODPECKER_GITHUB_SECRET=%s\nWOODPECKER_AGENT_SECRET=%s\nWOODPECKER_GRPC_SECRET=%s\n' "$oauth_client" "$oauth_secret" "$WOODPECKER_AGENT_SECRET" "$WOODPECKER_GRPC_SECRET"
 		printf 'WOODPECKER_REPO_OWNERS=%s\nWOODPECKER_AGENT_LABELS=%s\nWOODPECKER_DEPLOYER_LABELS=%s\nWOODPECKER_AGENT_SERVER=ci-grpc.%s:443\nWOODPECKER_DEPLOYER_SERVER=ci-grpc.%s:443\nWOODPECKER_GRPC_SECURE=true\nWOODPECKER_GRPC_SKIP_VERIFY=false\nWOODPECKER_MAX_WORKFLOWS=1\nWOODPECKER_DATABASE_MAX_CONNECTIONS=1\nWOODPECKER_DATABASE_IDLE_CONNECTIONS=1\nWOODPECKER_FORCE_IGNORE_SERVICE_FAILURE=false\n' "$WOODPECKER_REPO_OWNERS" "$WOODPECKER_AGENT_LABELS" "$WOODPECKER_DEPLOYER_LABELS" "$DOMAIN_NAME" "$DOMAIN_NAME"
 	} >"$woodpecker_env"
@@ -591,7 +606,7 @@ done
 ensure_key "$beszel_env" BESZEL_AGENT_APPARMOR unconfined
 ensure_key "$beszel_env" BESZEL_HUB_URL "https://status.$DOMAIN_NAME"
 for pair in \
-	"WOODPECKER_DATA_ROOT=$PLATFORM_ROOT/woodpecker/data" "WOODPECKER_AGENT_CONFIG_ROOT=$PLATFORM_ROOT/woodpecker/agent" \
+	"WOODPECKER_DATA_ROOT=$PLATFORM_ROOT/woodpecker/data" "WOODPECKER_AGENT_CONFIG_ROOT=$PLATFORM_ROOT/woodpecker/agent" "WOODPECKER_DEPLOYER_CONFIG_ROOT=$PLATFORM_ROOT/woodpecker/deployer" \
 	"WOODPECKER_HOST=https://ci.$DOMAIN_NAME" "WOODPECKER_ADMIN=$WOODPECKER_ADMIN" \
 	"WOODPECKER_REPO_OWNERS=$WOODPECKER_REPO_OWNERS" "WOODPECKER_AGENT_LABELS=$WOODPECKER_AGENT_LABELS" \
 	"WOODPECKER_DEPLOYER_LABELS=$WOODPECKER_DEPLOYER_LABELS" "WOODPECKER_AGENT_SERVER=ci-grpc.$DOMAIN_NAME:443" \
@@ -769,6 +784,11 @@ set_key "$platform_env" PLATFORM_RUNNER_IMAGE_ID "$runner_image_id"
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl validate
 # Apply follower Docker ingress filtering before any public container starts.
 /usr/local/bin/configure-firewall
+if [[ "$NODE_ROLE" == follower ]]; then
+	docker run --rm --network "$edge_network" llm-hub-lite/deploy-runner:current \
+		curl --http2 -sS --connect-timeout 10 --max-time 20 -o /dev/null "https://ci-grpc.$DOMAIN_NAME/" ||
+		die 'container HTTPS preflight failed; check follower firewall, DNS, and TLS connectivity to the Leader'
+fi
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl start caddy
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl start beszel-worker
 if [[ "$NODE_ROLE" == follower && -s "$CONFIG_ROOT/beszel-enrollment.env" ]]; then /usr/local/bin/enroll-beszel; fi

@@ -31,7 +31,17 @@ printf 'iptables %s\n' "$*" >>"${FIREWALL_LOG:?}"
 [ "${1:-}" = -C ] && exit 1
 exit 0
 EOF
-chmod +x "$tmp/bin/ufw" "$tmp/bin/iptables"
+cat >"$tmp/bin/ip" <<'EOF'
+#!/bin/sh
+printf 'ip %s\n' "$*" >>"${FIREWALL_LOG:?}"
+if [ "$*" = '-4 route show default' ]; then
+	printf 'default via 192.0.2.1 dev eth0\n'
+	exit 0
+fi
+[ "${1:-}" = link ] && exit 0
+exit 1
+EOF
+chmod +x "$tmp/bin/ufw" "$tmp/bin/iptables" "$tmp/bin/ip"
 
 export PATH="$tmp/bin:$PATH" FIREWALL_LOG="$tmp/firewall.log"
 firewall_output="$(LEADER_PUBLIC_IP=198.51.100.20 DEPLOY_CONFIG_FILE="$tmp/platform.env" bash "$repo_root/ops/configure-firewall.sh")"
@@ -42,8 +52,14 @@ if grep -Fq 'ufw allow from ' "$FIREWALL_LOG"; then
 	printf 'firewall narrowed the persistent UFW HTTPS policy to one source\n' >&2
 	exit 1
 fi
-grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -s 192.0.2.10 -p tcp --dport 443 -j RETURN' "$FIREWALL_LOG"
-grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -s 192.0.2.10 -p udp --dport 443 -j RETURN' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s 192.0.2.10 -p tcp --dport 443 -j RETURN' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s 192.0.2.10 -p udp --dport 443 -j RETURN' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp --dport 443 -j DROP' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p udp --dport 443 -j DROP' "$FIREWALL_LOG"
+if grep -Eq '^iptables -A LLM_HUB_LITE_DOCKER -p (tcp|udp) --dport 443' "$FIREWALL_LOG"; then
+	printf 'firewall contains an unscoped port 443 rule that can block container egress\n' >&2
+	exit 1
+fi
 if grep -Fq '198.51.100.20' "$FIREWALL_LOG"; then
 	printf 'firewall accepted a Leader IP override outside runtime node.env\n' >&2
 	exit 1

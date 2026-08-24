@@ -13,7 +13,7 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.component: foundation-woodpecker-worker
     volumes:
-      - ${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker}/agent:/etc/woodpecker
+      - ${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker/agent}:/etc/woodpecker
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       WOODPECKER_SERVER: ${WOODPECKER_AGENT_SERVER:?WOODPECKER_AGENT_SERVER must be set}
