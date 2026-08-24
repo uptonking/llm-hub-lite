@@ -26,8 +26,7 @@ that runs this stack; generated Woodpecker labels use that value.
 
 The control plane is intentionally single-controller: Woodpecker and Beszel
 use persistent SQLite on the Leader. LibreChat replicas share external Atlas
-MongoDB and Upstash Redis state. This provides consumer availability without claiming automatic
-control-plane failover.
+MongoDB and Upstash Redis state. This provides consumer availability.
 
 ## Configuration
 
@@ -98,7 +97,20 @@ cp .env.dev.example .env.dev
 ./stack.sh dev up
 ```
 
-## First deployment
+## 🚀 First deployment
+
+- Leader leader:
+    - Caddy
+    - Woodpecker server/controller
+    - Woodpecker deployer
+    - Beszel Hub and agent
+- Follower worker-1:
+    - Caddy
+    - Woodpecker agent
+    - Beszel agent
+    - LibreChat
+- Follower worker-2:
+    - Same services as worker-1
 
 SSH is used only for this one-time host bootstrap. Before starting, prepare the
 three VPS hosts, Cloudflare DNS, and the R2 Restic repositories. The Leader
@@ -108,16 +120,24 @@ files are transferred to Followers before they start. Public domains
 DNS-only origins using the `worker1-` prefix point to Worker 1, while the
 stable-ID `worker2-` origin records point to Worker 2. The `leader` stable ID is
 the public Leader and therefore does not need a private origin record for
-ingress.
+ingress. The Follower origin records must remain DNS-only. The Follower firewall only permits Docker HTTPS traffic from the Leader IP.
 
 Initialize each remote Restic repository once, before bootstrap. Keep the R2
-credentials and password in protected local files; the endpoint is the S3 URL
-for the R2 account, and each stable node should use its own repository prefix:
+credentials and password in protected local files. This checkout uses
+`./restic-r2.env` for the R2 S3 credentials; that filename is ignored by Git.
+The Restic repositories use the `llm-hub-lite-backups` bucket and a separate
+prefix for each stable node:
 
 ```bash
-RESTIC_ENV_FILE='/secure/r2.env'       # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
-RESTIC_PASSWORD_FILE='/secure/restic-password'
-RESTIC_BASE='s3:https://<account-id>.r2.cloudflarestorage.com/<bucket>/llm-hub-lite'
+# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+RESTIC_ENV_FILE="$PWD/restic-r2.env"
+RESTIC_PASSWORD_FILE="$PWD/restic-password"
+RESTIC_BASE='s3:https://<account-id>.r2.cloudflarestorage.com/llm-hub-lite-backups/llm-hub-lite'
+LIBRECHAT_AWS_ENDPOINT_URL='https://<account-id>.r2.cloudflarestorage.com'
+
+# edit $RESTIC_PASSWORD_FILE to set password for restic
+
+# If a repository already exists, verify it with restic snapshots instead of running restic init again.
 set -a
 . "$RESTIC_ENV_FILE"
 set +a
@@ -128,31 +148,59 @@ for node in leader worker-1 worker-2; do
 done
 ```
 
-When the bootstrap prompts for `Remote Restic repository`, enter the matching
+When the bootstrap prompts for `Remote Restic repository` , enter the matching
 `$RESTIC_BASE/<node-id>` value. Alternatively pass
-`RESTIC_REMOTE_REPOSITORY`, `RESTIC_REMOTE_ENV_SOURCE_FILE`, and
+`RESTIC_REMOTE_REPOSITORY` , `RESTIC_REMOTE_ENV_SOURCE_FILE` , and
 `RESTIC_REMOTE_PASSWORD_FILE` in the bootstrap environment.
 
 The three-node bootstrap order is Leader ( `leader` ), then Follower
 `worker-1` , then Follower `worker-2` :
 
 ```bash
-LEADER_HOST='<leader-host-or-ip>'
-WORKER_1_HOST='<worker-1-host-or-ip>'
-WORKER_2_HOST='<worker-2-host-or-ip>'
-for host in "$LEADER_HOST" "$WORKER_1_HOST" "$WORKER_2_HOST"; do
-  scp ops/bootstrap-vps.sh "root@$host:/root/llm-hub-lite-bootstrap.sh"
+LEADER='<leader-host-or-ip>'
+WORKER_1='<worker-1-host-or-ip>'
+WORKER_2='<worker-2-host-or-ip>'
+
+for host in "$LEADER" "$WORKER_1" "$WORKER_2"; do
+  ssh "root@$host" 'install -d -m 700 /etc/llm-hub-lite'
+
+  scp ops/bootstrap-vps.sh \
+    "root@$host:/root/llm-hub-lite-bootstrap.sh"
+
+  scp "$RESTIC_ENV_FILE" \
+    "root@$host:/etc/llm-hub-lite/restic-remote.env"
+
+  scp "$RESTIC_PASSWORD_FILE" \
+    "root@$host:/etc/llm-hub-lite/restic-remote-password"
+
+  ssh "root@$host" \
+    'chmod 700 /root/llm-hub-lite-bootstrap.sh &&
+      chmod 600 /etc/llm-hub-lite/restic-remote.env \
+                /etc/llm-hub-lite/restic-remote-password'
 done
-ssh -t "root@$LEADER_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=leader DOMAIN_NAME=aichorage.de SSL_EMAIL=admin@aichorage.de /root/llm-hub-lite-bootstrap.sh'
+
+# bootstrap work_1
+ssh -t "root@$LEADER" \
+  "NODE_ID=leader \
+    LEADER_PUBLIC_IP=$LEADER \
+    DOMAIN_NAME=aichorage.de \
+    SSL_EMAIL=admin@aichorage.de \
+    WOODPECKER_ADMIN=uptonking \
+    RESTIC_REMOTE_REPOSITORY='$RESTIC_BASE/leader' \
+    RESTIC_REMOTE_PASSWORD_FILE=/etc/llm-hub-lite/restic-remote-password \
+    RESTIC_REMOTE_ENV_FILE=/etc/llm-hub-lite/restic-remote.env \
+    /root/llm-hub-lite-bootstrap.sh"
 
 # Copy these root-only files before starting either Follower. Use a protected
 # local temporary directory, or transfer them through an equivalent secure
 # one-time channel, then remove the local copies.
+
 tmp_secrets="$(mktemp -d)"
 chmod 700 "$tmp_secrets"
-scp "root@$LEADER_HOST:/etc/llm-hub-lite/shared-secrets.env" "$tmp_secrets/"
-scp "root@$LEADER_HOST:/etc/llm-hub-lite/beszel-enrollment.env" "$tmp_secrets/"
-for host in "$WORKER_1_HOST" "$WORKER_2_HOST"; do
+scp "root@$LEADER:/etc/llm-hub-lite/shared-secrets.env" "$tmp_secrets/"
+scp "root@$LEADER:/etc/llm-hub-lite/beszel-enrollment.env" "$tmp_secrets/"
+
+for host in "$WORKER_1" "$WORKER_2"; do
   ssh "root@$host" 'install -d -m 700 /etc/llm-hub-lite'
   scp "$tmp_secrets/shared-secrets.env" "root@$host:/etc/llm-hub-lite/shared-secrets.env"
   scp "$tmp_secrets/beszel-enrollment.env" "root@$host:/etc/llm-hub-lite/beszel-enrollment.env"
@@ -160,8 +208,37 @@ for host in "$WORKER_1_HOST" "$WORKER_2_HOST"; do
 done
 rm -rf "$tmp_secrets"
 
-ssh -t "root@$WORKER_1_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=worker-1 DOMAIN_NAME=aichorage.de SSL_EMAIL=admin@aichorage.de /root/llm-hub-lite-bootstrap.sh'
-ssh -t "root@$WORKER_2_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=worker-2 DOMAIN_NAME=aichorage.de SSL_EMAIL=admin@aichorage.de /root/llm-hub-lite-bootstrap.sh'
+# bootstrap workers
+
+ssh -t "root@$WORKER_1" \
+  "NODE_ID=worker-1 \
+    LEADER_PUBLIC_IP=$LEADER \
+    DOMAIN_NAME=aichorage.de \
+    SSL_EMAIL=admin@aichorage.de \
+    WOODPECKER_ADMIN=uptonking \
+    RESTIC_REMOTE_REPOSITORY='$RESTIC_BASE/worker-1' \
+    RESTIC_REMOTE_PASSWORD_FILE=/etc/llm-hub-lite/restic-remote-password \
+    RESTIC_REMOTE_ENV_FILE=/etc/llm-hub-lite/restic-remote.env \
+    /root/llm-hub-lite-bootstrap.sh"
+
+ssh -t "root@$WORKER_2" \
+    "NODE_ID=worker-2 \
+     LEADER_PUBLIC_IP=$LEADER \
+     DOMAIN_NAME=aichorage.de \
+     SSL_EMAIL=admin@aichorage.de \
+     WOODPECKER_ADMIN=uptonking \
+     RESTIC_REMOTE_REPOSITORY='$RESTIC_BASE/worker-2' \
+     RESTIC_REMOTE_PASSWORD_FILE=/etc/llm-hub-lite/restic-remote-password \
+     RESTIC_REMOTE_ENV_FILE=/etc/llm-hub-lite/restic-remote.env \
+     /root/llm-hub-lite-bootstrap.sh"
+```
+
+Validate the complete cluster
+
+```sh
+for host in "$LEADER" "$WORKER_1" "$WORKER_2"; do
+  ssh "root@$host" 'platformctl health'
+done
 ```
 
 Set the shared LibreChat Atlas/Upstash values, Woodpecker OAuth values, and
@@ -235,7 +312,7 @@ require SSH keys or SSH connections.
 
 ## Clean up deployment
 
-To redeploy a VPS from a clean local stack state, copy `ops/clean-vps.sh` to a temporary location outside `/opt/platform` (for example `/root/clean-vps.sh`)
+To redeploy a VPS from a clean local stack state, copy `ops/clean-vps.sh` to a temporary location outside `/opt/platform` (for example `/root/clean-vps.sh` )
 and run it separately on each host. Start with the read-only inventory:
 
 ```bash
@@ -252,7 +329,7 @@ Review the complete list, then confirm the destructive cleanup interactively:
 The confirmed run logs each systemd stop, Docker container stop/removal, network removal, wrapper deletion, and managed path deletion.
 
 The confirmed command stops and removes this stack's containers, empty stack-owned networks, systemd units, installed wrappers, generated Caddy and application state, releases, runtime secrets, and `/etc/llm-hub-lite` data. It
-does not run `docker system prune`, delete unrelated containers or networks, change UFW/iptables rules, remove `/swapfile`, or contact any remote service.
+does not run `docker system prune` , delete unrelated containers or networks, change UFW/iptables rules, remove `/swapfile` , or contact any remote service.
 
 Local encrypted Restic data under `/opt/backups/llm-hub-lite` is preserved by default. Delete it only after verifying the remote repository and any required
 restore points:
@@ -263,7 +340,7 @@ restore points:
 
 The cleanup removes local Restic password/remote-environment files under `/etc/llm-hub-lite` along with the rest of the stack configuration. Keep a separate protected copy of those credentials if you intend to inspect or restore the preserved local repository later.
 
-Docker images are also preserved for a fast redeploy. To remove only images referenced by this stack when they are not used by another container, add `--delete-images`. Remote Restic/R2 objects, MongoDB Atlas data, Upstash data,
+Docker images are also preserved for a fast redeploy. To remove only images referenced by this stack when they are not used by another container, add `--delete-images` . Remote Restic/R2 objects, MongoDB Atlas data, Upstash data,
 Cloudflare DNS, and firewall policy are always outside the cleanup scope.
 
 ## Changing node IPs or the Leader
@@ -331,8 +408,8 @@ backup, updates the Leader controller bundle, reconciles every follower node,
 reloads Caddy only after health checks pass, and runs public smoke tests.  Foundation changes, image upgrades, and runner upgrades remain explicit reviewed workflows.
 
 The automatic push workflows are intentionally limited to `apps/**` and the
-non-cluster Caddy route/config files. Changes under `ops/`,
-`compose/foundation/`, foundation image manifests, or the deployment runner do
+non-cluster Caddy route/config files. Changes under `ops/` ,
+`compose/foundation/` , foundation image manifests, or the deployment runner do
 not start a consumer rollout. After pushing those reviewed control-plane
 changes, run the generated manual `foundation-upgrade-leader` workflow and let
 its dependencies update the Followers before resuming normal delivery. App

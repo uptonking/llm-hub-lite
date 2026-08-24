@@ -18,8 +18,9 @@ sample-**/
 # Root-only runtime configuration. These names must never be committed.
 node.env
 shared-secrets.env
-/restic-*.env
-/beszel-enrollment.env
+restic-*.env
+restic-password
+beszel-enrollment.env
 
 .husky/_
 .aichor/

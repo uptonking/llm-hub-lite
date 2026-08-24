@@ -10,8 +10,8 @@ export GITHUB_TOKEN_FILE="$tmp/token"
 # shellcheck disable=SC1091
 source "$repo_root/ops/git-auth.sh"
 setup_github_https_auth
-[[ "$(printf 'Username for github.com:\n' | "$GITHUB_ASKPASS_FILE")" == x-access-token ]]
-[[ "$(printf 'Password for github.com:\n' | "$GITHUB_ASKPASS_FILE")" == token-value ]]
+[[ "$("$GITHUB_ASKPASS_FILE" 'Username for github.com:')" == x-access-token ]]
+[[ "$("$GITHUB_ASKPASS_FILE" 'Password for github.com:')" == token-value ]]
 askpass="$GITHUB_ASKPASS_FILE"
 cleanup_github_https_auth
 [[ ! -e "$askpass" ]]
