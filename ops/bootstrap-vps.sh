@@ -174,6 +174,18 @@ set_key() {
 	chmod 600 "$tmp"
 	mv -f -- "$tmp" "$file"
 }
+merge_image_manifest() {
+	local source="$1" target="$2" key value
+	if [[ ! -s "$target" ]]; then
+		install -o root -g root -m 600 "$source" "$target"
+		return 0
+	fi
+	while IFS='=' read -r key value; do
+		[[ -n "$key" && "$key" != \#* && -n "$value" ]] || continue
+		grep -q "^${key}=" "$target" || printf '%s=%s\n' "$key" "$value" >>"$target"
+	done <"$source"
+	chmod 600 "$target"
+}
 remove_key() {
 	local file="$1" key="$2" tmp
 	[[ -f "$file" ]] || return 0
@@ -846,8 +858,8 @@ if [[ -n "$SHARED_SECRET_BUNDLE_FILE" && -s "$SHARED_SECRET_BUNDLE_FILE" && "$SH
 	install -o root -g root -m 600 "$SHARED_SECRET_BUNDLE_FILE" "$CONFIG_ROOT/shared-secrets.env"
 	SHARED_SECRET_BUNDLE_FILE="$CONFIG_ROOT/shared-secrets.env"
 fi
-[[ -s "$CONFIG_ROOT/images.foundation.env" ]] || install -o root -g root -m 600 "$SOURCE_ROOT/ops/images.foundation.prod.env" "$CONFIG_ROOT/images.foundation.env"
-[[ -s "$CONFIG_ROOT/images.apps.env" ]] || install -o root -g root -m 600 "$SOURCE_ROOT/ops/images.apps.prod.env" "$CONFIG_ROOT/images.apps.env"
+merge_image_manifest "$SOURCE_ROOT/ops/images.foundation.prod.env" "$CONFIG_ROOT/images.foundation.env"
+merge_image_manifest "$SOURCE_ROOT/ops/images.apps.prod.env" "$CONFIG_ROOT/images.apps.env"
 
 # Persist the shared values generated or supplied on the Leader so the exact
 # same bundle can be copied to every Follower during first deployment.

@@ -320,6 +320,13 @@ Bootstrap prefetches only images active for that node role (Caddy and the
 foundation services on a Leader; consumer images on Followers) and retries
 transient registry failures before aborting.
 
+Bootstrap is safe to retry after a partial failure. It merges missing image
+keys from the fetched repository into `/etc/llm-hub-lite/images.apps.env` and
+`images.foundation.env`; it does not overwrite existing digest pins. If a
+retry reports an image key as missing, push the current repository first and
+recopy `ops/bootstrap-vps.sh` to the host so the bootstrap script and fetched
+source are from the same revision, then rerun the original command.
+
 The interactive prompts are expected on the first run. Provide the remote
 Restic repository and password, LibreChat Atlas/Upstash/R2 values, and the
 Woodpecker OAuth values when prompted. For non-interactive bootstrap, provide

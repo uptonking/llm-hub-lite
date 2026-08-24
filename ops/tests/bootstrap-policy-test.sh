@@ -29,6 +29,7 @@ grep -Fq 'git_fetch_bootstrap' "$bootstrap"
 grep -Fq 'unable to clone $MAIN_BRANCH after $attempt attempts' "$bootstrap"
 grep -Fq 'source root already exists but is not a Git checkout' "$bootstrap"
 grep -Fq 'Skipping image for disabled or inactive service' "$bootstrap"
+grep -Fq 'merge_image_manifest' "$bootstrap"
 image_function="$(sed -n '/^csv_contains() {/,/^}/p; /^bootstrap_foundation_enabled() {/,/^}/p; /^image_required() {/,/^}/p' "$bootstrap")"
 image_selection="$(IMAGE_FUNCTION="$image_function" bash -c '
 	set -Eeuo pipefail
