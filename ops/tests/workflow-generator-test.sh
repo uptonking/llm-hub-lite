@@ -23,6 +23,12 @@ grep -Fq $'depends_on:\n  - foundation-upgrade-leader' "$tmp/disabled/foundation
 grep -Fq $'depends_on:\n  - cluster-reconcile-leader' "$tmp/disabled/cluster-reconcile-worker-1.yml"
 grep -Fq '/var/run/docker.sock:/var/run/docker.sock' "$tmp/disabled/deploy-smoke.yml"
 grep -Fq '/run/lock/llm-hub-lite:/run/lock/llm-hub-lite' "$tmp/disabled/deploy-smoke.yml"
+grep -Fq '        - apps/**' "$tmp/disabled/deploy-leader.yml"
+grep -Fq '        - config/routes.d/**' "$tmp/disabled/deploy-leader.yml"
+if grep -Fq '        - ops/**' "$tmp/disabled/deploy-leader.yml" || grep -Fq '        - compose/foundation/**' "$tmp/disabled/deploy-leader.yml"; then
+	printf 'automatic deploy workflow must not include control-plane paths\n' >&2
+	exit 1
+fi
 
 sed -e 's/^NEW_API_BACKUP_NODE_ID=.*/NEW_API_BACKUP_NODE_ID=missing/' -e 's/^DISABLED_APPS=.*/DISABLED_APPS=cliproxyapi/' "$tmp/policy.env" >"$tmp/policy-invalid.env"
 if CLUSTER_POLICY_FILE="$tmp/policy-invalid.env" WOODPECKER_WORKFLOW_ROOT="$tmp/invalid" \

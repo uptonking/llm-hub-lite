@@ -35,6 +35,50 @@ source "$config_file"
 : "${GIT_KNOWN_HOSTS_FILE:=$CONFIG_ROOT/known_hosts}"
 : "${GITHUB_TOKEN_FILE:=$CONFIG_ROOT/github-token}"
 
+env_value() {
+	local key="$1" file="${2:-$APP_ENV}"
+	[[ -f "$file" ]] || return 0
+	sed -n "s/^${key}=//p" "$file" | tail -n1
+}
+policy_value() { env_value "$1" "$CONTROL_ROOT/current/config/cluster/policy.env"; }
+node_value() { env_value "$1" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; }
+csv_contains() {
+	local csv=",${1//[[:space:]]/},"
+	[[ "$csv" == *",$2,"* ]]
+}
+runtime_node_role() {
+	[[ "$(node_value NODE_ID)" == "$(policy_value LEADER_NODE_ID)" ]] && printf 'leader\n' || printf 'follower\n'
+}
+foundation_enabled() {
+	local foundations disabled
+	[[ "$1" == caddy ]] && return 0
+	if [[ "$(runtime_node_role)" == leader ]]; then
+		foundations="$(policy_value FOUNDATION_LEADER)"
+	else
+		foundations="$(policy_value FOUNDATION_FOLLOWER)"
+	fi
+	disabled="$(policy_value DISABLED_FOUNDATION)"
+	csv_contains "$foundations" "$1" && ! csv_contains "$disabled" "$1"
+}
+app_enabled_for_image() {
+	local id="$1"
+	[[ "$(runtime_node_role)" == follower ]] || return 1
+	! csv_contains "$(policy_value DISABLED_APPS)" "$id"
+}
+image_required() {
+	case "$1" in
+	CADDY_IMAGE) return 0 ;;
+	WOODPECKER_SERVER_IMAGE) foundation_enabled woodpecker-controller ;;
+	WOODPECKER_AGENT_IMAGE) foundation_enabled woodpecker-worker || foundation_enabled woodpecker-deployer ;;
+	BESZEL_HUB_IMAGE) foundation_enabled beszel-controller ;;
+	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) foundation_enabled beszel-worker ;;
+	NEW_API_IMAGE) app_enabled_for_image newapi ;;
+	CLIPROXY_IMAGE) app_enabled_for_image cliproxyapi ;;
+	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) app_enabled_for_image librechat ;;
+	*) return 0 ;;
+	esac
+}
+
 git_auth_helper="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/git-auth.sh"
 if [[ ! -r "$git_auth_helper" && -r /usr/local/bin/git-auth.sh ]]; then
 	git_auth_helper=/usr/local/bin/git-auth.sh
@@ -108,10 +152,11 @@ verify_app_scope() {
 	new_sha="$(basename "$new_release")"
 	while IFS= read -r path; do
 		case "$path" in
-		apps/* | .woodpecker/** | README.md | LICENSE.md | ops/generate-woodpecker-workflows.sh) ;;
+		apps/* | config/** | .woodpecker/** | README.md | LICENSE.md | ops/generate-woodpecker-workflows.sh) ;;
 		ops/images.apps.prod.env) ;;
 		*) die "application deployment contains foundation/control-plane change: $path; use the reviewed foundation workflow" ;;
 		esac
+		[[ "$path" != config/cluster/* ]] || die "cluster policy or inventory change requires the cluster-reconcile workflow: $path"
 		if [[ "$path" == ops/images.apps.prod.env && "$mode" != app && "$mode" != app-upgrade ]]; then
 			die "unsupported image manifest change in $mode deployment: $path"
 		fi
@@ -154,6 +199,18 @@ validate_release() {
 		return 1
 	fi
 	rm -rf -- "$runtime" "$foundation_validate" "$control_validate"
+}
+
+pull_image() {
+	local image="$1" attempt
+	for attempt in 1 2 3 4 5; do
+		if docker pull "$image" >/dev/null; then
+			return 0
+		fi
+		((attempt < 5)) || die "unable to pull image after $attempt attempts: $image"
+		log "image pull failed; retrying in $((attempt * 5)) seconds (attempt $attempt/5): $image"
+		sleep "$((attempt * 5))"
+	done
 }
 
 backup() {
@@ -207,13 +264,17 @@ prefetch_images() {
 		[[ -f "$file" ]] || continue
 		while IFS='=' read -r key image; do
 			[[ -n "$key" && "$key" != \#* && -n "$image" ]] || continue
+			image_required "$key" || {
+				log "skipping image for disabled or inactive service: $key"
+				continue
+			}
 			should_pull=0
 			if [[ "$mode" == app-upgrade || "$mode" == foundation ]]; then
 				should_pull=1
 			elif ! docker image inspect "$image" >/dev/null 2>&1; then
 				should_pull=1
 			fi
-			if ((should_pull == 1)); then docker pull "$image" >/dev/null; fi
+			if ((should_pull == 1)); then pull_image "$image"; fi
 		done <"$file"
 	done
 }

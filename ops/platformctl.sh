@@ -246,7 +246,7 @@ validate_descriptor() {
 			[[ -n "$(env_value "$k")" && "$(env_value "$k")" != replace-with-* ]] || die "production LibreChat requires $k"
 		done
 		[[ "$(env_value LIBRECHAT_MONGO_URI)" =~ ^mongodb(\+srv)?:// ]] || die 'LibreChat Mongo URI must use mongodb:// or mongodb+srv://'
-		[[ "$(env_value LIBRECHAT_REDIS_URI)" =~ ^rediss?:// ]] || die 'LibreChat Redis URI must use redis:// or rediss://'
+		[[ "$(env_value LIBRECHAT_REDIS_URI)" =~ ^rediss:// ]] || die 'LibreChat Upstash Redis URI must use TLS (rediss://)'
 		[[ "$(env_value LIBRECHAT_AWS_ENDPOINT_URL)" =~ ^https:// ]] || die 'LibreChat R2 endpoint must use https://'
 		for k in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_BUCKET_NAME; do
 			! placeholder_value "$(env_value "$k")" || die "production LibreChat placeholder is not allowed: $k"

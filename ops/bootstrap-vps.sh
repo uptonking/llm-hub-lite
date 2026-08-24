@@ -79,6 +79,46 @@ die() {
 need() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
 remote_enabled() { truthy "$RESTIC_REMOTE_ENABLED"; }
+csv_contains() {
+	local csv=",${1//[[:space:]]/},"
+	[[ "$csv" == *",$2,"* ]]
+}
+bootstrap_foundation_enabled() {
+	local foundations disabled
+	[[ "$1" == caddy ]] && return 0
+	if [[ "$NODE_ROLE" == leader ]]; then
+		foundations="$(sed -n 's/^FOUNDATION_LEADER=//p' "$policy_file" | tail -n1)"
+	else
+		foundations="$(sed -n 's/^FOUNDATION_FOLLOWER=//p' "$policy_file" | tail -n1)"
+	fi
+	disabled="$(sed -n 's/^DISABLED_FOUNDATION=//p' "$policy_file" | tail -n1)"
+	csv_contains "$foundations" "$1" && ! csv_contains "$disabled" "$1"
+}
+pull_image() {
+	local image="$1" attempt
+	for attempt in 1 2 3 4 5; do
+		if docker pull "$image"; then
+			return 0
+		fi
+		((attempt < 5)) || die "unable to pull image after $attempt attempts: $image"
+		printf 'Image pull failed; retrying in %s seconds (attempt %s/5): %s\n' "$((attempt * 5))" "$attempt" "$image" >&2
+		sleep "$((attempt * 5))"
+	done
+}
+image_required() {
+	local key="$1"
+	case "$key" in
+	CADDY_IMAGE) return 0 ;;
+	WOODPECKER_SERVER_IMAGE) bootstrap_foundation_enabled woodpecker-controller ;;
+	WOODPECKER_AGENT_IMAGE) bootstrap_foundation_enabled woodpecker-worker || bootstrap_foundation_enabled woodpecker-deployer ;;
+	BESZEL_HUB_IMAGE) bootstrap_foundation_enabled beszel-controller ;;
+	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) bootstrap_foundation_enabled beszel-worker ;;
+	NEW_API_IMAGE) ((newapi_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
+	CLIPROXY_IMAGE) ((cliproxy_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
+	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) ((librechat_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
+	*) return 0 ;;
+	esac
+}
 valid_ipv4() {
 	local ip="$1" octet
 	local -a octets
@@ -180,7 +220,7 @@ generate_shared_secret() {
 	local key="$1"
 	[[ -n "${!key:-}" ]] || printf -v "$key" '%s' "$(openssl rand -hex 32)"
 }
-if [[ -z "$LEADER_PUBLIC_IP" ]]; then
+if [[ -z "$LEADER_PUBLIC_IP" && -r "$CONFIG_ROOT/node.env" ]]; then
 	LEADER_PUBLIC_IP="$(sed -n 's/^LEADER_PUBLIC_IP=//p' "$CONFIG_ROOT/node.env" 2>/dev/null | tail -n1)"
 fi
 for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
@@ -392,12 +432,38 @@ elif [[ -s "$CONFIG_ROOT/deploy-key" && "$REPO_URL" =~ ^https://github\.com/([^/
 	source_repo_url="git@github.com:${BASH_REMATCH[1]}.git"
 fi
 
+git_fetch_bootstrap() {
+	local attempt
+	for attempt in 1 2 3 4 5; do
+		if git -C "$SOURCE_ROOT" fetch --prune origin "$MAIN_BRANCH"; then
+			return 0
+		fi
+		((attempt < 5)) || die "unable to fetch $MAIN_BRANCH after $attempt attempts"
+		printf 'Git fetch failed; retrying in %s seconds (attempt %s/5)\n' "$((attempt * 5))" "$attempt" >&2
+		sleep "$((attempt * 5))"
+	done
+}
+git_clone_bootstrap() {
+	local attempt clone_root="${SOURCE_ROOT}.bootstrap.$$"
+	[[ ! -e "$SOURCE_ROOT" ]] || die "source root already exists but is not a Git checkout: $SOURCE_ROOT"
+	for attempt in 1 2 3 4 5; do
+		rm -rf -- "$clone_root"
+		if git clone --branch "$MAIN_BRANCH" --single-branch "$source_repo_url" "$clone_root"; then
+			mv -- "$clone_root" "$SOURCE_ROOT"
+			return 0
+		fi
+		((attempt < 5)) || die "unable to clone $MAIN_BRANCH after $attempt attempts"
+		printf 'Git clone failed; retrying in %s seconds (attempt %s/5)\n' "$((attempt * 5))" "$attempt" >&2
+		sleep "$((attempt * 5))"
+	done
+}
+
 if [[ "${BOOTSTRAP_SKIP_SOURCE_UPDATE:-0}" == 1 ]]; then
 	[[ -d "$SOURCE_ROOT/.git" ]] || die "SOURCE_ROOT is not a Git checkout: $SOURCE_ROOT"
 else
-	if [[ ! -d "$SOURCE_ROOT/.git" ]]; then git clone --branch "$MAIN_BRANCH" --single-branch "$source_repo_url" "$SOURCE_ROOT"; else
+	if [[ ! -d "$SOURCE_ROOT/.git" ]]; then git_clone_bootstrap; else
 		git -C "$SOURCE_ROOT" remote set-url origin "$source_repo_url"
-		git -C "$SOURCE_ROOT" fetch --prune origin "$MAIN_BRANCH"
+		git_fetch_bootstrap
 		git -C "$SOURCE_ROOT" checkout --quiet "$MAIN_BRANCH"
 		git -C "$SOURCE_ROOT" reset --hard --quiet "origin/$MAIN_BRANCH"
 	fi
@@ -452,7 +518,7 @@ if ((librechat_enabled)); then
 	prompt_required LIBRECHAT_MONGO_URI 'Shared LibreChat MongoDB Atlas URI' 1
 	[[ "$LIBRECHAT_MONGO_URI" =~ ^mongodb(\+srv)?:// ]] || die 'LibreChat requires a mongodb:// or mongodb+srv:// URI'
 	prompt_required LIBRECHAT_REDIS_URI 'Shared LibreChat Upstash Redis URI' 1
-	[[ "$LIBRECHAT_REDIS_URI" =~ ^rediss?:// ]] || die 'LibreChat requires a redis:// or rediss:// URI'
+	[[ "$LIBRECHAT_REDIS_URI" =~ ^rediss:// ]] || die 'LibreChat Upstash requires a TLS rediss:// URI'
 	prompt_required LIBRECHAT_AWS_ENDPOINT_URL 'Shared Cloudflare R2 endpoint URL' 0
 	prompt_required LIBRECHAT_AWS_ACCESS_KEY_ID 'Shared Cloudflare R2 access key ID' 1
 	prompt_required LIBRECHAT_AWS_SECRET_ACCESS_KEY 'Shared Cloudflare R2 secret access key' 1
@@ -769,11 +835,15 @@ for unit in "$SOURCE_ROOT"/ops/systemd/*; do install -o root -g root -m 644 "$un
 systemctl daemon-reload
 while IFS='=' read -r image_key image_ref; do
 	[[ -n "$image_key" && "$image_key" != \#* ]] || continue
-	docker pull "$image_ref"
+	image_required "$image_key" || {
+		printf 'Skipping image for disabled or inactive service: %s\n' "$image_key"
+		continue
+	}
+	pull_image "$image_ref"
 done < <(cat "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/images.apps.env")
 runner_base_image="$(sed -n 's/^FROM \([^ ]*\).*$/\1/p' "$SOURCE_ROOT/ops/deploy-runner/Dockerfile" | head -n1)"
 [[ -n "$runner_base_image" ]] || die 'unable to determine deployment runner base image'
-docker pull "$runner_base_image"
+pull_image "$runner_base_image"
 docker build --pull=false --build-arg COMPOSE_ARCH="$compose_arch" --build-arg COMPOSE_SHA256="$compose_sha256" \
 	--build-arg APK_LOCK_SHA256_AMD64="$(sha256sum "$SOURCE_ROOT/ops/deploy-runner/apk-packages.lock.amd64" | awk '{print $1}')" \
 	--build-arg APK_LOCK_SHA256_ARM64="$(sha256sum "$SOURCE_ROOT/ops/deploy-runner/apk-packages.lock.arm64" | awk '{print $1}')" \

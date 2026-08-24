@@ -55,6 +55,7 @@ grep -Fq 'Do not evaluate an inactive app' "$repo_root/ops/platformctl.sh"
 grep -Fq -- '--force-recreate --wait' "$repo_root/ops/platformctl.sh"
 grep -Fq 'Compose project state after failed health wait' "$repo_root/ops/platformctl.sh"
 grep -Fq 'oom={{.State.OOMKilled}}' "$repo_root/ops/platformctl.sh"
+grep -Fq 'LibreChat Upstash Redis URI must use TLS (rediss://)' "$repo_root/ops/platformctl.sh"
 [[ -f "$tmp/app/shared/runtime/config/Caddyfile" ]]
 [[ ! -e "$tmp/app/shared/runtime/config/routes.d/cliproxyapi.caddy" ]]
 grep -Fq 'lb_policy random_choose 2' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"

@@ -19,6 +19,50 @@ grep -Fq 'curl --http2' "$bootstrap"
 grep -Fq 'container HTTPS preflight failed' "$bootstrap"
 grep -Fq 'Older bootstraps nested Hub and agent state' "$bootstrap"
 grep -Fq 'migrate_legacy_woodpecker_layout' "$bootstrap"
+grep -Fq '[[ -z "$LEADER_PUBLIC_IP" && -r "$CONFIG_ROOT/node.env" ]]' "$bootstrap"
+grep -Fq 'LibreChat Upstash requires a TLS rediss:// URI' "$bootstrap"
+grep -Fq 'unable to pull image after $attempt attempts' "$bootstrap"
+grep -Fq 'pull_image "$image_ref"' "$bootstrap"
+grep -Fq 'unable to fetch $MAIN_BRANCH after $attempt attempts' "$bootstrap"
+grep -Fq 'git_fetch_bootstrap' "$bootstrap"
+grep -Fq 'unable to clone $MAIN_BRANCH after $attempt attempts' "$bootstrap"
+grep -Fq 'source root already exists but is not a Git checkout' "$bootstrap"
+grep -Fq 'Skipping image for disabled or inactive service' "$bootstrap"
+image_function="$(sed -n '/^csv_contains() {/,/^}/p; /^bootstrap_foundation_enabled() {/,/^}/p; /^image_required() {/,/^}/p' "$bootstrap")"
+image_selection="$(IMAGE_FUNCTION="$image_function" bash -c '
+	set -Eeuo pipefail
+	eval "$IMAGE_FUNCTION"
+	tmp_policy="$(mktemp)"
+	trap '\''rm -f "$tmp_policy"'\'' EXIT
+	printf "FOUNDATION_FOLLOWER=beszel-worker,woodpecker-worker\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
+	policy_file="$tmp_policy" NODE_ROLE=follower
+	newapi_enabled=0 cliproxy_enabled=0 librechat_enabled=1
+	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CLIPROXY_IMAGE; do
+		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
+	done
+')"
+grep -Fqx 'CADDY_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'BESZEL_AGENT_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'WOODPECKER_AGENT_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'LIBRECHAT_API_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$image_selection"
+grep -Fqx 'CLIPROXY_IMAGE=skipped' <<<"$image_selection"
+leader_image_selection="$(IMAGE_FUNCTION="$image_function" bash -c '
+	set -Eeuo pipefail
+	eval "$IMAGE_FUNCTION"
+	tmp_policy="$(mktemp)"
+	trap '\''rm -f "$tmp_policy"'\'' EXIT
+	printf "FOUNDATION_LEADER=caddy,woodpecker-controller,woodpecker-deployer,beszel-controller,beszel-worker\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
+	policy_file="$tmp_policy" NODE_ROLE=leader
+	newapi_enabled=1 cliproxy_enabled=1 librechat_enabled=1
+	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CLIPROXY_IMAGE; do
+		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
+	done
+')"
+grep -Fqx 'CADDY_IMAGE=required' <<<"$leader_image_selection"
+grep -Fqx 'LIBRECHAT_API_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'CLIPROXY_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fq 'if [[ "$NODE_ROLE" == leader ]]; then' "$bootstrap"
 grep -Fq 'missing cluster policy' "$bootstrap"
 grep -Fq 'newapi_enabled=0' "$bootstrap"

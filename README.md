@@ -4,7 +4,8 @@ Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, and Li
 
 ## Architecture
 
-The committed inventory is in `config/cluster/` . The current Leader has stable ode ID `leader` ; it runs Caddy, Woodpecker server/controller, a trusted
+The committed inventory is in `config/cluster/` . The current Leader has stable
+node ID `leader` ; it runs Caddy, Woodpecker server/controller, a trusted
 deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node
 IDs `worker-1` and `worker-2` ; they run Caddy, Woodpecker workers, Beszel
 agents, and LibreChat. The IDs are stable labels; the role is selected only by
@@ -99,26 +100,38 @@ cp .env.dev.example .env.dev
 
 ## First deployment
 
-SSH is used only for bootstrap. Run the script on each node, provide its stable
-node ID and the Leader public IPv4 address, and confirm the role derived from
-the committed inventory. Bootstrap persists the address as `LEADER_PUBLIC_IP`
-
-in `/etc/llm-hub-lite/node.env` ; it installs Docker, persistent directories,
-firewall rules, systemd recovery/backup timers, pinned images, the deployment
-runner, and the role-specific foundation projects.
-
-```bash
-LEADER_HOST='<leader-host-or-ip>'
-scp ops/bootstrap-vps.sh "root@$LEADER_HOST:/root/llm-hub-lite-bootstrap.sh"
-ssh -t "root@$LEADER_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=leader DOMAIN_NAME=aichorage.de SSL_EMAIL=admin@example.com /root/llm-hub-lite-bootstrap.sh'
-```
-
-Repeat for the two follower addresses. Provision DNS first: public domains
+SSH is used only for this one-time host bootstrap. Before starting, prepare the
+three VPS hosts, Cloudflare DNS, and the R2 Restic repositories. The Leader
+creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
+files are transferred to Followers before they start. Public domains
 `ci` , `ci-grpc` , `status` , `chat` , and `chat-admin` point to the Leader. The
 DNS-only origins using the `worker1-` prefix point to Worker 1, while the
 stable-ID `worker2-` origin records point to Worker 2. The `leader` stable ID is
 the public Leader and therefore does not need a private origin record for
 ingress.
+
+Initialize each remote Restic repository once, before bootstrap. Keep the R2
+credentials and password in protected local files; the endpoint is the S3 URL
+for the R2 account, and each stable node should use its own repository prefix:
+
+```bash
+RESTIC_ENV_FILE='/secure/r2.env'       # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+RESTIC_PASSWORD_FILE='/secure/restic-password'
+RESTIC_BASE='s3:https://<account-id>.r2.cloudflarestorage.com/<bucket>/llm-hub-lite'
+set -a
+. "$RESTIC_ENV_FILE"
+set +a
+for node in leader worker-1 worker-2; do
+  RESTIC_REPOSITORY="$RESTIC_BASE/$node" \
+    RESTIC_PASSWORD_FILE="$RESTIC_PASSWORD_FILE" \
+    restic init
+done
+```
+
+When the bootstrap prompts for `Remote Restic repository`, enter the matching
+`$RESTIC_BASE/<node-id>` value. Alternatively pass
+`RESTIC_REMOTE_REPOSITORY`, `RESTIC_REMOTE_ENV_SOURCE_FILE`, and
+`RESTIC_REMOTE_PASSWORD_FILE` in the bootstrap environment.
 
 The three-node bootstrap order is Leader ( `leader` ), then Follower
 `worker-1` , then Follower `worker-2` :
@@ -130,11 +143,25 @@ WORKER_2_HOST='<worker-2-host-or-ip>'
 for host in "$LEADER_HOST" "$WORKER_1_HOST" "$WORKER_2_HOST"; do
   scp ops/bootstrap-vps.sh "root@$host:/root/llm-hub-lite-bootstrap.sh"
 done
-ssh -t "root@$LEADER_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=leader /root/llm-hub-lite-bootstrap.sh'
-# Transfer the Leader's root-only shared-secrets.env and beszel-enrollment.env
-# to both followers through your one-time bootstrap process.
-ssh -t "root@$WORKER_1_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=worker-1 /root/llm-hub-lite-bootstrap.sh'
-ssh -t "root@$WORKER_2_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=worker-2 /root/llm-hub-lite-bootstrap.sh'
+ssh -t "root@$LEADER_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=leader DOMAIN_NAME=aichorage.de SSL_EMAIL=admin@aichorage.de /root/llm-hub-lite-bootstrap.sh'
+
+# Copy these root-only files before starting either Follower. Use a protected
+# local temporary directory, or transfer them through an equivalent secure
+# one-time channel, then remove the local copies.
+tmp_secrets="$(mktemp -d)"
+chmod 700 "$tmp_secrets"
+scp "root@$LEADER_HOST:/etc/llm-hub-lite/shared-secrets.env" "$tmp_secrets/"
+scp "root@$LEADER_HOST:/etc/llm-hub-lite/beszel-enrollment.env" "$tmp_secrets/"
+for host in "$WORKER_1_HOST" "$WORKER_2_HOST"; do
+  ssh "root@$host" 'install -d -m 700 /etc/llm-hub-lite'
+  scp "$tmp_secrets/shared-secrets.env" "root@$host:/etc/llm-hub-lite/shared-secrets.env"
+  scp "$tmp_secrets/beszel-enrollment.env" "root@$host:/etc/llm-hub-lite/beszel-enrollment.env"
+  ssh "root@$host" 'chmod 600 /etc/llm-hub-lite/shared-secrets.env /etc/llm-hub-lite/beszel-enrollment.env'
+done
+rm -rf "$tmp_secrets"
+
+ssh -t "root@$WORKER_1_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=worker-1 DOMAIN_NAME=aichorage.de SSL_EMAIL=admin@aichorage.de /root/llm-hub-lite-bootstrap.sh'
+ssh -t "root@$WORKER_2_HOST" 'chmod 700 /root/llm-hub-lite-bootstrap.sh && NODE_ID=worker-2 DOMAIN_NAME=aichorage.de SSL_EMAIL=admin@aichorage.de /root/llm-hub-lite-bootstrap.sh'
 ```
 
 Set the shared LibreChat Atlas/Upstash values, Woodpecker OAuth values, and
@@ -142,7 +169,19 @@ any optional consumer values in the
 root-only environment or bundle before running the commands. The Leader public
 IPv4 address may also be supplied as `LEADER_PUBLIC_IP` ; otherwise it is loaded
 from existing runtime configuration or the shared bundle, then prompted for.
+Use the Upstash Redis TLS connection string beginning with `rediss://` ; the
+plaintext `redis://` form cannot connect to Upstash's TLS endpoint and is
+rejected during bootstrap validation.
 Each bootstrap confirms the role derived from the committed inventory.
+Bootstrap prefetches only images active for that node role (Caddy and the
+foundation services on a Leader; consumer images on Followers) and retries
+transient registry failures before aborting.
+
+The interactive prompts are expected on the first run. Provide the remote
+Restic repository and password, LibreChat Atlas/Upstash/R2 values, and the
+Woodpecker OAuth values when prompted. For non-interactive bootstrap, provide
+the same values through environment variables or root-only files; never create
+different shared secrets independently on different nodes.
 
 After bootstrapping the Leader, copy the root-only
 `/etc/llm-hub-lite/beszel-enrollment.env` bundle to each follower (or pass its
@@ -156,6 +195,22 @@ provided, the follower prompts for the shared values; do not accept generated
 values independently on different nodes.
 Mark only the private repository as trusted in Woodpecker. The deployment
 agent has Docker socket access and must never run untrusted repositories.
+
+After all three bootstraps finish, verify the local foundation state and the
+public entry points before enabling normal delivery:
+
+```bash
+ssh root@<leader-host-or-ip> platformctl health
+ssh root@<worker-1-host-or-ip> platformctl health
+ssh root@<worker-2-host-or-ip> platformctl health
+curl -fsS https://ci.<domain>/
+curl -fsS https://status.<domain>/api/health
+curl -fsS https://chat.<domain>/health
+```
+
+Then enable the repository in Woodpecker and confirm that the generated
+`deploy-*` workflows are visible. SSH is no longer part of routine delivery;
+keep it only as a recovery channel.
 
 The following values must be identical on every New API replica: Neon
 `NEW_API_SQL_DSN` , `NEW_API_SESSION_SECRET` , and `NEW_API_CRYPTO_SECRET` .
@@ -228,9 +283,53 @@ a disaster-recovery copy.
 
 ## Daily delivery
 
-Push to `main` . Woodpecker validates the exact commit, creates a verified
+After the first deployment, normal updates require only a GitHub push. From a
+clean checkout, review the diff, run the local checks, and push the intended
+commit:
+
+```bash
+git status
+pre-commit run --all-files
+git push origin main
+```
+
+Push consumer application changes to `main` . Woodpecker validates the exact commit, creates a verified
 backup, updates the Leader controller bundle, reconciles every follower node,
 reloads Caddy only after health checks pass, and runs public smoke tests.  Foundation changes, image upgrades, and runner upgrades remain explicit reviewed workflows.
+
+The automatic push workflows are intentionally limited to `apps/**` and the
+non-cluster Caddy route/config files. Changes under `ops/`,
+`compose/foundation/`, foundation image manifests, or the deployment runner do
+not start a consumer rollout. After pushing those reviewed control-plane
+changes, run the generated manual `foundation-upgrade-leader` workflow and let
+its dependencies update the Followers before resuming normal delivery. App
+image manifest changes under `ops/images.apps.prod.env` use the generated
+manual `app-upgrade-<follower-id>` workflows instead of the normal source
+deployment.
+
+The automatic consumer path is ordered `Leader -> worker-1 -> worker-2` . Each
+node fetches the same full commit over HTTPS and keeps its own release and
+rollback pointers. A failed node rolls back locally and stops the dependency
+chain, so a later Follower is not updated against an unverified predecessor.
+Consumer source, manifests, and application Compose files under `apps/` are
+included in this path. Non-cluster committed runtime configuration under
+`config/` (including Caddy and route files) is also rendered and reloaded by
+this path. The committed cluster policy and node inventory under
+`config/cluster/` use the separate `cluster-reconcile` path. Foundation Compose
+files, foundation images, deployment scripts, and runner images remain explicit
+reviewed workflows; they are deliberately rejected by an ordinary consumer
+deployment.
+
+The rollout is ordered rather than a distributed transaction. If a node is
+offline or fails health checks, its deployment rolls back locally and the
+dependency chain stops before the next node. Retry the same Woodpecker build
+after recovery; no SSH fan-out is required.
+
+Runtime secrets and external service values in `/etc/llm-hub-lite/` and
+`/opt/apps/llm-hub-lite/shared/.env.prod` are intentionally not synchronized by
+GitHub pushes. Change those values on each affected node through the approved
+maintenance/bootstrap process, then run `platformctl sync apps` (or the
+appropriate foundation workflow) and verify health before ending maintenance.
 
 The generated manual workflows are per-node and serialized: foundation and
 runner upgrades run Leader first, then Followers; rollback runs Followers

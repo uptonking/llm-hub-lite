@@ -3,8 +3,11 @@ when:
   - event: push
     branch: main
     path:
-      exclude:
-        - config/cluster/**
+      include:
+        - apps/**
+        - config/Caddyfile
+        - config/foundation-routes.d/**
+        - config/routes.d/**
 
 labels:
   node: worker-1

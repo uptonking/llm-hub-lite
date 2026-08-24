@@ -33,6 +33,7 @@ printf '%s\n' "$*" >>"${BACKUP_CALL_LOG:?}"
 EOF
 cat >"$tmp/bin/docker" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >>"${DOCKER_CALL_LOG:?}"
 exit 0
 EOF
 cat >"$tmp/bin/flock" <<'EOF'
@@ -70,7 +71,7 @@ PLATFORMCTL_SCRIPT=$tmp/bin/platformctl
 BACKUP_SCRIPT=$tmp/bin/backup-platform
 EOF
 
-export PATH="$tmp/bin:$PATH"
+export PATH="$tmp/bin:$PATH" DOCKER_CALL_LOG="$tmp/docker.log"
 export DEPLOY_CONFIG_FILE="$tmp/config.env"
 export PLATFORMCTL_CALL_LOG="$tmp/platformctl.log" BACKUP_CALL_LOG="$tmp/backup.log"
 export GIT_CONFIG_COUNT=1
@@ -83,6 +84,10 @@ current_release="$(readlink "$platform_root/control/current")"
 [[ "$current_release" == "$platform_root/control/releases/$sha1" ]]
 grep -qx 'sync apps' "$tmp/platformctl.log"
 grep -qx 'snapshot pre-app' "$tmp/backup.log"
+if grep -Eq '^pull (calciumion/new-api|eceasy/cli-proxy-api)' "$tmp/docker.log"; then
+	printf 'application deployment pulled an image for a disabled consumer\n' >&2
+	exit 1
+fi
 
 printf '\nrollback test change\n' >>"$work/README.md"
 git -C "$work" add README.md
@@ -96,5 +101,39 @@ if FAIL_SYNC=1 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha2" >/dev/n
 fi
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha1" ]]
 grep -qx 'sync all' "$tmp/platformctl.log"
+
+printf '\nconfig route change\n' >>"$work/config/Caddyfile"
+git -C "$work" add config/Caddyfile
+git -C "$work" -c commit.gpgsign=false commit --quiet -m config-change
+git -C "$work" push --quiet origin HEAD:main
+sha3="$(git -C "$work" rev-parse HEAD)"
+if FAIL_SYNC=0 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha3" >/dev/null 2>&1; then
+	[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
+else
+	printf 'non-cluster runtime configuration was rejected by application deployment\n' >&2
+	exit 1
+fi
+
+printf '\nfoundation change\n' >>"$work/compose/foundation/caddy.yml"
+git -C "$work" add compose/foundation/caddy.yml
+git -C "$work" -c commit.gpgsign=false commit --quiet -m foundation-change
+git -C "$work" push --quiet origin HEAD:main
+sha4="$(git -C "$work" rev-parse HEAD)"
+if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha4" >/dev/null 2>&1; then
+	printf 'foundation change was accepted by application deployment\n' >&2
+	exit 1
+fi
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
+
+printf '\ncluster policy change\n' >>"$work/config/cluster/policy.env"
+git -C "$work" add config/cluster/policy.env
+git -C "$work" -c commit.gpgsign=false commit --quiet -m cluster-change
+git -C "$work" push --quiet origin HEAD:main
+sha5="$(git -C "$work" rev-parse HEAD)"
+if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha5" >/dev/null 2>&1; then
+	printf 'cluster policy change was accepted by application deployment\n' >&2
+	exit 1
+fi
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
 
 printf 'deployment rollback tests passed\n'
