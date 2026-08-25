@@ -41,11 +41,11 @@ LIBRECHAT_AWS_SECRET_ACCESS_KEY="${LIBRECHAT_AWS_SECRET_ACCESS_KEY:-}"
 LIBRECHAT_AWS_REGION="${LIBRECHAT_AWS_REGION:-auto}"
 LIBRECHAT_AWS_BUCKET_NAME="${LIBRECHAT_AWS_BUCKET_NAME:-}"
 LIBRECHAT_AWS_FORCE_PATH_STYLE="${LIBRECHAT_AWS_FORCE_PATH_STYLE:-true}"
-AICHOROUTER_MEMORY_LIMIT="${AICHOROUTER_MEMORY_LIMIT:-384m}"
-AICHOROUTER_CPUS="${AICHOROUTER_CPUS:-0.50}"
+AICHOROUTER_MEMORY_LIMIT="${AICHOROUTER_MEMORY_LIMIT:-768m}"
+AICHOROUTER_CPUS="${AICHOROUTER_CPUS:-0.9}"
 AICHOROUTER_PIDS_LIMIT="${AICHOROUTER_PIDS_LIMIT:-256}"
 AICHOROUTER_GOMAXPROCS="${AICHOROUTER_GOMAXPROCS:-1}"
-AICHOROUTER_GOMEMLIMIT="${AICHOROUTER_GOMEMLIMIT:-300MiB}"
+AICHOROUTER_GOMEMLIMIT="${AICHOROUTER_GOMEMLIMIT:-500MiB}"
 AICHOROUTER_MEMORY_CACHE_ENABLED="${AICHOROUTER_MEMORY_CACHE_ENABLED:-false}"
 AICHOROUTER_ERROR_LOG_ENABLED="${AICHOROUTER_ERROR_LOG_ENABLED:-false}"
 AICHOROUTER_BATCH_UPDATE_ENABLED="${AICHOROUTER_BATCH_UPDATE_ENABLED:-false}"
@@ -86,6 +86,15 @@ RESTIC_REMOTE_PASSWORD_FILE="${RESTIC_REMOTE_PASSWORD_FILE:-$CONFIG_ROOT/restic-
 RESTIC_REMOTE_ENV_FILE="${RESTIC_REMOTE_ENV_FILE:-$CONFIG_ROOT/restic-remote.env}"
 RESTIC_REMOTE_ENV_SOURCE_FILE="${RESTIC_REMOTE_ENV_SOURCE_FILE:-}"
 PRODUCTION_REQUIRE_REMOTE_BACKUP="${PRODUCTION_REQUIRE_REMOTE_BACKUP:-true}"
+RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/llm-hub-lite/restic}"
+RESTIC_READ_CONCURRENCY="${RESTIC_READ_CONCURRENCY:-1}"
+RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-fastest}"
+RESTIC_SKIP_IF_UNCHANGED="${RESTIC_SKIP_IF_UNCHANGED:-true}"
+RESTIC_NICE_LEVEL="${RESTIC_NICE_LEVEL:-10}"
+RESTIC_IONICE_ENABLED="${RESTIC_IONICE_ENABLED:-true}"
+RESTIC_IONICE_CLASS="${RESTIC_IONICE_CLASS:-2}"
+RESTIC_IONICE_LEVEL="${RESTIC_IONICE_LEVEL:-7}"
+RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-3600}"
 LOW_MEMORY_SWAP_ENABLED="${LOW_MEMORY_SWAP_ENABLED:-true}"
 LOW_MEMORY_SWAPFILE="${LOW_MEMORY_SWAPFILE:-/swapfile}"
 LOW_MEMORY_SWAP_SIZE="${LOW_MEMORY_SWAP_SIZE:-1G}"
@@ -223,18 +232,47 @@ clear_placeholder() {
 	value="${!key:-}"
 	case "$value" in replace-with-* | example.invalid | *'<'* | *'>'* | *example.* | *your-upstash* | *account-id*) printf -v "$key" '%s' '' ;; esac
 }
-prompt_required() {
-	local key="$1" prompt="$2" secret="${3:-0}"
-	[[ -n "${!key:-}" ]] && return 0
-	[[ -t 0 ]] || die "$key is required; provide it through the environment or shared secret bundle"
-	if [[ "$secret" == 1 ]]; then
-		read -r -s -p "$prompt: " value
-		printf '\n'
-	else
-		read -r -p "$prompt: " value
+valid_input_value() {
+	local key="$1" value="$2"
+	[[ -n "$value" ]] || {
+		printf '%s is required and cannot be empty\n' "$key" >&2
+		return 1
+	}
+	# Secrets and connection strings must never contain C0 controls or DEL.
+	# In particular, an arrow key pasted into a prompt can introduce ESC.
+	# Use printf rather than a here-string: Bash here-strings append a newline,
+	# which would make every otherwise valid value look invalid.
+	if printf '%s' "$value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then
+		printf '%s contains control characters; enter a clean single-line value\n' "$key" >&2
+		return 1
 	fi
-	[[ -n "${value:-}" ]] || die "$key is required and cannot be empty"
-	printf -v "$key" '%s' "$value"
+}
+prompt_required() {
+	local key="$1" prompt="$2" secret="${3:-0}" value
+	while :; do
+		value="${!key:-}"
+		if [[ -n "$value" ]]; then
+			if valid_input_value "$key" "$value"; then
+				return 0
+			fi
+			[[ -t 0 ]] || die "$key is invalid; provide a clean replacement through the environment or shared secret bundle"
+			printf 'Please replace %s with a value containing no control characters.\n' "$key" >&2
+			printf -v "$key" '%s' ''
+		fi
+		[[ -t 0 ]] || die "$key is required; provide it through the environment or shared secret bundle"
+		if [[ "$secret" == 1 ]]; then
+			if ! read -r -s -p "$prompt: " value; then die "$key input was not received"; fi
+			printf '\n'
+		else
+			if ! read -r -p "$prompt: " value; then die "$key input was not received"; fi
+		fi
+		if valid_input_value "$key" "$value"; then
+			printf -v "$key" '%s' "$value"
+			return 0
+		fi
+		printf 'Please enter %s again.\n' "$key" >&2
+		test -n "$value" || printf 'The value cannot be empty.\n' >&2
+	done
 }
 if [[ -n "$RESTIC_REMOTE_ENV_SOURCE_FILE" ]]; then
 	[[ -s "$RESTIC_REMOTE_ENV_SOURCE_FILE" ]] || die "Restic remote environment file does not exist: $RESTIC_REMOTE_ENV_SOURCE_FILE"
@@ -250,10 +288,10 @@ if truthy "$PRODUCTION_REQUIRE_REMOTE_BACKUP"; then
 	truthy "$RESTIC_REMOTE_ENABLED" || die 'production bootstrap requires RESTIC_REMOTE_ENABLED=true'
 	prompt_required RESTIC_REMOTE_REPOSITORY 'Remote Restic repository'
 	if [[ ! -s "$RESTIC_REMOTE_PASSWORD_FILE" ]]; then
-		[[ -t 0 ]] || die "production bootstrap requires remote Restic password file: $RESTIC_REMOTE_PASSWORD_FILE"
-		read -r -s -p 'Remote Restic password: ' restic_remote_password
-		printf '\n'
-		[[ -n "$restic_remote_password" ]] || die 'remote Restic password cannot be empty'
+		RESTIC_REMOTE_PASSWORD="${RESTIC_REMOTE_PASSWORD:-}"
+		prompt_required RESTIC_REMOTE_PASSWORD 'Remote Restic password' 1
+		restic_remote_password="$RESTIC_REMOTE_PASSWORD"
+		unset RESTIC_REMOTE_PASSWORD
 		install -d -m 700 "$(dirname "$RESTIC_REMOTE_PASSWORD_FILE")"
 		printf '%s\n' "$restic_remote_password" >"$RESTIC_REMOTE_PASSWORD_FILE"
 		chmod 600 "$RESTIC_REMOTE_PASSWORD_FILE"
@@ -644,7 +682,7 @@ if [[ ! -f "$app_env" ]]; then
 	{
 		printf 'DOMAIN_NAME=%s\nSSL_EMAIL=%s\nSHARED_NETWORK_NAME=%s\nPLATFORM_EDGE_NETWORK=%s\n' "$DOMAIN_NAME" "$SSL_EMAIL" "$edge_network" "$edge_network"
 		printf 'DATA_ROOT=%s/shared/data/prod\nTZ=Asia/Shanghai\n' "$APP_ROOT"
-		printf 'RESTIC_REMOTE_ENABLED=%s\nRESTIC_REMOTE_REPOSITORY=%s\nRESTIC_REMOTE_PASSWORD_FILE=%s\nRESTIC_REMOTE_ENV_FILE=%s\nPRODUCTION_REQUIRE_REMOTE_BACKUP=%s\n' "$RESTIC_REMOTE_ENABLED" "$RESTIC_REMOTE_REPOSITORY" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$PRODUCTION_REQUIRE_REMOTE_BACKUP"
+		printf 'RESTIC_REMOTE_ENABLED=%s\nRESTIC_REMOTE_REPOSITORY=%s\nRESTIC_REMOTE_PASSWORD_FILE=%s\nRESTIC_REMOTE_ENV_FILE=%s\nRESTIC_CACHE_DIR=%s\nRESTIC_READ_CONCURRENCY=%s\nRESTIC_COMPRESSION=%s\nRESTIC_SKIP_IF_UNCHANGED=%s\nRESTIC_NICE_LEVEL=%s\nRESTIC_IONICE_ENABLED=%s\nRESTIC_IONICE_CLASS=%s\nRESTIC_IONICE_LEVEL=%s\nRESTIC_SCHEDULE_INTERVAL=%s\nPRODUCTION_REQUIRE_REMOTE_BACKUP=%s\n' "$RESTIC_REMOTE_ENABLED" "$RESTIC_REMOTE_REPOSITORY" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$RESTIC_CACHE_DIR" "$RESTIC_READ_CONCURRENCY" "$RESTIC_COMPRESSION" "$RESTIC_SKIP_IF_UNCHANGED" "$RESTIC_NICE_LEVEL" "$RESTIC_IONICE_ENABLED" "$RESTIC_IONICE_CLASS" "$RESTIC_IONICE_LEVEL" "$RESTIC_SCHEDULE_INTERVAL" "$PRODUCTION_REQUIRE_REMOTE_BACKUP"
 		printf 'NODE_ID=%s\nCLUSTER_POLICY_FILE=%s\nNODE_CONFIG_FILE=%s/node.env\n' "$NODE_ID" "$CONTROL_ROOT/current/config/cluster/policy.env" "$CONFIG_ROOT"
 		printf 'NEW_API_SESSION_SECRET=%s\nNEW_API_CRYPTO_SECRET=%s\nNEW_API_SQL_DSN=%s\n' "${NEW_API_SESSION_SECRET:-}" "${NEW_API_CRYPTO_SECRET:-}" "${NEW_API_SQL_DSN:-}"
 		printf 'LIBRECHAT_MONGO_URI=%s\nLIBRECHAT_REDIS_URI=%s\nLIBRECHAT_JWT_SECRET=%s\nLIBRECHAT_JWT_REFRESH_SECRET=%s\nLIBRECHAT_ADMIN_PANEL_SESSION_SECRET=%s\nLIBRECHAT_AWS_ENDPOINT_URL=%s\nLIBRECHAT_AWS_ACCESS_KEY_ID=%s\nLIBRECHAT_AWS_SECRET_ACCESS_KEY=%s\nLIBRECHAT_AWS_REGION=%s\nLIBRECHAT_AWS_BUCKET_NAME=%s\nLIBRECHAT_AWS_FORCE_PATH_STYLE=%s\n' "$LIBRECHAT_MONGO_URI" "$LIBRECHAT_REDIS_URI" "$LIBRECHAT_JWT_SECRET" "$LIBRECHAT_JWT_REFRESH_SECRET" "$LIBRECHAT_ADMIN_PANEL_SESSION_SECRET" "$LIBRECHAT_AWS_ENDPOINT_URL" "$LIBRECHAT_AWS_ACCESS_KEY_ID" "$LIBRECHAT_AWS_SECRET_ACCESS_KEY" "$LIBRECHAT_AWS_REGION" "$LIBRECHAT_AWS_BUCKET_NAME" "$LIBRECHAT_AWS_FORCE_PATH_STYLE"
@@ -658,7 +696,7 @@ if [[ ! -f "$app_env" ]]; then
 		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 	} >"$app_env"
 fi
-for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "PRODUCTION_REQUIRE_REMOTE_BACKUP=true"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
+for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "RESTIC_CACHE_DIR=$RESTIC_CACHE_DIR" "RESTIC_READ_CONCURRENCY=$RESTIC_READ_CONCURRENCY" "RESTIC_COMPRESSION=$RESTIC_COMPRESSION" "RESTIC_SKIP_IF_UNCHANGED=$RESTIC_SKIP_IF_UNCHANGED" "RESTIC_NICE_LEVEL=$RESTIC_NICE_LEVEL" "RESTIC_IONICE_ENABLED=$RESTIC_IONICE_ENABLED" "RESTIC_IONICE_CLASS=$RESTIC_IONICE_CLASS" "RESTIC_IONICE_LEVEL=$RESTIC_IONICE_LEVEL" "RESTIC_SCHEDULE_INTERVAL=$RESTIC_SCHEDULE_INTERVAL" "PRODUCTION_REQUIRE_REMOTE_BACKUP=true"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
 remove_key "$app_env" NODE_ROLE
 remove_key "$app_env" LEADER_PUBLIC_IP
 ensure_key "$app_env" WOODPECKER_GRPC_SITE "https://ci-grpc.$DOMAIN_NAME"
@@ -731,15 +769,13 @@ if [[ ! -f "$woodpecker_env" ]]; then
 		oauth_client="${WOODPECKER_GITHUB_CLIENT:-}"
 		oauth_secret="${WOODPECKER_GITHUB_SECRET:-}"
 	fi
-	if [[ "$NODE_ROLE" == leader && -z "$oauth_client" ]]; then
-		read -r -p 'GitHub OAuth client ID: ' oauth_client
-	fi
-	if [[ "$NODE_ROLE" == leader && -z "$oauth_secret" ]]; then
-		read -r -s -p 'GitHub OAuth client secret: ' oauth_secret
-		printf '\n'
-	fi
 	if [[ "$NODE_ROLE" == leader ]]; then
-		[[ -n "$oauth_client" && -n "$oauth_secret" ]] || die 'OAuth credentials are required'
+		WOODPECKER_GITHUB_CLIENT="${oauth_client:-}"
+		prompt_required WOODPECKER_GITHUB_CLIENT 'GitHub OAuth client ID'
+		oauth_client="$WOODPECKER_GITHUB_CLIENT"
+		WOODPECKER_GITHUB_SECRET="${oauth_secret:-}"
+		prompt_required WOODPECKER_GITHUB_SECRET 'GitHub OAuth client secret' 1
+		oauth_secret="$WOODPECKER_GITHUB_SECRET"
 	fi
 	{
 		printf 'WOODPECKER_DATA_ROOT=%s/data\nWOODPECKER_AGENT_CONFIG_ROOT=%s/agent\nWOODPECKER_DEPLOYER_CONFIG_ROOT=%s/deployer\nWOODPECKER_HOST=https://ci.%s\nWOODPECKER_ADMIN=%s\n' "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/woodpecker" "$DOMAIN_NAME" "$WOODPECKER_ADMIN"
@@ -787,17 +823,14 @@ for pair in \
 	ensure_key "$woodpecker_env" "${pair%%=*}" "${pair#*=}"
 done
 if [[ "$NODE_ROLE" == leader ]]; then
-	if [[ -z "$(sed -n 's/^WOODPECKER_GITHUB_CLIENT=//p' "$woodpecker_env" | tail -n1)" ]]; then
-		read -r -p 'GitHub OAuth client ID: ' oauth_client
-		[[ -n "$oauth_client" ]] || die 'OAuth client ID is required'
-		set_key "$woodpecker_env" WOODPECKER_GITHUB_CLIENT "$oauth_client"
-	fi
-	if [[ -z "$(sed -n 's/^WOODPECKER_GITHUB_SECRET=//p' "$woodpecker_env" | tail -n1)" ]]; then
-		read -r -s -p 'GitHub OAuth client secret: ' oauth_secret
-		printf '\n'
-		[[ -n "$oauth_secret" ]] || die 'OAuth client secret is required'
-		set_key "$woodpecker_env" WOODPECKER_GITHUB_SECRET "$oauth_secret"
-	fi
+	oauth_client="$(sed -n 's/^WOODPECKER_GITHUB_CLIENT=//p' "$woodpecker_env" | tail -n1)"
+	WOODPECKER_GITHUB_CLIENT="$oauth_client"
+	prompt_required WOODPECKER_GITHUB_CLIENT 'GitHub OAuth client ID'
+	set_key "$woodpecker_env" WOODPECKER_GITHUB_CLIENT "$WOODPECKER_GITHUB_CLIENT"
+	oauth_secret="$(sed -n 's/^WOODPECKER_GITHUB_SECRET=//p' "$woodpecker_env" | tail -n1)"
+	WOODPECKER_GITHUB_SECRET="$oauth_secret"
+	prompt_required WOODPECKER_GITHUB_SECRET 'GitHub OAuth client secret' 1
+	set_key "$woodpecker_env" WOODPECKER_GITHUB_SECRET "$WOODPECKER_GITHUB_SECRET"
 fi
 for shared_key in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
 	shared_value="${!shared_key:-}"

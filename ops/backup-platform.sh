@@ -48,6 +48,7 @@ env_value() {
 	[[ -f "$file" ]] || return 0
 	sed -n "s/^${key}=//p" "$file" | tail -n1
 }
+truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
 RESTIC_REMOTE_ENV_FILE="${RESTIC_REMOTE_ENV_FILE:-$(env_value RESTIC_REMOTE_ENV_FILE)}"
 RESTIC_REMOTE_ENV_FILE="${RESTIC_REMOTE_ENV_FILE:-$CONFIG_ROOT/restic-remote.env}"
 if [[ -n "$RESTIC_REMOTE_ENV_FILE" && -f "$RESTIC_REMOTE_ENV_FILE" ]]; then
@@ -90,6 +91,25 @@ RESTIC_REMOTE_REPOSITORY="${RESTIC_REMOTE_REPOSITORY:-$(env_value RESTIC_REMOTE_
 RESTIC_REMOTE_PASSWORD_FILE="${RESTIC_REMOTE_PASSWORD_FILE:-$(env_value RESTIC_REMOTE_PASSWORD_FILE)}"
 RESTIC_REMOTE_PASSWORD_FILE="${RESTIC_REMOTE_PASSWORD_FILE:-$CONFIG_ROOT/restic-remote-password}"
 PRODUCTION_REQUIRE_REMOTE_BACKUP="${PRODUCTION_REQUIRE_REMOTE_BACKUP:-$(env_value PRODUCTION_REQUIRE_REMOTE_BACKUP)}"
+RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-$(env_value RESTIC_CACHE_DIR)}"
+RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/llm-hub-lite/restic}"
+RESTIC_READ_CONCURRENCY="${RESTIC_READ_CONCURRENCY:-$(env_value RESTIC_READ_CONCURRENCY)}"
+RESTIC_READ_CONCURRENCY="${RESTIC_READ_CONCURRENCY:-1}"
+RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-$(env_value RESTIC_COMPRESSION)}"
+RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-fastest}"
+RESTIC_SKIP_IF_UNCHANGED="${RESTIC_SKIP_IF_UNCHANGED:-$(env_value RESTIC_SKIP_IF_UNCHANGED)}"
+RESTIC_SKIP_IF_UNCHANGED="${RESTIC_SKIP_IF_UNCHANGED:-true}"
+RESTIC_NICE_LEVEL="${RESTIC_NICE_LEVEL:-$(env_value RESTIC_NICE_LEVEL)}"
+RESTIC_NICE_LEVEL="${RESTIC_NICE_LEVEL:-10}"
+RESTIC_IONICE_ENABLED="${RESTIC_IONICE_ENABLED:-$(env_value RESTIC_IONICE_ENABLED)}"
+RESTIC_IONICE_ENABLED="${RESTIC_IONICE_ENABLED:-true}"
+RESTIC_IONICE_CLASS="${RESTIC_IONICE_CLASS:-$(env_value RESTIC_IONICE_CLASS)}"
+RESTIC_IONICE_CLASS="${RESTIC_IONICE_CLASS:-2}"
+RESTIC_IONICE_LEVEL="${RESTIC_IONICE_LEVEL:-$(env_value RESTIC_IONICE_LEVEL)}"
+RESTIC_IONICE_LEVEL="${RESTIC_IONICE_LEVEL:-7}"
+RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-$(env_value RESTIC_SCHEDULE_INTERVAL)}"
+RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-3600}"
+RESTIC_SCHEDULE_MARKER="${RESTIC_SCHEDULE_MARKER:-/run/llm-hub-lite/restic-scheduled.timestamp}"
 NEW_API_SQL_DSN="${NEW_API_SQL_DSN:-$(env_value NEW_API_SQL_DSN)}"
 LIBRECHAT_MONGO_URI="${LIBRECHAT_MONGO_URI:-$(env_value LIBRECHAT_MONGO_URI)}"
 LIBRECHAT_MONGO_BACKUP_ENABLED="${LIBRECHAT_MONGO_BACKUP_ENABLED:-$(env_value LIBRECHAT_MONGO_BACKUP_ENABLED)}"
@@ -124,8 +144,53 @@ descriptor_ids() {
 }
 
 install -d -m 700 "$REPO"
-export RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD_FILE="$PASSWORD_FILE"
-if [[ ! -f "$REPO/config" ]]; then restic init >/dev/null; fi
+install -d -m 700 "$RESTIC_CACHE_DIR"
+[[ "$RESTIC_READ_CONCURRENCY" =~ ^[1-9][0-9]*$ ]] || {
+	printf 'invalid RESTIC_READ_CONCURRENCY: %s\n' "$RESTIC_READ_CONCURRENCY" >&2
+	exit 1
+}
+[[ "$RESTIC_NICE_LEVEL" =~ ^[0-9]+$ && "$RESTIC_IONICE_CLASS" =~ ^[0-9]+$ && "$RESTIC_IONICE_LEVEL" =~ ^[0-9]+$ ]] || {
+	printf 'invalid Restic priority settings\n' >&2
+	exit 1
+}
+[[ "$RESTIC_SCHEDULE_INTERVAL" =~ ^[1-9][0-9]*$ ]] || {
+	printf 'invalid RESTIC_SCHEDULE_INTERVAL: %s\n' "$RESTIC_SCHEDULE_INTERVAL" >&2
+	exit 1
+}
+export RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD_FILE="$PASSWORD_FILE" RESTIC_CACHE_DIR RESTIC_READ_CONCURRENCY RESTIC_COMPRESSION
+restic_run() {
+	if truthy "$RESTIC_IONICE_ENABLED" && command -v ionice >/dev/null 2>&1; then
+		if command -v nice >/dev/null 2>&1; then
+			ionice -c "$RESTIC_IONICE_CLASS" -n "$RESTIC_IONICE_LEVEL" nice -n "$RESTIC_NICE_LEVEL" restic "$@"
+		else
+			ionice -c "$RESTIC_IONICE_CLASS" -n "$RESTIC_IONICE_LEVEL" restic "$@"
+		fi
+	elif command -v nice >/dev/null 2>&1; then
+		nice -n "$RESTIC_NICE_LEVEL" restic "$@"
+	else
+		restic "$@"
+	fi
+}
+restic_backup() {
+	local -a options
+	options=(--tag platform --tag "$NODE_TAG" --tag "$reason")
+	truthy "$RESTIC_SKIP_IF_UNCHANGED" && options+=(--skip-if-unchanged)
+	restic_run backup --compression "$RESTIC_COMPRESSION" "${options[@]}" "$@"
+}
+scheduled_snapshot_recent() {
+	local last now
+	[[ "$operation" == snapshot && "$reason" == scheduled ]] || return 1
+	[[ -r "$RESTIC_SCHEDULE_MARKER" ]] || return 1
+	last="$(cat "$RESTIC_SCHEDULE_MARKER" 2>/dev/null || true)"
+	[[ "$last" =~ ^[0-9]+$ ]] || return 1
+	now="$(date +%s)"
+	((now >= last && now - last < RESTIC_SCHEDULE_INTERVAL))
+}
+if scheduled_snapshot_recent; then
+	printf 'scheduled backup skipped: last snapshot is less than %s seconds old\n' "$RESTIC_SCHEDULE_INTERVAL"
+	exit 0
+fi
+if [[ ! -f "$REPO/config" ]]; then restic_run init >/dev/null; fi
 remote_restic() {
 	[[ -n "$RESTIC_REMOTE_REPOSITORY" ]] || {
 		printf 'RESTIC_REMOTE_REPOSITORY is required when remote backups are enabled\n' >&2
@@ -135,7 +200,7 @@ remote_restic() {
 		printf 'missing remote Restic password file: %s\n' "$RESTIC_REMOTE_PASSWORD_FILE" >&2
 		return 1
 	}
-	RESTIC_REPOSITORY="$RESTIC_REMOTE_REPOSITORY" RESTIC_PASSWORD_FILE="$RESTIC_REMOTE_PASSWORD_FILE" restic "$@"
+	RESTIC_REPOSITORY="$RESTIC_REMOTE_REPOSITORY" RESTIC_PASSWORD_FILE="$RESTIC_REMOTE_PASSWORD_FILE" restic_run "$@"
 }
 check_remote_repository() {
 	remote_enabled || return 0
@@ -320,9 +385,14 @@ snapshot() {
 	)
 	if ((${#ephemeral_excludes[@]} > 0)); then excludes+=("${ephemeral_excludes[@]}"); fi
 	check_remote_repository
-	restic backup --tag platform --tag "$NODE_TAG" --tag "$reason" "${excludes[@]}" "${existing[@]}"
+	restic_backup "${excludes[@]}" "${existing[@]}"
 	if remote_enabled; then
-		remote_restic backup --tag platform --tag "$NODE_TAG" --tag "$reason" "${excludes[@]}" "${existing[@]}"
+		RESTIC_REPOSITORY="$RESTIC_REMOTE_REPOSITORY" RESTIC_PASSWORD_FILE="$RESTIC_REMOTE_PASSWORD_FILE" restic_backup "${excludes[@]}" "${existing[@]}"
+	fi
+	if [[ "$operation" == snapshot && "$reason" == scheduled ]]; then
+		install -d -m 700 "$(dirname "$RESTIC_SCHEDULE_MARKER")"
+		printf '%s\n' "$(date +%s)" >"$RESTIC_SCHEDULE_MARKER"
+		chmod 600 "$RESTIC_SCHEDULE_MARKER"
 	fi
 	printf 'backup snapshot complete: repository=%s reason=%s\n' "$REPO" "$reason"
 }
@@ -332,13 +402,13 @@ case "$operation" in
 snapshot) snapshot ;;
 prune)
 	check_remote_repository
-	restic forget --tag "platform,$NODE_TAG" --keep-last 48 --keep-hourly 24 --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
+	restic_run forget --tag "platform,$NODE_TAG" --keep-last 48 --keep-hourly 24 --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
 	remote_enabled && remote_restic forget --tag "platform,$NODE_TAG" --keep-last 48 --keep-hourly 24 --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
 	printf 'backup retention/prune complete\n'
 	;;
 check)
 	check_remote_repository
-	restic check
+	restic_run check
 	remote_enabled && remote_restic check
 	printf 'backup repository check complete\n'
 	;;

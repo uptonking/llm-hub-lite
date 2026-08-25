@@ -59,10 +59,13 @@ export CONTROL_ROOT="$tmp/control" APPS_ROOT="$tmp/control/current/apps"
 export RESTIC_REPOSITORY="$tmp/repository" RESTIC_PASSWORD_FILE="$tmp/config/restic-password"
 export BACKUP_STAGE_ROOT="$tmp/stage" BACKUP_MIN_FREE_BYTES=1048576 BACKUP_MIN_FREE_PERCENT=1
 export PLATFORM_LOCK_FILE="$tmp/platform.lock"
+export RESTIC_CACHE_DIR="$tmp/cache" RESTIC_SCHEDULE_MARKER="$tmp/scheduled.marker" RESTIC_SCHEDULE_INTERVAL=3600
 
 "$repo_root/ops/backup-platform.sh" snapshot portability-test
 grep -qx -- "-Pk $tmp/repository" "$tmp/df.log"
 grep -q ' backup ' "$tmp/restic.log"
+grep -q -- '--compression fastest' "$tmp/restic.log"
+grep -q -- '--skip-if-unchanged' "$tmp/restic.log"
 grep -q "$tmp/config/aichorouter.env" "$tmp/restic.log"
 grep -q -- "--exclude $tmp/app/shared/data/prod/aichorouter/log-buffer" "$tmp/restic.log"
 grep -q "$tmp/config/observer.env" "$tmp/restic.log"
@@ -78,6 +81,23 @@ export RESTIC_REMOTE_ENABLED=true RESTIC_REMOTE_REPOSITORY="$tmp/remote-reposito
 mkdir -p "$tmp/remote-repository"
 "$repo_root/ops/backup-platform.sh" snapshot remote-test
 grep -q "$tmp/remote-repository" "$tmp/restic.log"
+
+# A fresh scheduled marker suppresses the expensive Restic calls, while a
+# manual snapshot remains immediate even inside the scheduled interval.
+printf '%s\n' "$(date +%s)" >"$RESTIC_SCHEDULE_MARKER"
+before_lines="$(wc -l <"$tmp/restic.log")"
+"$repo_root/ops/backup-platform.sh" snapshot scheduled >/dev/null
+after_lines="$(wc -l <"$tmp/restic.log")"
+[[ "$before_lines" == "$after_lines" ]] || {
+	printf 'scheduled backup was not throttled\n' >&2
+	exit 1
+}
+"$repo_root/ops/backup-platform.sh" snapshot manual >/dev/null
+manual_lines="$(wc -l <"$tmp/restic.log")"
+((manual_lines > after_lines)) || {
+	printf 'manual backup was incorrectly throttled\n' >&2
+	exit 1
+}
 
 mkdir -p "$tmp/control/current/config/cluster/nodes"
 cat >"$tmp/control/current/config/cluster/policy.env" <<'EOF'

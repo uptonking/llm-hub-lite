@@ -160,6 +160,29 @@ else
 	exit 1
 fi
 
+aichorouter_image="$(sed -n 's/^AICHOROUTER_IMAGE=//p' "$work/ops/images.apps.prod.env")"
+aichorouter_prefix="${aichorouter_image%@sha256:*}"
+aichorouter_digest="${aichorouter_image##*@sha256:}"
+[[ "$aichorouter_prefix" != "$aichorouter_image" && "$aichorouter_digest" =~ ^[0-9a-f]{64}$ ]] || {
+	printf 'test fixture did not contain a pinned Aichorouter image\n' >&2
+	exit 1
+}
+aichorouter_changed_digest="${aichorouter_digest%?}0"
+[[ "$aichorouter_changed_digest" != "$aichorouter_digest" ]] || aichorouter_changed_digest="${aichorouter_digest%?}1"
+sed "s#^AICHOROUTER_IMAGE=.*#AICHOROUTER_IMAGE=$aichorouter_prefix@sha256:$aichorouter_changed_digest#" \
+	"$work/ops/images.apps.prod.env" >"$tmp/images.apps.changed"
+mv "$tmp/images.apps.changed" "$work/ops/images.apps.prod.env"
+git -C "$work" add ops/images.apps.prod.env
+git -C "$work" -c commit.gpgsign=false commit --quiet -m image-change
+git -C "$work" push --quiet origin HEAD:main
+sha_image="$(git -C "$work" rev-parse HEAD)"
+if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha_image" >"$tmp/deploy-image-change.log" 2>&1; then
+	printf 'application image manifest change was accepted by the normal deployment path\n' >&2
+	exit 1
+fi
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
+grep -Fq 'application image manifest changes require the app-upgrade or singleton workflow' "$tmp/deploy-image-change.log"
+
 printf '\nfoundation change\n' >>"$work/compose/foundation/caddy.yml"
 git -C "$work" add compose/foundation/caddy.yml
 git -C "$work" -c commit.gpgsign=false commit --quiet -m foundation-change

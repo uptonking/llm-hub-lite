@@ -105,14 +105,34 @@ the Leader's Caddy route. SQLite is intentionally local and is not replicated,
 so a target move is intentionally a fresh local deployment. Previous local
 state is retained in an archive directory until manually removed.
 
-The default low-resource profile gives Aichorouter `0.50` CPU, `384m` container
-memory, one Go runtime thread ( `GOMAXPROCS=1` ), and a `300MiB` Go heap limit.
-SQLite is limited to one idle and four open connections; relay pools, request
-body buffers, stream buffers, and downloads are bounded, while the optional
-memory cache, error log, and batch updater remain disabled. These defaults are
-set in `.env.prod` ; override the `AICHOROUTER_*` values there only when measured
+The default profile gives Aichorouter `0.9` CPU, `768m` container memory, one
+Go runtime thread ( `GOMAXPROCS=1` ), and a `500MiB` Go heap limit. This leaves
+headroom for the Go runtime and SQLite while avoiding the 503 overloads caused
+by the previous 384 MiB cap. SQLite is limited to one idle and four open
+connections; relay pools, request body buffers, stream buffers, and downloads
+are bounded, while the optional memory cache, error log, and batch updater remain
+disabled. These defaults are set in `.env.prod` ; override the `AICHOROUTER_*`
+values there only when measured
 load requires it. Keep `AICHOROUTER_GOMEMLIMIT` below the container memory limit
 and leave at least enough headroom for the Go runtime and SQLite pages.
+An already-bootstrapped host keeps its explicit `.env.prod` values for
+operator overrides; updating `.env.prod.example` does not rewrite that file.
+For an existing target follower, update the four Aichorouter profile keys in
+`/opt/apps/llm-hub-lite/shared/.env.prod`, then use `platformctl recreate` so
+Compose applies the new limits and environment. A plain `platformctl restart`
+only restarts the old container definition.
+
+If a previous interactive paste stored an invalid control byte in the session
+secret, replace it on the target follower and recreate only Aichorouter:
+
+```bash
+sudo env AICHOROUTER_SESSION_SECRET="$(openssl rand -hex 32)" \
+  /usr/local/bin/configure-app-secrets aichorouter
+sudo platformctl recreate app:/opt/platform/control/current/apps/aichorouter
+```
+
+Rotating `AICHOROUTER_SESSION_SECRET` invalidates existing Aichorouter sessions;
+keep the existing `AICHOROUTER_CRYPTO_SECRET` unless it is also being rotated.
 
 Select its follower interactively before committing a policy change:
 
@@ -175,9 +195,9 @@ curl -fsS https://observer.aichorage.de/healthz
 
 OpenObserve's production image is distroless and does not contain an HTTP
 client. A tiny pinned `health-probe` sidecar performs the HTTP readiness check
-against `/healthz`; the same sidecar pattern is used by Aichorouter and CPAPI.
+against `/healthz` ; the same sidecar pattern is used by Aichorouter and CPAPI.
 `platformctl health` requires the application containers to be running and
-the declared `health-probe` container to be `healthy`. The Observer log proxy
+the declared `health-probe` container to be `healthy` . The Observer log proxy
 and Vector shipper retain their own private healthchecks.
 
 On the selected follower, provision its root-only secrets once:
@@ -187,7 +207,7 @@ sudo /opt/platform/control/current/ops/configure-app-secrets.sh aichorouter
 sudo /opt/platform/control/current/ops/configure-app-secrets.sh cpapi
 ```
 
-CPAPI exposes an unauthenticated `/healthz` endpoint that returns `{"status":"ok"}`.
+CPAPI exposes an unauthenticated `/healthz` endpoint that returns `{"status":"ok"}` .
 Its main container also has a native liveness check for the persisted config
 and init process; the `health-probe` sidecar verifies the HTTP endpoint without
 requiring `curl` or `wget` in the minimal CPAPI image. Verify the complete
@@ -338,7 +358,7 @@ for host in "$LEADER" "$WORKER_1" "$WORKER_2"; do
                 /etc/llm-hub-lite/restic-remote-password'
 done
 
-ssh -t "root@$LEADER" \
+ssh -tt "root@$LEADER" \
   "NODE_ID=leader \
     LEADER_PUBLIC_IP=$LEADER \
     DOMAIN_NAME=aichorage.de \
@@ -368,7 +388,7 @@ rm -rf "$tmp_secrets"
 
 # bootstrap workers
 
-ssh -t "root@$WORKER_1" \
+ssh -tt "root@$WORKER_1" \
   "NODE_ID=worker-1 \
     LEADER_PUBLIC_IP=$LEADER \
     DOMAIN_NAME=aichorage.de \
@@ -379,7 +399,7 @@ ssh -t "root@$WORKER_1" \
     RESTIC_REMOTE_ENV_FILE=/etc/llm-hub-lite/restic-remote.env \
     /root/llm-hub-lite-bootstrap.sh"
 
-ssh -t "root@$WORKER_2" \
+ssh -tt "root@$WORKER_2" \
     "NODE_ID=worker-2 \
      LEADER_PUBLIC_IP=$LEADER \
      DOMAIN_NAME=aichorage.de \
@@ -411,6 +431,12 @@ Each bootstrap confirms the role derived from the committed inventory.
 Bootstrap prefetches only images active for that node role (Caddy and the
 foundation services on a Leader; consumer images on Followers) and retries
 transient registry failures before aborting.
+
+The bootstrap program itself is not self-updating. Before a first deployment,
+recovery, or retry after changing bootstrap logic, copy the current
+`ops/bootstrap-vps.sh` from this checkout to `/root/llm-hub-lite-bootstrap.sh`
+on every target VPS. The program then fetches the latest repository revision
+for the rest of the deployment.
 
 Bootstrap is safe to retry after a partial failure. It merges missing image
 keys from the fetched repository into `/etc/llm-hub-lite/images.apps.env` and
@@ -595,6 +621,28 @@ pre-commit run --all-files
 git push origin main
 ```
 
+Use the workflow that matches the changed paths. A normal LibreChat or legacy
+New API source/configuration change is handled by the generated `deploy-*`
+chain. Aichorouter, CPAPI, and Observer changes are handled by that app's
+generated `singleton-stage-*` -> `singleton-switch-*` -> `singleton-stop-*`
+chain. Image digest changes are run through the generated manual
+`app-upgrade-worker-1` and `app-upgrade-worker-2` workflows, in order, for
+active-active consumer images. A singleton image change follows that
+singleton's stage/switch/stop chain. Do not start an app-upgrade for an
+unchanged image manifest.
+
+For a local runtime-only change, edit the target node's root-owned
+`/opt/apps/llm-hub-lite/shared/.env.prod` or the app secret file under
+`/etc/llm-hub-lite/`, then apply it without pulling an image:
+
+```bash
+ssh root@<target-follower> 'platformctl recreate app:/opt/platform/control/current/apps/aichorouter && platformctl health'
+```
+
+The same command applies to `cpapi` or `observer`. It is intentionally a
+local maintenance operation; put durable Compose/default changes in Git so
+the next release remains reproducible.
+
 Push consumer application changes to `main` . Woodpecker validates the exact commit, creates a verified
 backup, updates the Leader controller bundle, reconciles every follower node,
 reloads Caddy only after health checks pass, and runs public smoke tests.  Foundation changes, image upgrades, and runner upgrades remain explicit reviewed workflows.
@@ -606,12 +654,16 @@ app changes use their generated stage/switch/stop workflow chain instead;
 they are excluded from the normal rollout to prevent concurrent deployments.
 Changes under `ops/` ,
 `compose/foundation/` , foundation image manifests, or the deployment runner do
-not start a consumer rollout. After pushing those reviewed control-plane
-changes, run the generated manual `foundation-upgrade-leader` workflow and let
-its dependencies update the Followers before resuming normal delivery. App
-image manifest changes under `ops/images.apps.prod.env` use the generated
-manual `app-upgrade-<follower-id>` workflows instead of the normal source
-deployment.
+not start a consumer rollout. Keep those control-plane changes in a separate
+commit from consumer changes: after pushing them, run the generated manual
+`foundation-upgrade-leader` workflow and let its dependencies update the
+Followers before resuming normal delivery. A commit that mixes a control-plane
+path with an app path is intentionally rejected by the deployment scope check.
+App image manifest changes for active-active consumers use the generated manual
+`app-upgrade-<follower-id>` workflows instead of the normal source deployment;
+singleton image changes use the singleton chain described above. If an image
+digest and source change must ship together, use the workflow for that app and
+do not rely on the normal deploy job.
 
 The automatic consumer path is ordered `Leader -> worker-1 -> worker-2` . Each
 node fetches the same full commit over HTTPS and keeps its own release and
@@ -639,8 +691,9 @@ after recovery; no SSH fan-out is required.
 Runtime secrets and external service values in `/etc/llm-hub-lite/` and
 `/opt/apps/llm-hub-lite/shared/.env.prod` are intentionally not synchronized by
 GitHub pushes. Change those values on each affected node through the approved
-maintenance/bootstrap process, then run `platformctl sync apps` (or the
-appropriate foundation workflow) and verify health before ending maintenance.
+maintenance/bootstrap process, then recreate the affected project and verify
+health before ending maintenance. Use `platformctl sync apps` only when several
+consumer projects need reconciliation after a release change.
 Manifest-declared singleton runtime env files are included in Restic snapshots
 and restore swaps, but are still never copied between Followers during a fresh
 singleton move.
@@ -652,21 +705,35 @@ without SSH fan-out.
 
 Useful commands on a node:
 
-```text
+```sh
 platformctl status
 platformctl health
-platformctl recover
+
+# reconcile the checked-out release after a normal source/configuration change
 platformctl sync all
+
+# restart containers when only a process restart is needed; this does not
+# apply changed Compose limits or environment values
 platformctl restart all
+platformctl restart caddy
+platformctl restart app:/opt/platform/control/current/apps/librechat
+platformctl restart app:/opt/platform/control/current/apps/cpapi
+
+# apply changed Compose limits, environment, or a local runtime secret
+platformctl recreate app:/opt/platform/control/current/apps/aichorouter
+platformctl recreate app:/opt/platform/control/current/apps/cpapi
+platformctl recreate app:/opt/platform/control/current/apps/observer
+
+# useful for boot recovery, missing containers, or unhealthy projects
+platformctl recover
 platformctl backup snapshot manual
 platformctl restore extract latest
 RESTORE_SOURCE=remote RESTORE_NODE_ID=leader platformctl restore extract latest
+
+# use it only when a normal restart or sync cannot fix a project
+platformctl recreate <project>
 ```
 
-Docker restart policies, live-restore, `platform-recovery.service` , and the
-recovery timer make reboot recovery idempotent. Production snapshots require
-an initialized and verified remote Restic repository. Restic snapshots include
-runtime configuration, Caddy certificates, Woodpecker/Beszel SQLite online
-backups, release pointers, and application data without deleting live data.
-Local-only snapshots are available only when the explicit production backup
-gate is disabled for beta/development use.
+Docker restart policies, live-restore, `platform-recovery.service` , and the recovery timer make reboot recovery idempotent.
+Production snapshots require an initialized and verified remote Restic repository. Restic snapshots include runtime configuration, Caddy certificates, Woodpecker/Beszel SQLite online backups, release pointers, and application data without deleting live data. The scheduled timer wakes every 15 minutes for reboot recovery, but `reason=scheduled` snapshots are throttled to one per hour by `RESTIC_SCHEDULE_INTERVAL=3600`; manual, pre-deployment, post-bootstrap, and recovery snapshots remain immediate. Restic uses a persistent mode-700 cache, one reader, `fastest` compression, `--skip-if-unchanged`, and low CPU/I/O priority (`nice`/`ionice`) to reduce contention with consumer services. Override these `RESTIC_*` settings in the root-only `.env.prod` only after measuring the impact.
+Local-only snapshots are available only when the explicit production backup gate is disabled for beta/development use.

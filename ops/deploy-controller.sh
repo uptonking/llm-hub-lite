@@ -186,8 +186,8 @@ verify_app_scope() {
 			die "unsupported cluster configuration path in application deployment: $path"
 			;;
 		esac
-		if [[ "$path" == ops/images.apps.prod.env && "$mode" != app && "$mode" != app-upgrade && "$mode" != singleton-stage && "$mode" != singleton-switch && "$mode" != singleton-stop ]]; then
-			die "unsupported image manifest change in $mode deployment: $path"
+		if [[ "$path" == ops/images.apps.prod.env && "$mode" != app-upgrade && "$mode" != singleton-stage && "$mode" != singleton-switch && "$mode" != singleton-stop ]]; then
+			die "application image manifest changes require the app-upgrade or singleton workflow: $path"
 		fi
 	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
 }
@@ -295,18 +295,6 @@ backup() {
 	[[ -x "$BACKUP_SCRIPT" ]] || die "backup script is not executable: $BACKUP_SCRIPT"
 	log 'Creating verified pre-change snapshot'
 	PLATFORM_LOCK_HELD=1 "$BACKUP_SCRIPT" snapshot "${1:-pre-deploy}" || die 'verified backup failed'
-}
-
-merge_new_app_image_keys() {
-	local release="$1" key value
-	[[ -f "$APP_IMAGE_ENV" ]] || : >"$APP_IMAGE_ENV"
-	while IFS='=' read -r key value; do
-		[[ -n "$key" && "$key" != \#* ]] || continue
-		if ! grep -q "^${key}=" "$APP_IMAGE_ENV"; then
-			printf '%s=%s\n' "$key" "$value" >>"$APP_IMAGE_ENV"
-		fi
-	done <"$release/ops/images.apps.prod.env"
-	chmod 600 "$APP_IMAGE_ENV"
 }
 
 install_foundation_files() {
@@ -450,10 +438,8 @@ apply() {
 	# Normal source deployments change application code/config only. Image
 	# changes are explicit app-upgrade operations so a routine push cannot
 	# silently move production to a new image set.
-	if [[ "$mode" == app-upgrade ]]; then
+	if [[ "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]]; then
 		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
-	elif [[ "$mode" == app || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]]; then
-		merge_new_app_image_keys "$release"
 	fi
 	if [[ "$mode" == foundation || "$mode" == cluster-reconcile ]]; then
 		foundation_changed=1

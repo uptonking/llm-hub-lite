@@ -690,8 +690,14 @@ restart_project() {
 		return
 	}
 	[[ "$p" == app:* ]] && app_compose "${p#app:}" || foundation_compose "$p"
-	"${compose_command[@]}" restart
-	wait_project "$p" || die "$p failed after restart"
+	if ! "${compose_command[@]}" restart; then
+		report_compose_failure
+		die "$p restart command failed"
+	fi
+	if ! wait_project "$p"; then
+		report_compose_failure
+		die "$p failed after restart"
+	fi
 }
 recreate_project() {
 	local p="$1"
@@ -700,7 +706,10 @@ recreate_project() {
 		return
 	}
 	[[ "$p" == app:* ]] && app_compose "${p#app:}" || foundation_compose "$p"
-	"${compose_command[@]}" up -d --pull never --force-recreate --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT"
+	if ! "${compose_command[@]}" up -d --pull never --force-recreate --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT"; then
+		report_compose_failure
+		die "$p failed during recreate"
+	fi
 }
 smoke_project() {
 	local d="$1" u path expected smoke_local

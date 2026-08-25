@@ -5,8 +5,8 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 60s
-    mem_limit: ${AICHOROUTER_MEMORY_LIMIT:-384m}
-    cpus: ${AICHOROUTER_CPUS:-0.50}
+    mem_limit: ${AICHOROUTER_MEMORY_LIMIT:-768m}
+    cpus: ${AICHOROUTER_CPUS:-0.9}
     pids_limit: ${AICHOROUTER_PIDS_LIMIT:-256}
     labels:
       com.aichorage.platform: llm-hub-lite
@@ -15,7 +15,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       GOMAXPROCS: ${AICHOROUTER_GOMAXPROCS:-1}
-      GOMEMLIMIT: ${AICHOROUTER_GOMEMLIMIT:-300MiB}
+      GOMEMLIMIT: ${AICHOROUTER_GOMEMLIMIT:-500MiB}
       SQLITE_PATH: /data/aichorouter.db
       SESSION_SECRET: ${AICHOROUTER_SESSION_SECRET:?AICHOROUTER_SESSION_SECRET must be set}
       CRYPTO_SECRET: ${AICHOROUTER_CRYPTO_SECRET:?AICHOROUTER_CRYPTO_SECRET must be set}

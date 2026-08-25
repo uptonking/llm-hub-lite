@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [[ "$-" == *x* ]]; then
+	set +x
+	printf 'WARNING: shell xtrace was disabled before loading application secrets.\n' >&2
+fi
 umask 077
 
 [[ "$EUID" -eq 0 ]] || {
@@ -69,6 +73,18 @@ install -d -m 700 "$(dirname "$runtime")"
 runtime_tmp="$(mktemp "$(dirname "$runtime")/.runtime.XXXXXX")"
 trap 'rm -f -- "$runtime_tmp"' EXIT
 [[ -f "$runtime" ]] && cp "$runtime" "$runtime_tmp"
+valid_secret_value() {
+	local key="$1" value="$2"
+	[[ -n "$value" ]] || {
+		printf '%s is required\n' "$key" >&2
+		return 1
+	}
+	# Avoid a Bash here-string: its implicit newline would reject every value.
+	if printf '%s' "$value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then
+		printf '%s contains control characters; provide a clean replacement\n' "$key" >&2
+		return 1
+	fi
+}
 while IFS= read -r key; do
 	[[ -n "$key" ]] || continue
 	[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || {
@@ -79,18 +95,23 @@ while IFS= read -r key; do
 	if [[ -z "$secret_value" && -f "$runtime" ]]; then
 		secret_value="$(sed -n "s/^${key}=//p" "$runtime" | tail -n1)"
 	fi
-	if [[ -z "$secret_value" ]]; then
-		read -r -s -p "$key: " secret_value
+	while :; do
+		if [[ -n "$secret_value" ]]; then
+			if valid_secret_value "$key" "$secret_value"; then break; fi
+			[[ -t 0 ]] || {
+				printf '%s is invalid; provide a clean replacement through the environment\n' "$key" >&2
+				exit 1
+			}
+			secret_value=''
+		fi
+		if ! read -r -s -p "$key: " secret_value; then
+			printf '%s input was not received\n' "$key" >&2
+			exit 1
+		fi
 		printf '\n'
-	fi
-	[[ -n "$secret_value" ]] || {
-		printf '%s is required\n' "$key" >&2
-		exit 1
-	}
-	[[ "$secret_value" != *$'\n'* && "$secret_value" != *$'\r'* ]] || {
-		printf '%s must be a single-line value\n' "$key" >&2
-		exit 1
-	}
+		if valid_secret_value "$key" "$secret_value"; then break; fi
+		printf 'Please enter %s again.\n' "$key" >&2
+	done
 	tmp_key="$(mktemp "$(dirname "$runtime")/.key.XXXXXX")"
 	sed "/^${key}=/d" "$runtime_tmp" >"$tmp_key"
 	printf '%s=%s\n' "$key" "$secret_value" >>"$tmp_key"
