@@ -8,7 +8,7 @@ debug_on_failure() {
 	local status="$?" file
 	if ((status != 0)); then
 		printf '\n--- deployment rollback test diagnostics (exit %s) ---\n' "$status" >&2
-		for file in "$tmp"/deploy-*.log "$tmp"/app/deploy.log "$tmp"/platformctl.log "$tmp"/backup.log "$tmp"/docker.log; do
+		for file in "$tmp"/deploy-*.log "$tmp"/app/deploy.log "$tmp"/platformctl.log "$tmp"/backup.log "$tmp"/docker.log "$tmp"/platform-compose.log; do
 			[[ -f "$file" ]] || continue
 			printf '\n[%s]\n' "${file#"$tmp"/}" >&2
 			sed -n '1,240p' "$file" >&2 || true
@@ -69,6 +69,11 @@ cat >"$tmp/bin/flock" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
+cat >"$tmp/bin/platform-compose" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"${PLATFORM_COMPOSE_CALL_LOG:?}"
+exit 0
+EOF
 chmod +x "$tmp/bin"/*
 
 app_root="$tmp/app"
@@ -100,9 +105,10 @@ PLATFORMCTL_SCRIPT=$tmp/bin/platformctl
 BACKUP_SCRIPT=$tmp/bin/backup-platform
 EOF
 
-export PATH="$tmp/bin:$PATH" DOCKER_CALL_LOG="$tmp/docker.log"
+export PATH="$tmp/bin:$PATH" DOCKER_CALL_LOG="$tmp/docker.log" PLATFORM_COMPOSE_CALL_LOG="$tmp/platform-compose.log"
 export DEPLOY_CONFIG_FILE="$tmp/config.env"
 export PLATFORMCTL_CALL_LOG="$tmp/platformctl.log" BACKUP_CALL_LOG="$tmp/backup.log"
+export PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose"
 export GIT_CONFIG_COUNT=2
 export GIT_CONFIG_KEY_0="url.file://$remote.insteadOf"
 export GIT_CONFIG_VALUE_0=https://github.com/test/repo.git
