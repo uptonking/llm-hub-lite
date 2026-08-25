@@ -87,8 +87,6 @@ fi
 for id in "${ids[@]}"; do
 	[[ "$id" == "${ordered[0]}" || ("$newapi_enabled" -eq 1 && "$id" == "$migration_id") ]] || ordered+=("$id")
 done
-cluster_last="${ordered[${#ordered[@]} - 1]}"
-
 render() {
 	local id="$1" previous="$2" file="$3" event="$4"
 	local dep=''
