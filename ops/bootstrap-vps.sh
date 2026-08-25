@@ -69,6 +69,11 @@ GITHUB_TOKEN_FILE="${GITHUB_TOKEN_FILE:-${PLATFORM_GITHUB_TOKEN_FILE:-}}"
 SHARED_SECRET_BUNDLE_FILE="${SHARED_SECRET_BUNDLE_FILE:-${PLATFORM_SECRET_BUNDLE_FILE:-$CONFIG_ROOT/shared-secrets.env}}"
 app_env="$APP_ROOT/shared/.env.prod"
 woodpecker_env="$PLATFORM_ROOT/foundation/env/woodpecker.env"
+runtime_setting() {
+	local key="$1"
+	[[ -r "$app_env" ]] || return 0
+	sed -n "s/^${key}=//p" "$app_env" 2>/dev/null | tail -n1 || true
+}
 DOMAIN_NAME="${DOMAIN_NAME:-aichorage.de}"
 SSL_EMAIL="${SSL_EMAIL:-admin@$DOMAIN_NAME}"
 WOODPECKER_REPO_OWNERS="${WOODPECKER_REPO_OWNERS:-${REPO_SLUG%%/*}}"
@@ -88,7 +93,9 @@ RESTIC_REMOTE_ENV_SOURCE_FILE="${RESTIC_REMOTE_ENV_SOURCE_FILE:-}"
 PRODUCTION_REQUIRE_REMOTE_BACKUP="${PRODUCTION_REQUIRE_REMOTE_BACKUP:-true}"
 RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/llm-hub-lite/restic}"
 RESTIC_READ_CONCURRENCY="${RESTIC_READ_CONCURRENCY:-1}"
-RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-fastest}"
+RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-$(runtime_setting RESTIC_COMPRESSION)}"
+RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-auto}"
+RESTIC_SKIP_IF_UNCHANGED="${RESTIC_SKIP_IF_UNCHANGED:-$(runtime_setting RESTIC_SKIP_IF_UNCHANGED)}"
 RESTIC_SKIP_IF_UNCHANGED="${RESTIC_SKIP_IF_UNCHANGED:-true}"
 RESTIC_NICE_LEVEL="${RESTIC_NICE_LEVEL:-10}"
 RESTIC_IONICE_ENABLED="${RESTIC_IONICE_ENABLED:-true}"
@@ -133,6 +140,38 @@ pull_image() {
 		printf 'Image pull failed; retrying in %s seconds (attempt %s/5): %s\n' "$((attempt * 5))" "$attempt" "$image" >&2
 		sleep "$((attempt * 5))"
 	done
+}
+normalize_restic_compression() {
+	local requested="${RESTIC_COMPRESSION:-auto}" modes
+	case "$requested" in
+	auto | off | max | fastest | better) ;;
+	*) die "invalid RESTIC_COMPRESSION: $requested (expected auto, off, max, fastest, or better)" ;;
+	esac
+	modes="$(restic backup --help 2>&1 | sed -n 's/.*one of (\([^)]*\)).*/\1/p' | head -n1)"
+	case "|$modes|" in
+	*"|$requested|"*)
+		return 0
+		;;
+	esac
+	case "$requested" in
+	fastest | better | max)
+		printf 'Restic does not support compression mode %s; falling back to auto\n' "$requested" >&2
+		RESTIC_COMPRESSION=auto
+		modes="$(restic backup --help 2>&1 | sed -n 's/.*one of (\([^)]*\)).*/\1/p' | head -n1)"
+		case "|$modes|" in
+		*"|auto|"*) ;;
+		*) die 'installed Restic does not support compression mode auto' ;;
+		esac
+		;;
+	*) die "installed Restic does not support compression mode: $requested" ;;
+	esac
+}
+normalize_restic_features() {
+	normalize_restic_compression
+	if truthy "$RESTIC_SKIP_IF_UNCHANGED" && ! restic backup --help 2>&1 | grep -q -- '--skip-if-unchanged'; then
+		printf 'Restic does not support --skip-if-unchanged; continuing without it\n' >&2
+		RESTIC_SKIP_IF_UNCHANGED=false
+	fi
 }
 image_required() {
 	local key="$1" manifest image_key app_id
@@ -458,8 +497,9 @@ if ((${#missing[@]})); then
 	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
 fi
 need jq
+normalize_restic_features
 if remote_enabled; then
-	export RESTIC_REPOSITORY="$RESTIC_REMOTE_REPOSITORY" RESTIC_PASSWORD_FILE="$RESTIC_REMOTE_PASSWORD_FILE"
+	export RESTIC_REPOSITORY="$RESTIC_REMOTE_REPOSITORY" RESTIC_PASSWORD_FILE="$RESTIC_REMOTE_PASSWORD_FILE" RESTIC_COMPRESSION
 	restic snapshots --no-lock >/dev/null 2>&1 || die "remote Restic repository is unavailable or uninitialized: $RESTIC_REMOTE_REPOSITORY; initialize it explicitly with RESTIC_REPOSITORY='$RESTIC_REMOTE_REPOSITORY' RESTIC_PASSWORD_FILE='$RESTIC_REMOTE_PASSWORD_FILE' restic init"
 	unset RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
 fi
@@ -696,7 +736,9 @@ if [[ ! -f "$app_env" ]]; then
 		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 	} >"$app_env"
 fi
-for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "RESTIC_CACHE_DIR=$RESTIC_CACHE_DIR" "RESTIC_READ_CONCURRENCY=$RESTIC_READ_CONCURRENCY" "RESTIC_COMPRESSION=$RESTIC_COMPRESSION" "RESTIC_SKIP_IF_UNCHANGED=$RESTIC_SKIP_IF_UNCHANGED" "RESTIC_NICE_LEVEL=$RESTIC_NICE_LEVEL" "RESTIC_IONICE_ENABLED=$RESTIC_IONICE_ENABLED" "RESTIC_IONICE_CLASS=$RESTIC_IONICE_CLASS" "RESTIC_IONICE_LEVEL=$RESTIC_IONICE_LEVEL" "RESTIC_SCHEDULE_INTERVAL=$RESTIC_SCHEDULE_INTERVAL" "PRODUCTION_REQUIRE_REMOTE_BACKUP=true"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
+for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "RESTIC_CACHE_DIR=$RESTIC_CACHE_DIR" "RESTIC_READ_CONCURRENCY=$RESTIC_READ_CONCURRENCY" "RESTIC_SKIP_IF_UNCHANGED=$RESTIC_SKIP_IF_UNCHANGED" "RESTIC_NICE_LEVEL=$RESTIC_NICE_LEVEL" "RESTIC_IONICE_ENABLED=$RESTIC_IONICE_ENABLED" "RESTIC_IONICE_CLASS=$RESTIC_IONICE_CLASS" "RESTIC_IONICE_LEVEL=$RESTIC_IONICE_LEVEL" "RESTIC_SCHEDULE_INTERVAL=$RESTIC_SCHEDULE_INTERVAL" "PRODUCTION_REQUIRE_REMOTE_BACKUP=true"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
+set_key "$app_env" RESTIC_COMPRESSION "$RESTIC_COMPRESSION"
+set_key "$app_env" RESTIC_SKIP_IF_UNCHANGED "$RESTIC_SKIP_IF_UNCHANGED"
 remove_key "$app_env" NODE_ROLE
 remove_key "$app_env" LEADER_PUBLIC_IP
 ensure_key "$app_env" WOODPECKER_GRPC_SITE "https://ci-grpc.$DOMAIN_NAME"

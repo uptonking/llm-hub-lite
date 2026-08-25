@@ -96,7 +96,7 @@ RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/llm-hub-lite/restic}"
 RESTIC_READ_CONCURRENCY="${RESTIC_READ_CONCURRENCY:-$(env_value RESTIC_READ_CONCURRENCY)}"
 RESTIC_READ_CONCURRENCY="${RESTIC_READ_CONCURRENCY:-1}"
 RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-$(env_value RESTIC_COMPRESSION)}"
-RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-fastest}"
+RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-auto}"
 RESTIC_SKIP_IF_UNCHANGED="${RESTIC_SKIP_IF_UNCHANGED:-$(env_value RESTIC_SKIP_IF_UNCHANGED)}"
 RESTIC_SKIP_IF_UNCHANGED="${RESTIC_SKIP_IF_UNCHANGED:-true}"
 RESTIC_NICE_LEVEL="${RESTIC_NICE_LEVEL:-$(env_value RESTIC_NICE_LEVEL)}"
@@ -145,6 +145,50 @@ descriptor_ids() {
 
 install -d -m 700 "$REPO"
 install -d -m 700 "$RESTIC_CACHE_DIR"
+normalize_restic_compression() {
+	local requested="${RESTIC_COMPRESSION:-auto}" modes
+	case "$requested" in
+	auto | off | max | fastest | better) ;;
+	*)
+		printf 'invalid RESTIC_COMPRESSION: %s (expected auto, off, max, fastest, or better)\n' "$requested" >&2
+		exit 1
+		;;
+	esac
+	modes="$(restic backup --help 2>&1 | sed -n 's/.*one of (\([^)]*\)).*/\1/p' | head -n1)"
+	case "|$modes|" in
+	*"|$requested|"*)
+		return 0
+		;;
+	esac
+	case "$requested" in
+	fastest | better | max)
+		printf 'Restic does not support compression mode %s; falling back to auto\n' "$requested" >&2
+		RESTIC_COMPRESSION=auto
+		modes="$(restic backup --help 2>&1 | sed -n 's/.*one of (\([^)]*\)).*/\1/p' | head -n1)"
+		case "|$modes|" in
+		*"|auto|"*) ;;
+		*)
+			printf 'installed Restic does not support compression mode auto\n' >&2
+			exit 1
+			;;
+		esac
+		;;
+	*)
+		printf 'installed Restic does not support compression mode: %s\n' "$requested" >&2
+		exit 1
+		;;
+	esac
+}
+normalize_restic_compression
+restic_skip_if_unchanged_supported=0
+if truthy "$RESTIC_SKIP_IF_UNCHANGED"; then
+	if restic backup --help 2>&1 | grep -q -- '--skip-if-unchanged'; then
+		restic_skip_if_unchanged_supported=1
+	else
+		printf 'Restic does not support --skip-if-unchanged; continuing without it\n' >&2
+		RESTIC_SKIP_IF_UNCHANGED=false
+	fi
+fi
 [[ "$RESTIC_READ_CONCURRENCY" =~ ^[1-9][0-9]*$ ]] || {
 	printf 'invalid RESTIC_READ_CONCURRENCY: %s\n' "$RESTIC_READ_CONCURRENCY" >&2
 	exit 1
@@ -174,7 +218,7 @@ restic_run() {
 restic_backup() {
 	local -a options
 	options=(--tag platform --tag "$NODE_TAG" --tag "$reason")
-	truthy "$RESTIC_SKIP_IF_UNCHANGED" && options+=(--skip-if-unchanged)
+	((restic_skip_if_unchanged_supported)) && options+=(--skip-if-unchanged)
 	restic_run backup --compression "$RESTIC_COMPRESSION" "${options[@]}" "$@"
 }
 scheduled_snapshot_recent() {

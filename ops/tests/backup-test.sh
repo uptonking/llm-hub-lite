@@ -36,6 +36,14 @@ EOF
 cat >"$tmp/bin/restic" <<'EOF'
 #!/bin/sh
 printf '%s %s\n' "${RESTIC_REPOSITORY:-}" "$*" >>"${RESTIC_CALL_LOG:?}"
+if [ "$1" = version ] && [ "${RESTIC_COMPRESSION:-}" = fastest ]; then
+  exit 1
+fi
+if [ "$1" = backup ] && [ "$2" = --help ]; then
+  printf '      --compression mode  one of (auto|off|max)\n'
+  [ "${RESTIC_SUPPORTS_SKIP:-0}" = 1 ] && printf '      --skip-if-unchanged  skip snapshot creation when unchanged\n'
+  exit 0
+fi
 if [ "$1" = init ]; then
   touch "${RESTIC_REPOSITORY:?}/config"
 fi
@@ -60,12 +68,16 @@ export RESTIC_REPOSITORY="$tmp/repository" RESTIC_PASSWORD_FILE="$tmp/config/res
 export BACKUP_STAGE_ROOT="$tmp/stage" BACKUP_MIN_FREE_BYTES=1048576 BACKUP_MIN_FREE_PERCENT=1
 export PLATFORM_LOCK_FILE="$tmp/platform.lock"
 export RESTIC_CACHE_DIR="$tmp/cache" RESTIC_SCHEDULE_MARKER="$tmp/scheduled.marker" RESTIC_SCHEDULE_INTERVAL=3600
+export RESTIC_COMPRESSION=fastest
 
 "$repo_root/ops/backup-platform.sh" snapshot portability-test
 grep -qx -- "-Pk $tmp/repository" "$tmp/df.log"
 grep -q ' backup ' "$tmp/restic.log"
-grep -q -- '--compression fastest' "$tmp/restic.log"
-grep -q -- '--skip-if-unchanged' "$tmp/restic.log"
+grep -q -- '--compression auto' "$tmp/restic.log"
+if grep -q -- '--skip-if-unchanged' "$tmp/restic.log"; then
+	printf 'unsupported skip-if-unchanged flag was passed to the old Restic client\n' >&2
+	exit 1
+fi
 grep -q "$tmp/config/aichorouter.env" "$tmp/restic.log"
 grep -q -- "--exclude $tmp/app/shared/data/prod/aichorouter/log-buffer" "$tmp/restic.log"
 grep -q "$tmp/config/observer.env" "$tmp/restic.log"
@@ -78,6 +90,7 @@ if PRODUCTION_REQUIRE_REMOTE_BACKUP=true RESTIC_REMOTE_ENABLED=false \
 fi
 
 export RESTIC_REMOTE_ENABLED=true RESTIC_REMOTE_REPOSITORY="$tmp/remote-repository" RESTIC_REMOTE_PASSWORD_FILE="$tmp/config/restic-remote-password"
+export RESTIC_SUPPORTS_SKIP=1
 mkdir -p "$tmp/remote-repository"
 "$repo_root/ops/backup-platform.sh" snapshot remote-test
 grep -q "$tmp/remote-repository" "$tmp/restic.log"
@@ -85,16 +98,16 @@ grep -q "$tmp/remote-repository" "$tmp/restic.log"
 # A fresh scheduled marker suppresses the expensive Restic calls, while a
 # manual snapshot remains immediate even inside the scheduled interval.
 printf '%s\n' "$(date +%s)" >"$RESTIC_SCHEDULE_MARKER"
-before_lines="$(wc -l <"$tmp/restic.log")"
+before_backups="$(grep -c ' backup --compression ' "$tmp/restic.log" || true)"
 "$repo_root/ops/backup-platform.sh" snapshot scheduled >/dev/null
-after_lines="$(wc -l <"$tmp/restic.log")"
-[[ "$before_lines" == "$after_lines" ]] || {
+after_backups="$(grep -c ' backup --compression ' "$tmp/restic.log" || true)"
+[[ "$before_backups" == "$after_backups" ]] || {
 	printf 'scheduled backup was not throttled\n' >&2
 	exit 1
 }
 "$repo_root/ops/backup-platform.sh" snapshot manual >/dev/null
-manual_lines="$(wc -l <"$tmp/restic.log")"
-((manual_lines > after_lines)) || {
+manual_backups="$(grep -c ' backup --compression ' "$tmp/restic.log" || true)"
+((manual_backups > after_backups)) || {
 	printf 'manual backup was incorrectly throttled\n' >&2
 	exit 1
 }

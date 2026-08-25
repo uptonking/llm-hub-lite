@@ -436,7 +436,12 @@ The bootstrap program itself is not self-updating. Before a first deployment,
 recovery, or retry after changing bootstrap logic, copy the current
 `ops/bootstrap-vps.sh` from this checkout to `/root/llm-hub-lite-bootstrap.sh`
 on every target VPS. The program then fetches the latest repository revision
-for the rest of the deployment.
+for the rest of the deployment. Bootstrap is not the normal update mechanism:
+rerunning both host bootstraps repeats host configuration, validates the remote
+backup, prefetches images, and reconciles the full node, so it is slower and has
+a larger restart scope than a normal application deployment. It is safe to use
+for recovery or a bootstrap-script fix, but do not use it for every Compose or
+application change.
 
 Bootstrap is safe to retry after a partial failure. It merges missing image
 keys from the fetched repository into `/etc/llm-hub-lite/images.apps.env` and
@@ -621,6 +626,14 @@ pre-commit run --all-files
 git push origin main
 ```
 
+For a committed Docker Compose, manifest, route, or application configuration
+change, this push is the deployment action. Woodpecker selects the appropriate
+ordered workflow and recreates only the affected projects after validation. Do
+not rerun the two bootstrap SSH commands for a routine update. If a change is
+only a local runtime override, run `platformctl recreate` on the affected node;
+if it changes bootstrap or host policy, use the documented manual foundation or
+cluster workflow.
+
 Use the workflow that matches the changed paths. A normal LibreChat or legacy
 New API source/configuration change is handled by the generated `deploy-*`
 chain. Aichorouter, CPAPI, and Observer changes are handled by that app's
@@ -735,5 +748,6 @@ platformctl recreate <project>
 ```
 
 Docker restart policies, live-restore, `platform-recovery.service` , and the recovery timer make reboot recovery idempotent.
-Production snapshots require an initialized and verified remote Restic repository. Restic snapshots include runtime configuration, Caddy certificates, Woodpecker/Beszel SQLite online backups, release pointers, and application data without deleting live data. The scheduled timer wakes every 15 minutes for reboot recovery, but `reason=scheduled` snapshots are throttled to one per hour by `RESTIC_SCHEDULE_INTERVAL=3600`; manual, pre-deployment, post-bootstrap, and recovery snapshots remain immediate. Restic uses a persistent mode-700 cache, one reader, `fastest` compression, `--skip-if-unchanged`, and low CPU/I/O priority (`nice`/`ionice`) to reduce contention with consumer services. Override these `RESTIC_*` settings in the root-only `.env.prod` only after measuring the impact.
+Production snapshots require an initialized and verified remote Restic repository. Restic snapshots include runtime configuration, Caddy certificates, Woodpecker/Beszel SQLite online backups, release pointers, and application data without deleting live data. The scheduled timer wakes every 15 minutes for reboot recovery, but `reason=scheduled` snapshots are throttled to one per hour by `RESTIC_SCHEDULE_INTERVAL=3600`; manual, pre-deployment, post-bootstrap, and recovery snapshots remain immediate. Restic uses a persistent mode-700 cache, one reader, portable `auto` compression, `--skip-if-unchanged` when supported, and low CPU/I/O priority (`nice`/`ionice`) to reduce contention with consumer services. Older Restic clients that cannot use a newer requested compression mode automatically fall back to `auto`; clients without `--skip-if-unchanged` continue without that optional optimization. Override these `RESTIC_*` settings in the root-only `.env.prod` only after measuring the impact.
+If a bootstrap reports `invalid compression mode`, the installed Restic client is older than the configured mode. Copy the current `ops/bootstrap-vps.sh` to the host and rerun bootstrap; it normalizes the mode to a supported value and persists it in `.env.prod`. The error occurs before a snapshot is written, so do not delete or reinitialize the remote repository. Verify the repair with `platformctl backup snapshot manual`; inspect remote snapshots with the configured Restic credentials or use `RESTORE_SOURCE=remote platformctl restore extract latest` when a restore test is appropriate.
 Local-only snapshots are available only when the explicit production backup gate is disabled for beta/development use.
