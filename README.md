@@ -410,6 +410,9 @@ Restic repository and password, LibreChat Atlas/Upstash/R2 values, and the
 Woodpecker OAuth values when prompted. For non-interactive bootstrap, provide
 the same values through environment variables or root-only files; never create
 different shared secrets independently on different nodes.
+When invoking a remote bootstrap with SSH, use `ssh -tt` so the confirmation
+and secret prompts receive a terminal. You may set `BOOTSTRAP_ASSUME_YES=1` to
+skip only the role confirmation; required secrets are still validated and must be supplied through the environment, bundle, or remaining prompts.
 On the Aichorouter, CPAPI, and OpenObserve target follower, the interactive bootstrap also
 prompts for `AICHOROUTER_SESSION_SECRET` , `AICHOROUTER_CRYPTO_SECRET` ,
 `CPAPI_API_KEY` , `CPAPI_MANAGEMENT_KEY` , `OBSERVER_ROOT_USER_EMAIL` , and

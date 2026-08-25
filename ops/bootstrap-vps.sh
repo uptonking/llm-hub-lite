@@ -548,8 +548,10 @@ valid_ipv4 "$LEADER_PUBLIC_IP" || die 'LEADER_PUBLIC_IP must be a valid IPv4 add
 printf 'Derived node role: %s (Leader node ID: %s)\n' "$NODE_ROLE" "$leader_node_id"
 [[ "$WOODPECKER_AGENT_LABELS" == node=unknown,* ]] && WOODPECKER_AGENT_LABELS="node=$NODE_ID,deployment=true,target=production,repo=$REPO_SLUG"
 [[ "$WOODPECKER_DEPLOYER_LABELS" == node=unknown,* ]] && WOODPECKER_DEPLOYER_LABELS="node=$NODE_ID,deployment=true,target=production,repo=$REPO_SLUG"
-if [[ -t 0 ]]; then
-	read -r -p "Continue bootstrapping $NODE_ID as $NODE_ROLE? [y/N]: " confirm
+if [[ "${BOOTSTRAP_ASSUME_YES:-0}" != 1 && -t 0 ]]; then
+	if ! read -r -p "Continue bootstrapping $NODE_ID as $NODE_ROLE? [y/N]: " confirm; then
+		die 'bootstrap confirmation was not received; rerun with ssh -tt or set BOOTSTRAP_ASSUME_YES=1'
+	fi
 	[[ "$confirm" =~ ^[Yy]$ ]] || die 'bootstrap cancelled'
 fi
 if ((newapi_enabled)); then
