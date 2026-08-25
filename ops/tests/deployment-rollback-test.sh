@@ -3,7 +3,33 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+
+debug_on_failure() {
+	local status="$?" file
+	if ((status != 0)); then
+		printf '\n--- deployment rollback test diagnostics (exit %s) ---\n' "$status" >&2
+		for file in "$tmp"/deploy-*.log "$tmp"/app/deploy.log "$tmp"/platformctl.log "$tmp"/backup.log "$tmp"/docker.log; do
+			[[ -f "$file" ]] || continue
+			printf '\n[%s]\n' "${file#"$tmp"/}" >&2
+			sed -n '1,240p' "$file" >&2 || true
+		done
+		for file in "$tmp/platform/control/current" "$tmp/platform/control/previous" "$tmp/app/current" "$tmp/app/previous"; do
+			printf '[link %s] ' "${file#"$tmp"/}" >&2
+			readlink "$file" 2>/dev/null || printf '<missing>\n' >&2
+		done
+		printf '\n[release directories]\n' >&2
+		find "$tmp/platform/control/releases" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort >&2 || true
+		printf '\n[worktree git state]\n' >&2
+		git -C "$work" status --short 2>&1 || true
+		git -C "$work" log --oneline -5 2>&1 || true
+		printf '\n[mirror refs]\n' >&2
+		git -C "$tmp/platform/control/mirror.git" show-ref 2>&1 || true
+		printf '%s\n' '--- end deployment rollback test diagnostics ---' >&2
+	fi
+	rm -rf "$tmp"
+	exit "$status"
+}
+trap debug_on_failure EXIT
 
 remote="$tmp/remote.git"
 work="$tmp/work"
@@ -109,7 +135,7 @@ git -C "$work" -c commit.gpgsign=false commit --quiet -m change
 git -C "$work" push --quiet origin HEAD:main
 sha2="$(git -C "$work" rev-parse HEAD)"
 : >"$tmp/platformctl.log"
-if FAIL_SYNC=1 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha2" >/dev/null 2>&1; then
+if FAIL_SYNC=1 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha2" >"$tmp/deploy-fail-sync.log" 2>&1; then
 	printf 'expected reconciliation failure\n' >&2
 	exit 1
 fi
@@ -121,7 +147,7 @@ git -C "$work" add config/Caddyfile
 git -C "$work" -c commit.gpgsign=false commit --quiet -m config-change
 git -C "$work" push --quiet origin HEAD:main
 sha3="$(git -C "$work" rev-parse HEAD)"
-if FAIL_SYNC=0 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha3" >/dev/null 2>&1; then
+if FAIL_SYNC=0 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha3" >"$tmp/deploy-config-change.log" 2>&1; then
 	[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
 else
 	printf 'non-cluster runtime configuration was rejected by application deployment\n' >&2
@@ -133,7 +159,7 @@ git -C "$work" add compose/foundation/caddy.yml
 git -C "$work" -c commit.gpgsign=false commit --quiet -m foundation-change
 git -C "$work" push --quiet origin HEAD:main
 sha4="$(git -C "$work" rev-parse HEAD)"
-if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha4" >/dev/null 2>&1; then
+if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha4" >"$tmp/deploy-foundation-change.log" 2>&1; then
 	printf 'foundation change was accepted by application deployment\n' >&2
 	exit 1
 fi
@@ -144,7 +170,7 @@ git -C "$work" add config/cluster/policy.env
 git -C "$work" -c commit.gpgsign=false commit --quiet -m cluster-change
 git -C "$work" push --quiet origin HEAD:main
 sha5="$(git -C "$work" rev-parse HEAD)"
-if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha5" >/dev/null 2>&1; then
+if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha5" >"$tmp/deploy-cluster-change.log" 2>&1; then
 	printf 'cluster policy change was accepted by application deployment\n' >&2
 	exit 1
 fi
