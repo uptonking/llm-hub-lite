@@ -2,7 +2,7 @@
   import common_proxy
   reverse_proxy {$CPAPI_UPSTREAM} {
     fail_duration 30s
-    health_uri /management.html
+    health_uri /healthz
     health_interval 10s
     health_timeout 3s
     header_up Host {http.reverse_proxy.upstream.hostport}

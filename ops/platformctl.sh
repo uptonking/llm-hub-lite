@@ -137,7 +137,15 @@ foundation_env() {
 }
 foundation_compose() { compose_command=("${compose_bin[@]}" --env-file "$APP_ENV" --env-file "$(foundation_env "$1")" --env-file "$FOUNDATION_IMAGE_ENV" --env-file "$NODE_CONFIG_FILE" -f "$FOUNDATION_ROOT/$(foundation_file "$1")"); }
 descriptor_ids() { find -L "$APPS_ROOT" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; 2>/dev/null | sort; }
-descriptor_value() { sed -n "s/^$2=//p" "$1/manifest.env" | tail -n1; }
+descriptor_value() {
+	local value
+	value="$(sed -n "s/^$2=//p" "$1/manifest.env" | tail -n1)"
+	# Manifest values are env-style text; allow a single-quoted value to carry
+	# JSON fragments such as HEALTH_EXPECT without leaking the delimiters into
+	# HTTP smoke comparisons.
+	value="$(printf '%s\n' "$value" | sed -e "s/^'//" -e "s/'$//")"
+	printf '%s\n' "$value"
+}
 app_declared() {
 	local d
 	while IFS= read -r d; do [[ "$(basename "$d")" == "$1" ]] && return 0; done < <(descriptor_ids)
@@ -326,7 +334,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services compose_file yaml_file nginx_file local_buffer_bytes
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file local_buffer_bytes
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -339,7 +347,7 @@ validate_descriptor() {
 		[[ "$(descriptor_value "$d" UPSTREAM_MODE)" == active-active || "$(descriptor_value "$d" UPSTREAM_MODE)" == active-passive ]] || die "follower app must use active upstream mode: $d"
 		;;
 	single-follower)
-		for k in TARGET_NODE_KEY RUNTIME_ENV_FILE SECRET_KEYS MOVE_MODE PUBLIC_URL_KEY PUBLIC_HOST; do
+		for k in TARGET_NODE_KEY RUNTIME_ENV_FILE SECRET_KEYS MOVE_MODE PUBLIC_URL_KEY PUBLIC_HOST HEALTH_SERVICE; do
 			[[ -n "$(descriptor_value "$d" "$k")" ]] || die "$k is required for singleton app $d/manifest.env"
 		done
 		[[ "$(descriptor_value "$d" UPSTREAM_MODE)" == singleton ]] || die 'singleton app must use UPSTREAM_MODE=singleton'
@@ -376,6 +384,8 @@ validate_descriptor() {
 		services="$("${compose_command[@]}" config --services 2>/dev/null || true)"
 		[[ -n "$services" ]] || die "unable to evaluate active Compose project: $d"
 		printf '%s\n' "$services" | grep -Fxq "$(descriptor_value "$d" SERVICE_NAME)" || die "SERVICE_NAME is absent from Compose project: $d"
+		health_service="$(descriptor_value "$d" HEALTH_SERVICE)"
+		[[ -z "$health_service" || "$(printf '%s\n' "$services" | grep -Fx "$health_service" || true)" == "$health_service" ]] || die "HEALTH_SERVICE is absent from Compose project: $d"
 	fi
 	if [[ "$(basename "$d")" == newapi ]] && app_in_reconcile_scope "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
 		[[ "$(env_value NEW_API_SQL_DSN)" =~ ^postgres(ql)?:// ]] || die 'production New API requires a postgres:// or postgresql:// DSN'
@@ -522,13 +532,31 @@ project_ids() {
 	"${compose_command[@]}" ps --all -q
 }
 project_is_healthy() {
-	local ids id state health_mode=process
+	local ids id state status health health_mode=process health_service health_ids health_id
 	project_enabled "$1" || return 0
 	if [[ "$1" == app:* ]]; then
 		health_mode="$(descriptor_value "${1#app:}" HEALTH_MODE)"
+		health_service="$(descriptor_value "${1#app:}" HEALTH_SERVICE)"
 	fi
 	ids="$(project_ids "$1")"
 	[[ -n "$ids" ]] || return 1
+	if [[ "$health_mode" == healthcheck && -n "$health_service" ]]; then
+		health_ids="$("${compose_command[@]}" ps --all -q "$health_service")"
+		[[ -n "$health_ids" ]] || return 1
+		while IFS= read -r health_id; do
+			[[ -n "$health_id" ]] || continue
+			state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$health_id")"
+			[[ "$state" == 'running healthy' ]] || return 1
+		done <<<"$health_ids"
+		while IFS= read -r id; do
+			[[ -n "$id" ]] || continue
+			state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
+			status="${state%% *}"
+			health="${state#* }"
+			[[ "$status" == running && "$health" != unhealthy ]] || return 1
+		done <<<"$ids"
+		return 0
+	fi
 	while IFS= read -r id; do
 		[[ -n "$id" ]] || continue
 		state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"

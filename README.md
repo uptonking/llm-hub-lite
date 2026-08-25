@@ -96,9 +96,9 @@ reserved characters in Atlas and Upstash credentials before placing them in
 the connection URI.
 
 Aichorouter is the enabled singleton example at `aichorouter.aichorage.de` .
-It uses the upstream New API image with one container, a bind-mounted SQLite
-database at `data/prod/aichorouter/aichorouter.db` , and no Redis, PostgreSQL,
-or other local dependency. `SESSION_SECRET` and `CRYPTO_SECRET` are stored in
+It uses the upstream New API image plus a tiny HTTP health-probe sidecar, a
+bind-mounted SQLite database at `data/prod/aichorouter/aichorouter.db` , and
+no Redis, PostgreSQL, or other local dependency. `SESSION_SECRET` and `CRYPTO_SECRET` are stored in
 `/etc/llm-hub-lite/aichorouter.env` on the selected follower. The image is
 memory-capped and has no host-published port; all public traffic enters through
 the Leader's Caddy route. SQLite is intentionally local and is not replicated,
@@ -173,16 +173,30 @@ curl -fsS https://worker1-observer-origin.aichorage.de/healthz
 curl -fsS https://observer.aichorage.de/healthz
 ```
 
-The OpenObserve image is distroless and does not contain `curl` , so its
-Compose health state is process-based. Readiness is verified by the local
-singleton origin smoke and the Leader Caddy health check; Vector retains its
-own private HTTP healthcheck.
+OpenObserve's production image is distroless and does not contain an HTTP
+client. A tiny pinned `health-probe` sidecar performs the HTTP readiness check
+against `/healthz`; the same sidecar pattern is used by Aichorouter and CPAPI.
+`platformctl health` requires the application containers to be running and
+the declared `health-probe` container to be `healthy`. The Observer log proxy
+and Vector shipper retain their own private healthchecks.
 
 On the selected follower, provision its root-only secrets once:
 
 ```bash
 sudo /opt/platform/control/current/ops/configure-app-secrets.sh aichorouter
 sudo /opt/platform/control/current/ops/configure-app-secrets.sh cpapi
+```
+
+CPAPI exposes an unauthenticated `/healthz` endpoint that returns `{"status":"ok"}`.
+Its main container also has a native liveness check for the persisted config
+and init process; the `health-probe` sidecar verifies the HTTP endpoint without
+requiring `curl` or `wget` in the minimal CPAPI image. Verify the complete
+project state with:
+
+```bash
+docker compose -p app-cpapi ps
+curl -fsS https://worker1-cpapi-origin.aichorage.de/healthz
+curl -fsS https://cpapi.aichorage.de/healthz
 ```
 
 The helper reads `SECRET_KEYS` , `RUNTIME_ENV_FILE` , and `POLICY_FILE` from the
@@ -545,6 +559,9 @@ management keys on the target follower before running the generated singleton
 stage/switch workflow. The management panel remains enabled and is protected
 by `CPAPI_MANAGEMENT_KEY` . CPAPI has no host-published ports and no Redis or
 database dependency; its default profile is capped at 256 MiB and 0.25 CPU.
+Its native container healthcheck verifies the persisted configuration and
+process liveness, while the small pinned `health-probe` sidecar verifies
+`/healthz` over the private network.
 
 OpenObserve is a separate singleton consumer at `observer.aichorage.de` .
 Its target follower is stored in the observer app policy, and its local disk

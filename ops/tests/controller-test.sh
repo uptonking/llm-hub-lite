@@ -53,6 +53,7 @@ grep -q '^OBSERVER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/obs
 grep -q '^AICHOROUTER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/aichorouter.policy"
 grep -q '^AICHOROUTER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^CPAPI_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^HEALTH_PROBE_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^OBSERVER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^OBSERVER_LOG_PROXY_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^OBSERVER_LOG_SHIPPER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
@@ -69,6 +70,8 @@ grep -Fq 'observer-log-proxy:' "$repo_root/apps/observer/compose.yml"
 grep -Fq 'observer-log-shipper:' "$repo_root/apps/observer/compose.yml"
 grep -Fq 'VECTOR_CONFIG: /etc/vector/vector.toml' "$repo_root/apps/observer/compose.yml"
 grep -Fq 'test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8686/health >/dev/null"]' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'health-probe:' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'curl -fsS http://observer:5080/healthz' "$repo_root/apps/observer/compose.yml"
 grep -Fq 'ALLOW_LOGS: "1"' "$repo_root/apps/observer/compose.yml"
 grep -Fq 'POST: "0"' "$repo_root/apps/observer/compose.yml"
 grep -Fq '/var/run/docker.sock:/var/run/docker.sock:ro' "$repo_root/apps/observer/compose.yml"
@@ -97,6 +100,8 @@ fi
 grep -Fq 'CPAPI_MANAGEMENT_KEY' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'CPAPI_API_KEY' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'config-seed.sha256' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'test: ["CMD-SHELL", "test -s /runtime/config.yaml && kill -0 1"]' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'curl -fsS http://cpapi:8317/healthz' "$repo_root/apps/cpapi/compose.yml"
 if grep -Fq 'test: ["CMD", "bash"' "$repo_root/apps/cpapi/compose.yml"; then
 	printf 'CPAPI must not require Bash for its healthcheck\n' >&2
 	exit 1
@@ -119,10 +124,15 @@ grep -q '/librechat/images:/app/client/public/images' "$repo_root/apps/librechat
 grep -q '/librechat/uploads:/app/uploads' "$repo_root/apps/librechat/compose.yml"
 grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/newapi/manifest.env"
 grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/cpapi/manifest.env"
-grep -q '^HEALTH_MODE=process$' "$repo_root/apps/cpapi/manifest.env"
+grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/cpapi/manifest.env"
+grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/aichorouter/manifest.env"
+grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^HEALTH_URL=/healthz$' "$repo_root/apps/observer/manifest.env"
-grep -q '^HEALTH_MODE=process$' "$repo_root/apps/observer/manifest.env"
+grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/observer/manifest.env"
+grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/observer/manifest.env"
+grep -q '^HEALTH_URL=/healthz$' "$repo_root/apps/cpapi/manifest.env"
+grep -Fq 'health_uri /healthz' "$repo_root/apps/cpapi/route.leader.caddy"
 if grep -Fq '127.0.0.1:5080/healthz' "$repo_root/apps/observer/compose.yml"; then
 	printf 'OpenObserve Compose must not use a curl-based internal healthcheck\n' >&2
 	exit 1

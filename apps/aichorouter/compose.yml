@@ -47,6 +47,31 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+  health-probe:
+    image: ${HEALTH_PROBE_IMAGE:?HEALTH_PROBE_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: 16m
+    cpus: 0.05
+    pids_limit: 32
+    read_only: true
+    security_opt: ['no-new-privileges:true']
+    entrypoint: ["/bin/sh"]
+    command: ["-eu", "-c", "while :; do sleep 3600; done"]
+    tmpfs: [/tmp]
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: app-aichorouter
+      com.aichorage.observer.ignore-logs: "true"
+    depends_on:
+      aichorouter:
+        condition: service_started
+    networks: [aichorouter_private]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://aichorouter:3000/api/status | grep -q '\"success\":true'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 networks:
   aichorouter_private:
     name: app-aichorouter_private

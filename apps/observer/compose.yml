@@ -43,6 +43,31 @@ services:
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/observer:/data
     networks: [observer_private, platform_edge]
+  health-probe:
+    image: ${HEALTH_PROBE_IMAGE:?HEALTH_PROBE_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: 16m
+    cpus: 0.05
+    pids_limit: 32
+    read_only: true
+    security_opt: ['no-new-privileges:true']
+    entrypoint: ["/bin/sh"]
+    command: ["-eu", "-c", "while :; do sleep 3600; done"]
+    tmpfs: [/tmp]
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: app-observer
+      com.aichorage.observer.ignore-logs: "true"
+    depends_on:
+      observer:
+        condition: service_started
+    networks: [observer_private]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://observer:5080/healthz >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
   observer-log-proxy:
     image: ${OBSERVER_LOG_PROXY_IMAGE:?OBSERVER_LOG_PROXY_IMAGE must be digest-pinned}
     restart: unless-stopped

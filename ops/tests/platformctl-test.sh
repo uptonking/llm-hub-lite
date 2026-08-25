@@ -29,13 +29,16 @@ NODE_OBSERVER_ORIGIN_HOST=worker2-observer.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
-case "$*" in *" ps --all -q"*) printf 'container-id\n';; esac
+case "$*" in
+  *" ps --all -q health-probe"*) printf 'health-probe\n'; exit 0;;
+  *" ps --all -q"*) :;;
+esac
 case "$*" in
   *app-librechat*) printf 'librechat-api\nlibrechat-admin-panel\nlibrechat-client\n';;
   *app-newapi*) printf 'newapi\n';;
-  *app-cpapi*) printf 'cpapi\n';;
-  *app-aichorouter*) printf 'aichorouter\n';;
-  *app-observer*) printf 'observer\n';;
+  *app-cpapi*) printf 'cpapi\nhealth-probe\n';;
+  *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
+  *app-observer*) printf 'observer\nhealth-probe\n';;
 esac
 exit 0
 EOF
