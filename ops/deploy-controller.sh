@@ -179,7 +179,9 @@ verify_app_scope() {
 		config/cluster/policy.env | config/cluster/nodes/*)
 			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || die "cluster policy or inventory change requires the cluster-reconcile workflow: $path"
 			;;
-		config/cluster/apps/*) ;;
+		config/cluster/apps/*)
+			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || die "cluster app policy requires its dedicated reconciliation workflow: $path"
+			;;
 		config/cluster/*)
 			die "unsupported cluster configuration path in application deployment: $path"
 			;;

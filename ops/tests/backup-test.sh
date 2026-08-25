@@ -4,15 +4,22 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter"
+mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/observer"
 printf 'test-password\n' >"$tmp/config/restic-password"
 printf 'remote-password\n' >"$tmp/config/restic-remote-password"
 cat >"$tmp/control/current/apps/aichorouter/manifest.env" <<'EOF'
 RUNTIME_ENV_FILE=aichorouter.env
 DATA_ROOT_REL=aichorouter
+EPHEMERAL_DATA_REL=log-buffer
 SQLITE_PATHS=aichorouter.db
 EOF
 printf 'AICHOROUTER_SESSION_SECRET=test\n' >"$tmp/config/aichorouter.env"
+cat >"$tmp/control/current/apps/observer/manifest.env" <<'EOF'
+RUNTIME_ENV_FILE=observer.env
+DATA_ROOT_REL=observer
+EPHEMERAL_DATA_REL=log-buffer
+EOF
+printf 'OBSERVER_ROOT_USER_PASSWORD=test\n' >"$tmp/config/observer.env"
 
 cat >"$tmp/bin/df" <<'EOF'
 #!/bin/sh
@@ -57,6 +64,9 @@ export PLATFORM_LOCK_FILE="$tmp/platform.lock"
 grep -qx -- "-Pk $tmp/repository" "$tmp/df.log"
 grep -q ' backup ' "$tmp/restic.log"
 grep -q "$tmp/config/aichorouter.env" "$tmp/restic.log"
+grep -q -- "--exclude $tmp/app/shared/data/prod/aichorouter/log-buffer" "$tmp/restic.log"
+grep -q "$tmp/config/observer.env" "$tmp/restic.log"
+grep -q -- "--exclude $tmp/app/shared/data/prod/observer/log-buffer" "$tmp/restic.log"
 
 if PRODUCTION_REQUIRE_REMOTE_BACKUP=true RESTIC_REMOTE_ENABLED=false \
 	"$repo_root/ops/backup-platform.sh" snapshot production-gate-test >/dev/null 2>&1; then

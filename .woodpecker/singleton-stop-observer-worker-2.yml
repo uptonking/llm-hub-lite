@@ -4,29 +4,25 @@ when:
     branch: main
     path:
       include:
-        - apps/librechat/**
-        - apps/newapi/**
-        - config/Caddyfile
-        - config/foundation-routes.d/**
-        - config/routes.d/**
+        - apps/observer/**
+        - config/cluster/apps/observer.policy
+        - ops/images.apps.prod.env
 
 depends_on:
-  - deploy-leader
-  - deploy-worker-1
-  - deploy-worker-2
+  - singleton-stop-observer-worker-1
 
 labels:
-  node: leader
+  node: worker-2
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-production
+  group: llm-hub-lite-singleton-observer
 
 steps:
-  smoke:
+  stop:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -36,7 +32,7 @@ steps:
       - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite
       - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite
       - /etc/llm-hub-lite:/etc/llm-hub-lite
+      - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
     commands:
-      - /usr/local/bin/platformctl health
-      - /usr/local/bin/platformctl smoke all
+      - SINGLETON_APP_ID=observer DEPLOY_SKIP_SINGLETONS=1 SINGLETON_FINAL_STOP=1 /usr/local/bin/platform-submit singleton-stop "$CI_COMMIT_SHA"

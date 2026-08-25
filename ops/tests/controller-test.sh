@@ -47,12 +47,53 @@ grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/aichorouter/manifest.env"
+grep -q '^APP_ID=observer$' "$repo_root/apps/observer/manifest.env"
+grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/observer/manifest.env"
+grep -q '^OBSERVER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/observer.policy"
 grep -q '^AICHOROUTER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/aichorouter.policy"
 grep -q '^AICHOROUTER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^CPAPI_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^OBSERVER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^OBSERVER_LOG_PROXY_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^OBSERVER_LOG_SHIPPER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -Fq 'SQLITE_PATH: /data/aichorouter.db' "$repo_root/apps/aichorouter/compose.yml"
 grep -Fq 'SQL_MAX_OPEN_CONNS: ${AICHOROUTER_SQL_MAX_OPEN_CONNS:-4}' "$repo_root/apps/aichorouter/compose.yml"
 grep -Fq 'GOMEMLIMIT: ${AICHOROUTER_GOMEMLIMIT:-300MiB}' "$repo_root/apps/aichorouter/compose.yml"
+grep -Fq 'ZO_LOCAL_MODE: "true"' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'ZO_DATA_DIR: /data' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'ZO_COMPACT_DATA_RETENTION_DAYS: ${OBSERVER_DATA_RETENTION_DAYS:-30}' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'mem_limit: ${OBSERVER_MEMORY_LIMIT:-512m}' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'cpus: ${OBSERVER_CPUS:-0.50}' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'pids_limit: ${OBSERVER_PIDS_LIMIT:-256}' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'observer-log-proxy:' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'observer-log-shipper:' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'VECTOR_CONFIG: /etc/vector/vector.toml' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8686/health >/dev/null"]' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'ALLOW_LOGS: "1"' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'POST: "0"' "$repo_root/apps/observer/compose.yml"
+grep -Fq '/var/run/docker.sock:/var/run/docker.sock:ro' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'observer/log-buffer:/var/lib/vector' "$repo_root/apps/observer/compose.yml"
+grep -Fq 'max_size = ${OBSERVER_LOG_BUFFER_MAX_BYTES}' "$repo_root/apps/observer/vector.toml"
+grep -Fq 'com.aichorage.observer.ignore-logs: "true"' "$repo_root/apps/observer/compose.yml"
+grep -Fq "condition = '.label." "$repo_root/apps/observer/vector.toml"
+if grep -Fq 'exclude_containers' "$repo_root/apps/observer/vector.toml"; then
+	printf 'observer Vector config must not depend on exact Compose container names\n' >&2
+	exit 1
+fi
+grep -Fq '[api]' "$repo_root/apps/observer/vector.toml"
+grep -Fq 'OBSERVER_LOG_BUFFER_MAX_BYTES' "$repo_root/apps/observer/manifest.env"
+grep -Fq 'docker_host = "http://observer-log-proxy:2375"' "$repo_root/apps/observer/vector.toml"
+grep -Fq 'uri = "http://observer:5080/api/${OBSERVER_LOG_ORGANIZATION}/${OBSERVER_LOG_STREAM}/_json"' "$repo_root/apps/observer/vector.toml"
+grep -Fq 'EPHEMERAL_DATA_REL=log-buffer' "$repo_root/apps/observer/manifest.env"
+grep -q '^HEALTH_EXPECT=Server up and running$' "$repo_root/apps/observer/manifest.env"
+if grep -Eq 'ports:' "$repo_root/apps/observer/compose.yml"; then
+	printf 'OpenObserve must not publish a host port\n' >&2
+	exit 1
+fi
+if grep -Eiq 'postgres|redis|nats' "$repo_root/apps/observer/compose.yml"; then
+	printf 'OpenObserve singleton must not define external dependencies\n' >&2
+	exit 1
+fi
 grep -Fq 'CPAPI_MANAGEMENT_KEY' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'CPAPI_API_KEY' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'config-seed.sha256' "$repo_root/apps/cpapi/compose.yml"
@@ -80,9 +121,18 @@ grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/newapi/manifest.env"
 grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^HEALTH_MODE=process$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/aichorouter/manifest.env"
+grep -q '^HEALTH_URL=/healthz$' "$repo_root/apps/observer/manifest.env"
+grep -q '^HEALTH_MODE=process$' "$repo_root/apps/observer/manifest.env"
+if grep -Fq '127.0.0.1:5080/healthz' "$repo_root/apps/observer/compose.yml"; then
+	printf 'OpenObserve Compose must not use a curl-based internal healthcheck\n' >&2
+	exit 1
+fi
 grep -Fq 'singleton-transition-fail' "$repo_root/ops/platformctl.sh"
 grep -Fq 'transition_begin' "$repo_root/ops/platformctl.sh"
-grep -Fq 'cluster-reconcile-worker-2' "$repo_root/.woodpecker/singleton-stage-cpapi.yml"
+if grep -Fq 'depends_on:' "$repo_root/.woodpecker/singleton-stage-cpapi.yml"; then
+	printf 'singleton stage must not depend on an unrelated cluster workflow\n' >&2
+	exit 1
+fi
 grep -q '^NEW_API_NODE_TYPE=master$' "$repo_root/config/cluster/nodes/worker-1.env"
 grep -q '^NEW_API_NODE_TYPE=slave$' "$repo_root/config/cluster/nodes/worker-2.env"
 grep -q '^NEW_API_BACKUP_NODE_ID=worker-2$' "$repo_root/config/cluster/policy.env"
@@ -100,7 +150,7 @@ grep -Fq 'app_policy_enabled "$(basename "$d")"' "$repo_root/ops/platformctl.sh"
 grep -Fq 'record_singleton_transitions' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton_prepare_failed' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-origin-smoke' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'config/cluster/apps/*) ;;' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'cluster app policy requires its dedicated reconciliation workflow' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'unsupported cluster configuration path in application deployment' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-state' "$repo_root/ops/backup-platform.sh"
 if grep -Fq 'rm -f -- "$runtime_env"' "$repo_root/ops/platformctl.sh"; then

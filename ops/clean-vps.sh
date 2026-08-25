@@ -89,9 +89,9 @@ wrappers=(platformctl restart-platform backup-platform restore-platform configur
 	generate-woodpecker-workflows git-auth.sh platform-compose)
 projects=(foundation-caddy foundation-beszel-controller foundation-beszel-worker
 	foundation-woodpecker-controller foundation-woodpecker-worker foundation-woodpecker-deployer
-	app-librechat app-newapi app-aichorouter app-cpapi)
+	app-librechat app-newapi app-aichorouter app-cpapi app-observer)
 containers=() networks=(platform_edge foundation-woodpecker_private app-librechat_private
-	app-newapi_private app-aichorouter_private app-cpapi_private) images=(llm-hub-lite/deploy-runner:current)
+	app-newapi_private app-aichorouter_private app-cpapi_private app-observer_private) images=(llm-hub-lite/deploy-runner:current)
 
 collect_systemd_units() {
 	local path base

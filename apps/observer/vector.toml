@@ -1,0 +1,52 @@
+[sources.docker_logs]
+type = "docker_logs"
+docker_host = "http://observer-log-proxy:2375"
+include_labels = ["com.aichorage.platform=llm-hub-lite"]
+auto_partial_merge = true
+
+[transforms.exclude_observer_sidecars]
+type = "filter"
+inputs = ["docker_logs"]
+condition = '.label."com.aichorage.observer.ignore-logs" != "true"'
+
+[transforms.add_metadata]
+type = "remap"
+inputs = ["exclude_observer_sidecars"]
+source = '''
+.message = string!(.message)
+.timestamp = .timestamp
+.container_id = .container_id
+.container_name = .container_name
+.image = .image
+.stream = .stream
+.labels = .label
+.node_id = get_env_var!("NODE_ID")
+'''
+
+[sinks.openobserve]
+type = "http"
+inputs = ["add_metadata"]
+uri = "http://observer:5080/api/${OBSERVER_LOG_ORGANIZATION}/${OBSERVER_LOG_STREAM}/_json"
+method = "post"
+compression = "gzip"
+encoding.codec = "json"
+auth.strategy = "basic"
+auth.user = "${OBSERVER_ROOT_USER_EMAIL}"
+auth.password = "${OBSERVER_ROOT_USER_PASSWORD}"
+batch.max_events = 100
+batch.timeout_secs = 5
+request.in_flight_limit = 1
+request.retry_attempts = 10
+request.retry_initial_backoff_secs = 1
+request.retry_max_duration_secs = 60
+
+[sinks.openobserve.buffer]
+type = "disk"
+# The Compose environment supplies the validated 8 GiB default. This queue is
+# intentionally transient and resource-bounded.
+max_size = ${OBSERVER_LOG_BUFFER_MAX_BYTES}
+when_full = "drop_newest"
+
+[api]
+enabled = true
+address = "0.0.0.0:8686"

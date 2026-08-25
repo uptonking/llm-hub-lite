@@ -39,7 +39,7 @@ image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bas
 	printf "FOUNDATION_FOLLOWER=beszel-worker,woodpecker-worker\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
 	policy_file="$tmp_policy" NODE_ROLE=follower NODE_ID=worker-1
 	newapi_enabled=0 librechat_enabled=1
-	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE; do
+	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
 		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
 	done
 ')"
@@ -50,6 +50,9 @@ grep -Fqx 'LIBRECHAT_API_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$image_selection"
 grep -Fqx 'CPAPI_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'AICHOROUTER_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'OBSERVER_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$image_selection"
 leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bash -c '
 	set -Eeuo pipefail
 	eval "$IMAGE_FUNCTION"
@@ -58,7 +61,7 @@ leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_ro
 	printf "FOUNDATION_LEADER=caddy,woodpecker-controller,woodpecker-deployer,beszel-controller,beszel-worker\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
 	policy_file="$tmp_policy" NODE_ROLE=leader NODE_ID=leader
 	newapi_enabled=1 librechat_enabled=1
-	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE; do
+	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
 		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
 	done
 ')"
@@ -67,6 +70,9 @@ grep -Fqx 'LIBRECHAT_API_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'CPAPI_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'AICHOROUTER_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'OBSERVER_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fq 'if [[ "$NODE_ROLE" == leader ]]; then' "$bootstrap"
 grep -Fq 'missing cluster policy' "$bootstrap"
 grep -Fq 'newapi_enabled=0' "$bootstrap"
@@ -95,18 +101,29 @@ grep -Fq "printf 'Endpoints\\n'" "$bootstrap"
 grep -Fq "printf '\\nNext tasks\\n'" "$bootstrap"
 grep -Fq "printf '\\nOperations\\n'" "$bootstrap"
 grep -Fq 'available after a Follower is healthy' "$bootstrap"
-grep -Fq 'LibreChat origin:' "$bootstrap"
+grep -Fq 'available after its selected Follower is healthy' "$bootstrap"
+grep -Fq 'origin: https://' "$bootstrap"
 summary_function="$(sed -n '/^print_bootstrap_summary() {/,/^}/p' "$bootstrap")"
 summary_inventory="$(mktemp)"
-trap 'rm -f -- "$summary_inventory"' EXIT
+summary_env="$(mktemp)"
+trap 'rm -f -- "$summary_inventory" "$summary_env"' EXIT
 cat >"$summary_inventory" <<'EOF'
 NODE_LIBRECHAT_ORIGIN_HOST=worker-chat-origin.example.test
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker-chat-admin-origin.example.test
 EOF
-leader_summary="$(SUMMARY_FUNCTION="$summary_function" INVENTORY_FILE="$summary_inventory" bash -c '
+cat >"$summary_env" <<'EOF'
+LIBRECHAT_SITE=https://chat.example.test
+AICHOROUTER_SITE=https://aichorouter.example.test
+CPAPI_SITE=https://cpapi.example.test
+OBSERVER_SITE=https://observer.example.test
+EOF
+summary_helpers='app_enabled() { local app="$1" rel; rel="$(sed -n '\''s/^POLICY_FILE=//p'\'' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"; [[ "$(sed -n '\''s/^ENABLED=//p'\'' "$SOURCE_ROOT/config/$rel" | tail -n1)" != false ]]; }
+app_target() { local app="$1" key rel; key="$(sed -n '\''s/^TARGET_NODE_KEY=//p'\'' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"; rel="$(sed -n '\''s/^POLICY_FILE=//p'\'' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"; sed -n "s/^$key=//p" "$SOURCE_ROOT/config/$rel" | tail -n1; }'
+leader_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summary_helpers" INVENTORY_FILE="$summary_inventory" bash -c '
 	set -Eeuo pipefail
+	eval "$SUMMARY_HELPERS"
 	eval "$SUMMARY_FUNCTION"
-	NODE_ID=leader NODE_ROLE=leader DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
+	SOURCE_ROOT="'"$repo_root"'" app_env="'"$summary_env"'" NODE_ID=leader NODE_ROLE=leader DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
 	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
@@ -114,15 +131,16 @@ grep -Fq 'Foundation: Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpe
 grep -Fq 'Consumers: none' <<<"$leader_summary"
 grep -Fq 'LibreChat: https://chat.example.test (available after a Follower is healthy)' <<<"$leader_summary"
 grep -Fq 'Bootstrap worker-1, then worker-2.' <<<"$leader_summary"
-follower_summary="$(SUMMARY_FUNCTION="$summary_function" INVENTORY_FILE="$summary_inventory" bash -c '
+follower_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summary_helpers" INVENTORY_FILE="$summary_inventory" bash -c '
 	set -Eeuo pipefail
+	eval "$SUMMARY_HELPERS"
 	eval "$SUMMARY_FUNCTION"
-	NODE_ID=worker-1 NODE_ROLE=follower DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
+	SOURCE_ROOT="'"$repo_root"'" app_env="'"$summary_env"'" NODE_ID=worker-1 NODE_ROLE=follower DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
 	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
 grep -Fq 'Foundation: Caddy, Beszel Agent, Woodpecker Agent' <<<"$follower_summary"
-grep -Fq 'Consumers: LibreChat' <<<"$follower_summary"
+grep -Fq 'Consumers: Aichorouter, CPAPI, LibreChat, OpenObserve' <<<"$follower_summary"
 grep -Fq 'LibreChat origin: https://worker-chat-origin.example.test' <<<"$follower_summary"
 grep -Fq 'Daily deployments are workflow-driven' <<<"$follower_summary"
 wrapper_declaration="$(sed -n '/^for script in /p' "$bootstrap")"

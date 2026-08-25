@@ -1,6 +1,6 @@
 # llm-hub-lite
 
-Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, LibreChat. Optional single-node deployment is also supported.
+Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, LibreChat, and OpenObserve. Optional single-node deployment is also supported.
 
 ## Architecture
 
@@ -74,14 +74,15 @@ controller records an in-progress target transition under
 `/etc/llm-hub-lite/singleton-state` so an overlapping normal application
 workflow cannot accidentally reuse stale SQLite data; the marker is removed
 after the staged target is prepared. The journal records the old and new
-targets, release SHA, archive path, and phase (`prepared`, `origin-healthy`,
-`switched`, or `failed`). A failed stage leaves the old Leader route serving
+targets, release SHA, archive path, and phase ( `prepared` , `origin-healthy` ,
+`switched` , or `failed` ). A failed stage leaves the old Leader route serving
 and preserves the journal/archive for an idempotent retry; do not delete the
 journal until the target has been verified or deliberately rolled back.
 
 Legacy New API remains as a dormant manifest and is disabled by the committed
 policy. CPAPI is an enabled singleton consumer at `cpapi.aichorage.de` and is
-unrelated to the legacy New API. LibreChat is enabled on Followers and is published at
+unrelated to the legacy New API. OpenObserve is an enabled singleton consumer
+at `observer.aichorage.de` . LibreChat is enabled on Followers and is published at
 `chat.aichorage.de` and `chat-admin.aichorage.de` . It uses MongoDB Atlas and
 Upstash Redis; provide `LIBRECHAT_MONGO_URI` and `LIBRECHAT_REDIS_URI` (plus
 the generated JWT and admin-panel secrets) in the root-only bundle or during
@@ -120,6 +121,62 @@ ops/configure-single-follower.sh aichorouter
 git diff -- config/cluster/apps/aichorouter.policy
 git add config/cluster/apps/aichorouter.policy && git commit -m 'target aichorouter follower' && git push
 ```
+
+OpenObserve is the enabled singleton observability service at
+`observer.aichorage.de` . It runs the official single-binary image in local disk
+mode with no Redis, PostgreSQL, NATS, or object-storage dependency. Its data is
+stored at `data/prod/observer` and its root credentials are kept in
+`/etc/llm-hub-lite/observer.env` on the selected follower. The default profile
+uses `512m` memory, `0.50` CPU, one query/HTTP worker, a disabled in-memory
+cache, and 30 days of local retention. Inverted indexes are disabled by default
+to reduce CPU and disk use; set `OBSERVER_ENABLE_INVERTED_INDEX=true` only when
+faster full-text searches justify the cost. Moving observer to another follower
+is intentionally a fresh deployment; the old local directory is archived and
+not copied to the new node.
+
+The selected follower also runs a read-only Docker socket proxy and a small
+Vector shipper. Only containers carrying the platform ownership label are
+collected, and records are sent over the private Compose network to the local
+OpenObserve instance. Vector uses a disk queue capped at 8 GiB by default with
+`drop_newest` when full; `OBSERVER_LOG_BUFFER_MAX_BYTES` may lower the cap but
+cannot exceed 8 GiB. The queue is an outage buffer, not durable application
+data. It is excluded from Restic while OpenObserve's durable data remains in
+the backup. During a singleton move the shipper is stopped and the old buffer
+is discarded before any durable data is retained, so moving observer can lose
+logs that were waiting to upload. Docker log collection is best effort and has
+no historical checkpoint guarantee after a prolonged outage or restart. The
+shipper's private health endpoint checks process health but does not prove that
+every event has reached OpenObserve. Logs may contain request data or
+credentials; restrict OpenObserve access and avoid logging secrets.
+
+Select its follower interactively before committing a policy change:
+
+```bash
+ops/configure-single-follower.sh observer
+git diff -- config/cluster/apps/observer.policy
+git add config/cluster/apps/observer.policy && git commit -m 'target observer follower' && git push
+```
+
+On the selected follower, provision the OpenObserve administrator once:
+
+```bash
+sudo /opt/platform/control/current/ops/configure-app-secrets.sh observer
+```
+
+Useful observer checks on its target follower and through the Leader are:
+
+```bash
+docker compose -p app-observer ps
+docker logs app-observer-observer-log-shipper-1
+docker compose -p app-observer exec -T observer-log-shipper wget -q -O - http://localhost:8686/health
+curl -fsS https://worker1-observer-origin.aichorage.de/healthz
+curl -fsS https://observer.aichorage.de/healthz
+```
+
+The OpenObserve image is distroless and does not contain `curl` , so its
+Compose health state is process-based. Readiness is verified by the local
+singleton origin smoke and the Leader Caddy health check; Vector retains its
+own private HTTP healthcheck.
 
 On the selected follower, provision its root-only secrets once:
 
@@ -196,6 +253,7 @@ cp .env.dev.example .env.dev
     - LibreChat
     - Aichorouter (the default singleton target)
     - CPAPI (the default singleton target)
+    - OpenObserve (the default singleton target)
 - Follower worker-2:
     - Caddy
     - Woodpecker agent
@@ -206,12 +264,11 @@ SSH is used only for this one-time host bootstrap. Before starting, prepare the
 three VPS hosts, Cloudflare DNS, and the R2 Restic repositories. The Leader
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
 files are transferred to Followers before they start. Public domains
-`ci` , `ci-grpc` , `status` , `chat` , `chat-admin` , and `aichorouter` point to
+`ci` , `ci-grpc` , `status` , `chat` , `chat-admin` , `aichorouter` , `cpapi` ,
+and `observer` point to
 the Leader. The
-DNS-only origins using the `worker1-` prefix point to Worker 1, while the
-stable-ID `worker2-` origin records point to Worker 2. The `leader` stable ID is
-the public Leader and therefore does not need a private origin record for
-ingress. The Follower origin records must remain DNS-only. The Follower firewall only permits Docker HTTPS traffic from the Leader IP.
+DNS-only origins using the `worker1-` prefix point to Worker 1, including the
+`worker1-observer-origin` record, while the stable-ID `worker2-` origin records point to Worker 2. The `leader` stable ID is the public Leader and therefore does not need a private origin record for ingress. The Follower origin records must remain DNS-only. The Follower firewall only permits Docker HTTPS traffic from the Leader IP. After certificates work, the public records may be proxied through Cloudflare.
 
 Initialize each remote Restic repository once, before bootstrap. Keep the R2
 credentials and password in protected local files. This checkout uses
@@ -343,7 +400,7 @@ transient registry failures before aborting.
 
 Bootstrap is safe to retry after a partial failure. It merges missing image
 keys from the fetched repository into `/etc/llm-hub-lite/images.apps.env` and
-`images.foundation.env`; it does not overwrite existing digest pins. If a
+`images.foundation.env` ; it does not overwrite existing digest pins. If a
 retry reports an image key as missing, push the current repository first and
 recopy `ops/bootstrap-vps.sh` to the host so the bootstrap script and fetched
 source are from the same revision, then rerun the original command.
@@ -353,9 +410,10 @@ Restic repository and password, LibreChat Atlas/Upstash/R2 values, and the
 Woodpecker OAuth values when prompted. For non-interactive bootstrap, provide
 the same values through environment variables or root-only files; never create
 different shared secrets independently on different nodes.
-On the Aichorouter and CPAPI target follower, the interactive bootstrap also
-prompts for `AICHOROUTER_SESSION_SECRET`, `AICHOROUTER_CRYPTO_SECRET`,
-`CPAPI_API_KEY`, and `CPAPI_MANAGEMENT_KEY`; these singleton-local secrets are
+On the Aichorouter, CPAPI, and OpenObserve target follower, the interactive bootstrap also
+prompts for `AICHOROUTER_SESSION_SECRET` , `AICHOROUTER_CRYPTO_SECRET` ,
+`CPAPI_API_KEY` , `CPAPI_MANAGEMENT_KEY` , `OBSERVER_ROOT_USER_EMAIL` , and
+`OBSERVER_ROOT_USER_PASSWORD` ; these singleton-local secrets are
 intentionally not copied from the Leader. The CPAPI management panel is enabled
 and protected by its management key.
 
@@ -476,14 +534,26 @@ the remaining followers; never upgrade two replicas concurrently. The node
 named by `NEW_API_BACKUP_NODE_ID` is the only node that runs `pg_dump` ; every
 node still backs up its local runtime and SQLite state.
 
-CPAPI is a separate singleton consumer at `cpapi.aichorage.de`, unrelated to
+CPAPI is a separate singleton consumer at `cpapi.aichorage.de` , unrelated to
 the retained legacy New API. Its target follower is stored in the CPAPI app
 policy, and its local auth/configuration state is intentionally not replicated.
 Moving it is a fresh deployment with data loss allowed; provision its API and
 management keys on the target follower before running the generated singleton
 stage/switch workflow. The management panel remains enabled and is protected
-by `CPAPI_MANAGEMENT_KEY`. CPAPI has no host-published ports and no Redis or
+by `CPAPI_MANAGEMENT_KEY` . CPAPI has no host-published ports and no Redis or
 database dependency; its default profile is capped at 256 MiB and 0.25 CPU.
+
+OpenObserve is a separate singleton consumer at `observer.aichorage.de` .
+Its target follower is stored in the observer app policy, and its local disk
+data and administrator credentials are intentionally not copied during a move.
+The default local retention is 30 days, with no external database or object
+store dependency. Its data is included in the node's Restic snapshot, but
+moving the service to another follower starts with an empty data directory.
+The co-located Vector shipper collects only platform-labelled Docker logs,
+filters its own sidecars using an ownership label, and keeps an ephemeral 8 GiB
+disk buffer by default. That buffer is excluded from Restic and discarded during
+the move. Collection is best effort, and logs can contain sensitive request
+data.
 
 LibreChat accounts and conversations live in MongoDB Atlas, while shared cache
 and stream state lives in Upstash. Local Restic snapshots include LibreChat
@@ -531,14 +601,15 @@ Consumer source, manifests, and application Compose files under `apps/` are
 included in this path. Non-cluster committed runtime configuration under
 `config/` (including Caddy and route files) is also rendered and reloaded by
 this path. The committed cluster policy and node inventory under
-`config/cluster/policy.env` and `config/cluster/nodes/` use the separate
-`cluster-reconcile` path. Foundation Compose
+`config/cluster/policy.env` , `config/cluster/nodes/` , and non-singleton app
+policies under `config/cluster/apps/` use the separate `cluster-reconcile`
+
+path. Foundation Compose
 files, foundation images, deployment scripts, and runner images remain explicit
 reviewed workflows; they are deliberately rejected by an ordinary consumer
-deployment. Singleton source or target-policy changes also trigger the
-generated `cluster-reconcile` chain first; singleton stage waits for that chain
-before preparing the selected Follower, preventing a placement change from
-racing inventory reconciliation.
+deployment. Singleton source or target-policy changes use their own generated
+stage/switch/stop chain; the stage validates the selected target directly and
+does not wait for an unrelated cluster-reconcile pipeline.
 
 The rollout is ordered rather than a distributed transaction. If a node is
 offline or fails health checks, its deployment rolls back locally and the

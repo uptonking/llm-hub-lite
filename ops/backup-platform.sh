@@ -274,7 +274,7 @@ snapshot() {
 	printf 'created_utc=%s\nnode_id=%s\nreason=%s\nrelease=%s\n' \
 		"$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$NODE_ID" "$reason" "$(readlink "$APP_ROOT/current" 2>/dev/null || true)" >"$STAGE_ROOT/manifest.txt"
 
-	local -a paths existing excludes
+	local -a paths existing excludes ephemeral_excludes
 	paths=(
 		"$DATA_ROOT" "$APP_ROOT/shared/.env.prod" "$APP_ROOT/shared/runtime"
 		"$APP_ROOT/current" "$APP_ROOT/previous" "$CONTROL_ROOT/current" "$CONTROL_ROOT/previous"
@@ -295,6 +295,21 @@ snapshot() {
 	done < <(descriptor_ids)
 	existing=()
 	for path in "${paths[@]}"; do [[ -e "$path" || -L "$path" ]] && existing+=("$path"); done
+	ephemeral_excludes=()
+	while IFS= read -r descriptor; do
+		data_rel="$(descriptor_value "$descriptor" DATA_ROOT_REL)"
+		ephemeral_rel="$(descriptor_value "$descriptor" EPHEMERAL_DATA_REL)"
+		[[ -n "$ephemeral_rel" ]] || continue
+		safe_relative "$data_rel" || {
+			printf 'unsafe DATA_ROOT_REL in %s\n' "$descriptor" >&2
+			return 1
+		}
+		safe_relative "$ephemeral_rel" || {
+			printf 'unsafe EPHEMERAL_DATA_REL in %s\n' "$descriptor" >&2
+			return 1
+		}
+		ephemeral_excludes+=(--exclude "$DATA_ROOT/$data_rel/$ephemeral_rel")
+	done < <(descriptor_ids)
 	excludes=(
 		--exclude "$DATA_ROOT/*.db" --exclude "$DATA_ROOT/*.db-*" --exclude "$DATA_ROOT/*.sqlite" --exclude "$DATA_ROOT/*.sqlite-*"
 		--exclude "$DATA_ROOT/**/*.db" --exclude "$DATA_ROOT/**/*.db-*" --exclude "$DATA_ROOT/**/*.sqlite" --exclude "$DATA_ROOT/**/*.sqlite-*"
@@ -303,6 +318,7 @@ snapshot() {
 		--exclude "$BESZEL_DATA_ROOT/*.db" --exclude "$BESZEL_DATA_ROOT/*.db-*" --exclude "$BESZEL_DATA_ROOT/*.sqlite" --exclude "$BESZEL_DATA_ROOT/*.sqlite-*"
 		--exclude "$BESZEL_DATA_ROOT/**/*.db" --exclude "$BESZEL_DATA_ROOT/**/*.db-*" --exclude "$BESZEL_DATA_ROOT/**/*.sqlite" --exclude "$BESZEL_DATA_ROOT/**/*.sqlite-*"
 	)
+	if ((${#ephemeral_excludes[@]} > 0)); then excludes+=("${ephemeral_excludes[@]}"); fi
 	check_remote_repository
 	restic backup --tag platform --tag "$NODE_TAG" --tag "$reason" "${excludes[@]}" "${existing[@]}"
 	if remote_enabled; then

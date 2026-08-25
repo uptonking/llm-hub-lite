@@ -1,0 +1,6 @@
+{$NODE_OBSERVER_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy observer:5080 {
+    flush_interval -1
+  }
+}

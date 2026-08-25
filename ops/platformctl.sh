@@ -48,6 +48,10 @@ placeholder_value() {
 	*) return 1 ;;
 	esac
 }
+safe_relative() {
+	local value="$1"
+	[[ "$value" != /* && "$value" != *..* && "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+}
 compose_bin=(docker compose)
 if [[ -n "${PLATFORM_COMPOSE_BIN:-}" ]]; then compose_bin=("$PLATFORM_COMPOSE_BIN"); elif [[ -x /usr/local/bin/platform-compose ]]; then compose_bin=(/usr/local/bin/platform-compose); fi
 acquire_lock() {
@@ -322,7 +326,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services compose_file yaml_file nginx_file
+	local d="$1" k v rel alias services compose_file yaml_file nginx_file local_buffer_bytes
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -349,11 +353,14 @@ validate_descriptor() {
 	*) die "unsupported app placement in $d/manifest.env" ;;
 	esac
 	[[ "$(descriptor_value "$d" APP_ID)" == "$(basename "$d")" && "$(descriptor_value "$d" APP_ID)" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid APP_ID in $d/manifest.env"
+	while IFS= read -r k; do
+		[[ -z "$k" || "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid ENV_KEYS entry in $d/manifest.env: $k"
+	done < <(printf '%s\n' "$(descriptor_value "$d" ENV_KEYS)" | tr ',' '\n')
 	[[ "$(descriptor_value "$d" COMPOSE_PROJECT)" =~ ^app-[a-z0-9-]+$ ]] || die "invalid COMPOSE_PROJECT in $d/manifest.env"
 	alias="$(descriptor_value "$d" NETWORK_ALIAS)"
 	[[ "$alias" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid NETWORK_ALIAS in $d/manifest.env"
-	for rel in "$(descriptor_value "$d" DATA_ROOT_REL)" "$(descriptor_value "$d" COMPOSE_FILE)" "$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)" "$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" "$(descriptor_value "$d" RUNTIME_ENV_FILE)" "$(descriptor_value "$d" POLICY_FILE)"; do
-		[[ -z "$rel" || ("$rel" != /* && "$rel" != *..* && "$rel" =~ ^[A-Za-z0-9._/-]+$) ]] || die "unsafe descriptor path in $d/manifest.env"
+	for rel in "$(descriptor_value "$d" DATA_ROOT_REL)" "$(descriptor_value "$d" EPHEMERAL_DATA_REL)" "$(descriptor_value "$d" COMPOSE_FILE)" "$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)" "$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" "$(descriptor_value "$d" RUNTIME_ENV_FILE)" "$(descriptor_value "$d" POLICY_FILE)"; do
+		[[ -z "$rel" ]] || safe_relative "$rel" || die "unsafe descriptor path in $d/manifest.env"
 	done
 	need_file "$CONTROL_ROOT/current/config/$(descriptor_value "$d" POLICY_FILE)"
 	while IFS='|' read -r public_key origin_key upstream_key; do
@@ -384,6 +391,12 @@ validate_descriptor() {
 		for k in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_BUCKET_NAME; do
 			! placeholder_value "$(env_value "$k")" || die "production LibreChat placeholder is not allowed: $k"
 		done
+	fi
+	if [[ "$(basename "$d")" == observer ]]; then
+		local_buffer_bytes="$(app_value "$d" OBSERVER_LOG_BUFFER_MAX_BYTES)"
+		[[ -n "$local_buffer_bytes" ]] || local_buffer_bytes=8589934592
+		[[ "$local_buffer_bytes" =~ ^[0-9]+$ ]] || die 'observer log buffer size must be an integer number of bytes'
+		((local_buffer_bytes >= 1048576 && local_buffer_bytes <= 8589934592)) || die 'observer log buffer size must be between 1 MiB and 8 GiB'
 	fi
 	if [[ "$(descriptor_value "$d" STATE_MODE)" == sqlite ]]; then
 		[[ -n "$(descriptor_value "$d" SQLITE_PATHS)" ]] || die "SQLite app is missing SQLITE_PATHS: $d"
@@ -732,7 +745,7 @@ singleton_route_keys() {
 	printf '%s\n' "$groups" | tr ';' '\n' | head -n1
 }
 singleton_prepare() {
-	local d="$1" previous="${SINGLETON_PREVIOUS_TARGET:-}" target base rel root archive state_file journal release phase journal_target journal_release
+	local d="$1" previous="${SINGLETON_PREVIOUS_TARGET:-}" target base rel root ephemeral_rel ephemeral_root archive state_file journal release phase journal_target journal_release
 	[[ "$(node_role)" == follower ]] || die 'singleton prepare must run on a follower'
 	d="$(singleton_descriptor "$d")"
 	state_file="$(singleton_state_file "$d")"
@@ -747,8 +760,14 @@ singleton_prepare() {
 	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
 	base="$(data_root)"
 	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
-	[[ "$rel" != /* && "$rel" != *..* && "$rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die "unsafe singleton data path: $rel"
+	safe_relative "$rel" || die "unsafe singleton data path: $rel"
 	root="$base/$rel"
+	case "$root" in "$base"/*) ;; *) die 'refusing to operate outside DATA_ROOT' ;; esac
+	ephemeral_rel="$(descriptor_value "$d" EPHEMERAL_DATA_REL)"
+	if [[ -n "$ephemeral_rel" ]]; then
+		safe_relative "$ephemeral_rel" || die "unsafe singleton ephemeral data path: $ephemeral_rel"
+		ephemeral_root="$root/$ephemeral_rel"
+	fi
 	journal_target="$(transition_value NEW_TARGET "$journal")"
 	journal_release="$(transition_value RELEASE_SHA "$journal")"
 	phase="$(transition_value PHASE "$journal")"
@@ -775,6 +794,17 @@ singleton_prepare() {
 		return 0
 	fi
 	stop_project "app:$d" || die "unable to stop existing singleton before fresh prepare"
+	if [[ -n "$ephemeral_root" && (-e "$ephemeral_root" || -L "$ephemeral_root") ]]; then
+		rm -rf -- "$ephemeral_root"
+		printf 'discarded ephemeral singleton data at %s\n' "$ephemeral_root"
+	fi
+	if ! find "$root" -mindepth 1 -print -quit | grep -q .; then
+		transition_begin "$journal" "$(basename "$d")" "$previous" "$target" "$release" ""
+		transition_set "$journal" PHASE prepared
+		rm -f -- "$state_file"
+		printf 'discarded ephemeral singleton data and created fresh path %s\n' "$root"
+		return 0
+	fi
 	archive="$root.retained.$(date -u '+%Y%m%dT%H%M%SZ')"
 	transition_begin "$journal" "$(basename "$d")" "$previous" "$target" "$release" "$archive"
 	mv -- "$root" "$archive"
@@ -869,7 +899,7 @@ singleton_stop() {
 	rm -f -- "$state_file"
 	base="$(data_root)"
 	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
-	[[ "$rel" != /* && "$rel" != *..* && "$rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die "unsafe singleton data path: $rel"
+	safe_relative "$rel" || die "unsafe singleton data path: $rel"
 	root="$base/$rel"
 	case "$root" in "$base"/*) ;; *) die 'refusing to report data outside DATA_ROOT' ;; esac
 	runtime_env="$(app_runtime_env_file "$d")"

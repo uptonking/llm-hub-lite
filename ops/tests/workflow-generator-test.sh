@@ -24,6 +24,8 @@ if grep -R -Eq '^[[:space:]]+role:' "$tmp/disabled"; then
 fi
 [[ -f "$tmp/disabled/deploy-worker-1.yml" && -f "$tmp/disabled/deploy-worker-2.yml" ]]
 [[ -f "$tmp/disabled/foundation-upgrade-worker-2.yml" && -f "$tmp/disabled/runner-upgrade-worker-2.yml" && -f "$tmp/disabled/rollback-leader.yml" ]]
+[[ -f "$tmp/disabled/singleton-stage-observer.yml" && -f "$tmp/disabled/singleton-switch-observer.yml" ]]
+[[ -f "$tmp/disabled/singleton-stop-observer-worker-1.yml" && -f "$tmp/disabled/singleton-stop-observer-worker-2.yml" ]]
 grep -Fq $'depends_on:\n  - foundation-upgrade-leader' "$tmp/disabled/foundation-upgrade-worker-1.yml"
 grep -Fq $'depends_on:\n  - cluster-reconcile-leader' "$tmp/disabled/cluster-reconcile-worker-1.yml"
 grep -Fq '/var/run/docker.sock:/var/run/docker.sock' "$tmp/disabled/deploy-smoke.yml"
@@ -34,7 +36,21 @@ if grep -Fq '        - apps/aichorouter/**' "$tmp/disabled/deploy-leader.yml"; t
 	exit 1
 fi
 grep -Fq '        - config/routes.d/**' "$tmp/disabled/deploy-leader.yml"
+grep -Fq '        - config/cluster/apps/librechat.policy' "$tmp/disabled/cluster-reconcile-leader.yml"
+if grep -Fq '        - apps/observer/**' "$tmp/disabled/cluster-reconcile-leader.yml" || grep -Fq '        - config/cluster/apps/observer.policy' "$tmp/disabled/cluster-reconcile-leader.yml"; then
+	printf 'singleton application paths must not trigger cluster reconciliation\n' >&2
+	exit 1
+fi
+if grep -Fq '        - config/cluster/apps/librechat.policy' "$tmp/disabled/deploy-leader.yml"; then
+	printf 'non-singleton policy must not trigger normal deployment\n' >&2
+	exit 1
+fi
 grep -Fq '        - ops/images.apps.prod.env' "$tmp/disabled/singleton-stage-aichorouter.yml"
+grep -Fq '        - apps/observer/**' "$tmp/disabled/singleton-stage-observer.yml"
+if grep -Fq 'depends_on:' "$tmp/disabled/singleton-stage-observer.yml"; then
+	printf 'generated singleton stage has an unrelated dependency\n' >&2
+	exit 1
+fi
 if grep -Fq '        - config/Caddyfile' "$tmp/disabled/singleton-stage-aichorouter.yml" || grep -Fq '        - config/routes.d/**' "$tmp/disabled/singleton-stage-aichorouter.yml"; then
 	printf 'singleton workflows must not own shared Caddy configuration paths\n' >&2
 	exit 1

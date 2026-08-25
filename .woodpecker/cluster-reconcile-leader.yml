@@ -6,10 +6,8 @@ when:
       include:
         - config/cluster/policy.env
         - config/cluster/nodes/**
-        - apps/aichorouter/**
-        - apps/cpapi/**
-        - config/cluster/apps/aichorouter.policy
-        - config/cluster/apps/cpapi.policy
+        - config/cluster/apps/librechat.policy
+        - config/cluster/apps/newapi.policy
 
 
 labels:

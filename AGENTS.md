@@ -4,8 +4,11 @@
 
 Self-hosted, reproducible multi-node Docker platform for Caddy, Woodpecker CI,
 Beszel, and LibreChat.
-LibreChat is the enabled active-active follower consumer. Aichorouter and CPAPI are enabled singleton consumers targeted to a configured follower. Legacy New
-API remains retained and disabled by policy.
+LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI,
+and OpenObserve (`observer`) are enabled singleton consumers targeted to a
+configured follower. Observer also collects platform-labelled Docker logs on
+its target host through a read-only socket proxy and bounded Vector buffer.
+Legacy New API remains retained and disabled by policy.
 
 ## Architecture
 
@@ -17,6 +20,8 @@ API remains retained and disabled by policy.
 - Persistent app data: `/opt/apps/llm-hub-lite/shared/data/prod`.
 - Foundation state: `/opt/platform/{caddy,woodpecker,beszel}`.
 - Root-only runtime configuration: `/etc/llm-hub-lite`.
+- Observer durable data is under `shared/data/prod/observer`; its transient
+  `log-buffer` is excluded from Restic and discarded when the singleton moves.
 
 ## Operations
 

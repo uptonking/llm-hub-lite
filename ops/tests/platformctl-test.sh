@@ -14,6 +14,10 @@ cat >"$tmp/config/cpapi.env" <<'EOF'
 CPAPI_API_KEY=test-api-key
 CPAPI_MANAGEMENT_KEY=test-management-key
 EOF
+cat >"$tmp/config/observer.env" <<'EOF'
+OBSERVER_ROOT_USER_EMAIL=admin@observer.test
+OBSERVER_ROOT_USER_PASSWORD=test-observer-password
+EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi.example.invalid
@@ -21,6 +25,7 @@ NODE_CPAPI_ORIGIN_HOST=worker2-cpapi.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
+NODE_OBSERVER_ORIGIN_HOST=worker2-observer.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
@@ -30,6 +35,7 @@ case "$*" in
   *app-newapi*) printf 'newapi\n';;
   *app-cpapi*) printf 'cpapi\n';;
   *app-aichorouter*) printf 'aichorouter\n';;
+  *app-observer*) printf 'observer\n';;
 esac
 exit 0
 EOF
@@ -57,6 +63,13 @@ foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUN
 	exit 1
 }
 bash "$repo_root/ops/platformctl.sh" validate
+sed 's/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=8589934593/' "$tmp/app/shared/.env.prod" >"$tmp/observer-invalid.env"
+mv "$tmp/observer-invalid.env" "$tmp/app/shared/.env.prod"
+if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+	printf 'observer buffer limit above 8 GiB was accepted\n' >&2
+	exit 1
+fi
+cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
 grep -Fq 'Do not evaluate an inactive app' "$repo_root/ops/platformctl.sh"
 grep -Fq -- '--force-recreate --wait' "$repo_root/ops/platformctl.sh"
 grep -Fq 'Compose project state after failed health wait' "$repo_root/ops/platformctl.sh"
@@ -69,6 +82,7 @@ grep -Fq 'cpapi.localhost' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
 grep -Fq 'lb_policy random_choose 2' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'header_up Host {http.reverse_proxy.upstream.hostport}' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'reverse_proxy https://worker1-aichorouter-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
+grep -Fq 'observer.localhost' "$tmp/app/shared/runtime/config/routes.d/observer.caddy"
 grep -Fq 'location = /health' "$repo_root/apps/librechat/client.nginx.conf"
 grep -Fq 'mem_limit:' "$repo_root/apps/librechat/compose.yml"
 grep -Fq 'MONGO_MAX_POOL_SIZE:' "$repo_root/apps/librechat/compose.yml"

@@ -1,0 +1,14 @@
+{$OBSERVER_SITE} {
+  import common_proxy
+  reverse_proxy {$OBSERVER_UPSTREAM} {
+    fail_duration 30s
+    health_uri /healthz
+    health_interval 10s
+    health_timeout 3s
+    header_up Host {http.reverse_proxy.upstream.hostport}
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "observer unavailable" 503
+  }
+}

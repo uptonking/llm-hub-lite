@@ -670,14 +670,18 @@ while IFS= read -r manifest; do
 	[[ -n "$public_key" && -n "$public_host" ]] || continue
 	ensure_key "$app_env" "$public_key" "https://$public_host.$DOMAIN_NAME"
 done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+
+while IFS= read -r manifest; do
+	[[ -f "$manifest" ]] || continue
+	while IFS= read -r config_key; do
+		[[ -n "$config_key" ]] || continue
+		load_runtime_value "$config_key" "$app_env"
+		config_value="${!config_key:-}"
+		[[ -n "$config_value" ]] && ensure_key "$app_env" "$config_key" "$config_value"
+	done < <(sed -n 's/^ENV_KEYS=//p' "$manifest" | tail -n1 | tr ',' '\n')
+done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+
 for pair in \
-	"AICHOROUTER_MEMORY_LIMIT=$AICHOROUTER_MEMORY_LIMIT" "AICHOROUTER_CPUS=$AICHOROUTER_CPUS" "AICHOROUTER_PIDS_LIMIT=$AICHOROUTER_PIDS_LIMIT" \
-	"AICHOROUTER_GOMAXPROCS=$AICHOROUTER_GOMAXPROCS" "AICHOROUTER_GOMEMLIMIT=$AICHOROUTER_GOMEMLIMIT" \
-	"AICHOROUTER_MEMORY_CACHE_ENABLED=$AICHOROUTER_MEMORY_CACHE_ENABLED" "AICHOROUTER_ERROR_LOG_ENABLED=$AICHOROUTER_ERROR_LOG_ENABLED" "AICHOROUTER_BATCH_UPDATE_ENABLED=$AICHOROUTER_BATCH_UPDATE_ENABLED" \
-	"AICHOROUTER_SQL_MAX_IDLE_CONNS=$AICHOROUTER_SQL_MAX_IDLE_CONNS" "AICHOROUTER_SQL_MAX_OPEN_CONNS=$AICHOROUTER_SQL_MAX_OPEN_CONNS" "AICHOROUTER_SQL_MAX_LIFETIME=$AICHOROUTER_SQL_MAX_LIFETIME" \
-	"AICHOROUTER_RELAY_MAX_IDLE_CONNS=$AICHOROUTER_RELAY_MAX_IDLE_CONNS" "AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST=$AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST" "AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT=$AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT" \
-	"AICHOROUTER_MAX_REQUEST_BODY_MB=$AICHOROUTER_MAX_REQUEST_BODY_MB" "AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB=$AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB" "AICHOROUTER_MAX_FILE_DOWNLOAD_MB=$AICHOROUTER_MAX_FILE_DOWNLOAD_MB" \
-	"AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS=$AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS" \
 	"LIBRECHAT_MONGO_URI=$LIBRECHAT_MONGO_URI" "LIBRECHAT_REDIS_URI=$LIBRECHAT_REDIS_URI" \
 	"LIBRECHAT_JWT_SECRET=$LIBRECHAT_JWT_SECRET" "LIBRECHAT_JWT_REFRESH_SECRET=$LIBRECHAT_JWT_REFRESH_SECRET" \
 	"LIBRECHAT_ADMIN_PANEL_SESSION_SECRET=$LIBRECHAT_ADMIN_PANEL_SESSION_SECRET" "LIBRECHAT_FILE_STRATEGY=s3" \
@@ -981,8 +985,8 @@ PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot p
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet\n' >&2
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet\n' >&2
 print_bootstrap_summary() {
-	local foundation consumers disabled origin_host admin_origin_host aichorouter_origin_host cpapi_origin_host
-	local aichorouter_enabled="${aichorouter_enabled:-0}"
+	local foundation consumers disabled manifest app_id display_name placement origin_key public_key public_host route_label route_index groups availability_note
+	local -a local_consumers=()
 	foundation='Caddy, Beszel Agent'
 	consumers='none'
 	disabled='none'
@@ -990,15 +994,28 @@ print_bootstrap_summary() {
 		foundation='Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer'
 	else
 		foundation='Caddy, Beszel Agent, Woodpecker Agent'
-		if ((librechat_enabled)); then consumers='LibreChat'; fi
-		if ((newapi_enabled)); then [[ "$consumers" == none ]] && consumers='New API' || consumers+=', New API'; fi
-		if ((aichorouter_enabled)); then [[ "$consumers" == none ]] && consumers='Aichorouter' || consumers+=', Aichorouter'; fi
-		if ((cpapi_enabled)); then [[ "$consumers" == none ]] && consumers='CPAPI' || consumers+=', CPAPI'; fi
 	fi
-	if ((!newapi_enabled)); then disabled='New API'; fi
-	if ((!librechat_enabled)); then [[ "$disabled" == none ]] && disabled='LibreChat' || disabled+=', LibreChat'; fi
-	if ((!aichorouter_enabled)); then [[ "$disabled" == none ]] && disabled='Aichorouter (not on this node)' || disabled+=', Aichorouter (not on this node)'; fi
-	if ((!cpapi_enabled)); then [[ "$disabled" == none ]] && disabled='CPAPI (not on this node)' || disabled+=', CPAPI (not on this node)'; fi
+	while IFS= read -r manifest; do
+		[[ -f "$manifest" ]] || continue
+		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+		placement="$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)"
+		case "$placement" in follower | single-follower) ;; *) continue ;; esac
+		display_name="$(sed -n 's/^DISPLAY_NAME=//p' "$manifest" | tail -n1)"
+		display_name="${display_name:-$app_id}"
+		if ! app_enabled "$app_id"; then
+			[[ "$disabled" == none ]] && disabled="$display_name (disabled by policy)" || disabled+=", $display_name (disabled by policy)"
+			continue
+		fi
+		if [[ "$NODE_ROLE" == follower && ("$placement" == follower || ("$placement" == single-follower && "$(app_target "$app_id")" == "$NODE_ID")) ]]; then
+			local_consumers+=("$display_name")
+		else
+			[[ "$disabled" == none ]] && disabled="$display_name (not on this node)" || disabled+=", $display_name (not on this node)"
+		fi
+	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+	for display_name in "${local_consumers[@]-}"; do
+		[[ -n "$display_name" ]] || continue
+		[[ "$consumers" == none ]] && consumers="$display_name" || consumers+=", $display_name"
+	done
 
 	printf '\nBootstrap complete.\n\n'
 	printf 'Node\n  ID: %s\n  Role: %s\n\n' "$NODE_ID" "$NODE_ROLE"
@@ -1007,26 +1024,52 @@ print_bootstrap_summary() {
 	if [[ "$NODE_ROLE" == leader ]]; then
 		printf '  Woodpecker: https://ci.%s\n' "$DOMAIN_NAME"
 		printf '  Beszel: https://status.%s\n' "$DOMAIN_NAME"
-		if ((librechat_enabled)); then
-			printf '  LibreChat: https://chat.%s (available after a Follower is healthy)\n' "$DOMAIN_NAME"
-			printf '  LibreChat admin: https://chat-admin.%s (available after a Follower is healthy)\n' "$DOMAIN_NAME"
-		fi
-		printf '  Aichorouter: https://aichorouter.%s (available after its selected Follower is healthy)\n' "$DOMAIN_NAME"
-		printf '  CPAPI: https://cpapi.%s (available after its selected Follower is healthy)\n' "$DOMAIN_NAME"
+		while IFS= read -r manifest; do
+			[[ -f "$manifest" ]] || continue
+			app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+			app_enabled "$app_id" || continue
+			placement="$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)"
+			case "$placement" in follower | single-follower) ;; *) continue ;; esac
+			display_name="$(sed -n 's/^DISPLAY_NAME=//p' "$manifest" | tail -n1)"
+			display_name="${display_name:-$app_id}"
+			groups="$(sed -n 's/^ROUTE_GROUPS=//p' "$manifest" | tail -n1)"
+			availability_note='available after a Follower is healthy'
+			[[ "$placement" == single-follower ]] && availability_note='available after its selected Follower is healthy'
+			route_index=0
+			while IFS='|' read -r public_key _; do
+				[[ -n "$public_key" ]] || continue
+				public_host="$(sed -n "s/^$public_key=//p" "$app_env" | tail -n1)"
+				[[ -n "$public_host" ]] || continue
+				route_label="$display_name"
+				if ((route_index > 0)); then route_label="$display_name ($public_key)"; fi
+				[[ "$public_key" == *_ADMIN_SITE ]] && route_label="$display_name admin"
+				printf '  %s: %s (%s)\n' "$route_label" "$public_host" "$availability_note"
+				route_index=$((route_index + 1))
+			done < <(printf '%s\n' "$groups" | tr ';' '\n')
+		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 	else
-		if ((librechat_enabled)); then
-			origin_host="$(sed -n 's/^NODE_LIBRECHAT_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
-			admin_origin_host="$(sed -n 's/^NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
-			[[ -n "$origin_host" ]] && printf '  LibreChat origin: https://%s\n' "$origin_host"
-			[[ -n "$admin_origin_host" ]] && printf '  LibreChat admin origin: https://%s\n' "$admin_origin_host"
-			if ((aichorouter_enabled)); then
-				aichorouter_origin_host="$(sed -n 's/^NODE_AICHOROUTER_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
-				[[ -n "$aichorouter_origin_host" ]] && printf '  Aichorouter origin: https://%s\n' "$aichorouter_origin_host"
-			fi
-			if ((cpapi_enabled)); then
-				cpapi_origin_host="$(sed -n 's/^NODE_CPAPI_ORIGIN_HOST=//p' "$inventory_file" | tail -n1)"
-				[[ -n "$cpapi_origin_host" ]] && printf '  CPAPI origin: https://%s\n' "$cpapi_origin_host"
-			fi
+		if [[ "$consumers" != none ]]; then
+			while IFS= read -r manifest; do
+				[[ -f "$manifest" ]] || continue
+				app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+				app_enabled "$app_id" || continue
+				placement="$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)"
+				[[ "$placement" == follower || ("$placement" == single-follower && "$(app_target "$app_id")" == "$NODE_ID") ]] || continue
+				display_name="$(sed -n 's/^DISPLAY_NAME=//p' "$manifest" | tail -n1)"
+				display_name="${display_name:-$app_id}"
+				groups="$(sed -n 's/^ROUTE_GROUPS=//p' "$manifest" | tail -n1)"
+				route_index=0
+				while IFS='|' read -r _ origin_key _; do
+					[[ -n "$origin_key" ]] || continue
+					origin_host="$(sed -n "s/^$origin_key=//p" "$inventory_file" | tail -n1)"
+					[[ -n "$origin_host" ]] || continue
+					route_label="$display_name"
+					if ((route_index > 0)); then route_label="$display_name ($origin_key)"; fi
+					[[ "$origin_key" == *_ADMIN_ORIGIN_HOST ]] && route_label="$display_name admin"
+					printf '  %s origin: https://%s\n' "$route_label" "$origin_host"
+					route_index=$((route_index + 1))
+				done < <(printf '%s\n' "$groups" | tr ';' '\n')
+			done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 		else
 			printf '  No consumer endpoints are enabled on this node.\n'
 		fi
