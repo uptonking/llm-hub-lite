@@ -77,9 +77,13 @@ EOF
 export PATH="$tmp/bin:$PATH" DOCKER_CALL_LOG="$tmp/docker.log"
 export DEPLOY_CONFIG_FILE="$tmp/config.env"
 export PLATFORMCTL_CALL_LOG="$tmp/platformctl.log" BACKUP_CALL_LOG="$tmp/backup.log"
-export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_COUNT=2
 export GIT_CONFIG_KEY_0="url.file://$remote.insteadOf"
 export GIT_CONFIG_VALUE_0=https://github.com/test/repo.git
+# The test remote is intentionally a local file transport. Keep this explicit
+# because newer Git versions may reject file:// fetches by default.
+export GIT_CONFIG_KEY_1=protocol.file.allow
+export GIT_CONFIG_VALUE_1=always
 
 sha1="$(git -C "$work" rev-parse HEAD)"
 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha1" >/dev/null
