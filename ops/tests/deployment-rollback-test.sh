@@ -145,7 +145,7 @@ if FAIL_SYNC=1 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha2" >"$tmp/
 	printf 'expected reconciliation failure\n' >&2
 	exit 1
 fi
-[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha1" ]]
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_removed" ]]
 grep -qx 'sync all' "$tmp/platformctl.log"
 
 printf '\nconfig route change\n' >>"$work/config/Caddyfile"
