@@ -7,6 +7,7 @@ services:
     stop_grace_period: 60s
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: newapi
       com.aichorage.component: app-newapi
     command: ["--log-dir", "/app/logs"]
     environment:

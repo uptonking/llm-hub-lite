@@ -55,16 +55,29 @@ printf 'NODE_ID=%s\n' "$pigeon_target" >"$tmp/node.env"
 if output="$(CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
 	PIGEON_SECRET_KEY=too-short PIGEON_LOGIN_PASSWORD=also-too-short \
 	"$repo_root/ops/configure-app-secrets.sh" pigeon 2>&1)"; then
-	printf 'weak Pigeon secrets were accepted\n' >&2
+	printf 'disabled Pigeon accepted secret provisioning\n' >&2
+	exit 1
+fi
+grep -Fq 'pigeon is disabled' <<<"$output"
+
+# Validate Pigeon's dormant secret contract using an isolated opt-in checkout.
+mkdir -p "$tmp/pigeon-repo/ops" "$tmp/pigeon-repo/apps" "$tmp/pigeon-repo/config/cluster/apps" "$tmp/pigeon-config"
+cp "$repo_root/ops/configure-app-secrets.sh" "$tmp/pigeon-repo/ops/"
+cp -R "$repo_root/apps/pigeon" "$tmp/pigeon-repo/apps/"
+sed 's/^ENABLED=.*/ENABLED=true/' "$repo_root/config/cluster/apps/pigeon.policy" >"$tmp/pigeon-repo/config/cluster/apps/pigeon.policy"
+if output="$(CONFIG_ROOT="$tmp/pigeon-config" NODE_CONFIG_FILE="$tmp/node.env" \
+	PIGEON_SECRET_KEY=too-short PIGEON_LOGIN_PASSWORD=also-too-short \
+	"$tmp/pigeon-repo/ops/configure-app-secrets.sh" pigeon 2>&1)"; then
+	printf 'weak Pigeon secrets were accepted by the opt-in fixture\n' >&2
 	exit 1
 fi
 grep -Fq 'must contain at least 32 characters' <<<"$output"
 
-CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+CONFIG_ROOT="$tmp/pigeon-config" NODE_CONFIG_FILE="$tmp/node.env" \
 	PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef \
 	PIGEON_LOGIN_PASSWORD=strong-login-password \
-	"$repo_root/ops/configure-app-secrets.sh" pigeon >/dev/null
-grep -qx 'PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef' "$tmp/config/pigeon.env"
-grep -qx 'PIGEON_LOGIN_PASSWORD=strong-login-password' "$tmp/config/pigeon.env"
+	"$tmp/pigeon-repo/ops/configure-app-secrets.sh" pigeon >/dev/null
+grep -qx 'PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef' "$tmp/pigeon-config/pigeon.env"
+grep -qx 'PIGEON_LOGIN_PASSWORD=strong-login-password' "$tmp/pigeon-config/pigeon.env"
 
 printf 'secret validation tests passed\n'

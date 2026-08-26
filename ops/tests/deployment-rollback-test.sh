@@ -271,6 +271,15 @@ git -C "$work" add config/cluster/policy.env
 git -C "$work" -c commit.gpgsign=false commit --quiet -m cluster-change
 git -C "$work" push --quiet origin HEAD:main
 sha5="$(git -C "$work" rev-parse HEAD)"
+current_before_mixed="$(readlink "$platform_root/control/current")"
+backup_lines_before_mixed="$(wc -l <"$tmp/backup.log" | tr -d '[:space:]')"
+if bash "$repo_root/ops/deploy-controller.sh" cluster-reconcile "$sha5" >"$tmp/deploy-mixed-cluster-foundation.log" 2>&1; then
+	printf 'mixed cluster and foundation change was accepted by cluster reconciliation\n' >&2
+	exit 1
+fi
+grep -Fq 'cluster reconciliation contains a non-cluster change:' "$tmp/deploy-mixed-cluster-foundation.log"
+[[ "$(readlink "$platform_root/control/current")" == "$current_before_mixed" ]]
+[[ "$(wc -l <"$tmp/backup.log" | tr -d '[:space:]')" == "$backup_lines_before_mixed" ]]
 if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha5" >"$tmp/deploy-cluster-change.log" 2>&1; then
 	printf 'cluster policy change was accepted by application deployment\n' >&2
 	exit 1

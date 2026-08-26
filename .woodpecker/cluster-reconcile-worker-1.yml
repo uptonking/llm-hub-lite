@@ -8,6 +8,7 @@ when:
         - config/cluster/nodes/**
         - config/cluster/apps/librechat.policy
         - config/cluster/apps/newapi.policy
+        - config/cluster/apps/pigeon.policy
 
 depends_on:
   - cluster-reconcile-leader
@@ -35,4 +36,9 @@ steps:
       - /etc/llm-hub-lite:/etc/llm-hub-lite
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
     commands:
+      - |
+        grep -Fq 'verify_cluster_scope()' /opt/platform/control/current/ops/deploy-controller.sh || {
+          printf '%s\n' 'installed deploy controller is too old for safe automatic cluster reconciliation; run the reviewed foundation-upgrade chain, then restart this workflow' >&2
+          exit 1
+        }
       - DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit cluster-reconcile "$CI_COMMIT_SHA"

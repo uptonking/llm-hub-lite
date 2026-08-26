@@ -59,6 +59,12 @@ for manifest in "$root"/apps/*/manifest.env; do
 	target_id="$(sed -n "s/^$target_key=//p" "$(app_policy_file "$manifest")" | tail -n1)"
 	[[ -n "$app_id" && -n "$target_id" ]] || die "singleton manifest is missing APP_ID or target: $manifest"
 	[[ ",$ids_csv," == *",$target_id,"* && "$target_id" != "$leader_id" ]] || die "singleton target must be a follower: $app_id"
+	if ! app_enabled "$manifest"; then
+		# Disabled singletons have no stage/switch/stop workflows, but their
+		# policy must still reconcile each node to retire stale runtime state.
+		cluster_policy_paths="${cluster_policy_paths}        - config/$policy_rel"$'\n'
+		continue
+	fi
 	singleton_apps+=("$app_id")
 done
 
@@ -133,6 +139,11 @@ steps:
       - /etc/llm-hub-lite:/etc/llm-hub-lite
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
     commands:
+      - |
+        grep -Fq 'verify_cluster_scope()' /opt/platform/control/current/ops/deploy-controller.sh || {
+          printf '%s\n' 'installed deploy controller is too old for safe automatic cluster reconciliation; run the reviewed foundation-upgrade chain, then restart this workflow' >&2
+          exit 1
+        }
       - DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit cluster-reconcile "\$CI_COMMIT_SHA"
 EOF
 	else

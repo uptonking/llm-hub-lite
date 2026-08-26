@@ -10,6 +10,7 @@ services:
     pids_limit: ${AICHOROUTER_PIDS_LIMIT:-256}
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: aichorouter
       com.aichorage.component: app-aichorouter
     command: ["--log-dir", "/app/logs"]
     environment:
@@ -62,6 +63,7 @@ services:
     tmpfs: [/tmp]
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: aichorouter
       com.aichorage.component: app-aichorouter
       com.aichorage.observer.ignore-logs: "true"
     depends_on:

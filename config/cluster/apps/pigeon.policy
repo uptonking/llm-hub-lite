@@ -1,2 +1,2 @@
-ENABLED=true
+ENABLED=false
 PIGEON_TARGET_NODE_ID=worker-2

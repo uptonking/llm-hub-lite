@@ -18,7 +18,9 @@ services:
     tmpfs: [/run, /tmp]
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: beszel
       com.aichorage.component: foundation-beszel-worker
+      com.aichorage.observer.ignore-logs: "true"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:2375/_ping | grep -qx OK"]
       interval: 10s
@@ -41,6 +43,7 @@ services:
         condition: service_healthy
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: beszel
       com.aichorage.component: foundation-beszel-worker
     network_mode: host
     environment:

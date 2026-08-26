@@ -10,6 +10,7 @@ services:
     pids_limit: ${CPAPI_PIDS_LIMIT:-128}
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: cpapi
       com.aichorage.component: app-cpapi
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -47,6 +48,7 @@ services:
     tmpfs: [/tmp]
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: cpapi
       com.aichorage.component: app-cpapi
       com.aichorage.observer.ignore-logs: "true"
     depends_on:

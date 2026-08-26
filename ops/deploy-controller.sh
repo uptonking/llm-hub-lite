@@ -252,6 +252,35 @@ verify_app_scope() {
 	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
 }
 
+verify_cluster_scope() {
+	local old_release="$1" new_release="$2" old_sha new_sha path app manifest policy
+	[[ -n "$old_release" ]] || return 0
+	old_sha="$(basename "$old_release")"
+	new_sha="$(basename "$new_release")"
+	while IFS= read -r path; do
+		case "$path" in
+		config/cluster/apps/*.policy)
+			app="$(basename "$path" .policy)"
+			manifest="$new_release/apps/$app/manifest.env"
+			policy="$new_release/$path"
+			if [[ ! -f "$manifest" || ! -f "$policy" || "$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)" != "${path#config/}" ]]; then
+				scope_failure "$old_sha" "$new_sha" cluster-reconcile
+				die "cluster reconciliation contains an undeclared application policy: $path"
+			fi
+			if [[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower && "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" != false ]]; then
+				scope_failure "$old_sha" "$new_sha" cluster-reconcile
+				die "cluster reconciliation cannot own an enabled singleton policy: $path; use its dedicated stage/switch/stop workflow"
+			fi
+			;;
+		config/cluster/policy.env | config/cluster/nodes/* | .woodpecker/** | README.md | AGENTS.md) ;;
+		*)
+			scope_failure "$old_sha" "$new_sha" cluster-reconcile
+			die "cluster reconciliation contains a non-cluster change: $path; run the reviewed foundation workflow first"
+			;;
+		esac
+	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
+}
+
 verify_singleton_scope() {
 	local old_release="$1" new_release="$2" mode="$3" app="${SINGLETON_APP_ID:-}" path
 	[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || return 0
@@ -437,6 +466,7 @@ reconcile() {
 		NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" \
 		CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster/policy.env}" \
 		PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}" \
+		PLATFORM_RECONCILE_DISABLED_SINGLETONS="${PLATFORM_RECONCILE_DISABLED_SINGLETONS:-0}" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
 		PLATFORM_LOCK_HELD=1 \
 		"$PLATFORMCTL_SCRIPT" sync "${DEPLOY_SYNC_SCOPE:-apps}"
@@ -486,6 +516,12 @@ apply() {
 	# Foundation upgrades install shared control logic but never start, stop, or
 	# publish singleton consumers. Their dedicated workflow owns that change.
 	[[ "$mode" == foundation ]] && DEPLOY_SKIP_SINGLETONS=1
+	# Cluster reconciliation owns placement and enablement policy only. It
+	# preserves enabled singletons while retiring apps disabled by target policy.
+	if [[ "$mode" == cluster-reconcile ]]; then
+		DEPLOY_SKIP_SINGLETONS=1
+		PLATFORM_RECONCILE_DISABLED_SINGLETONS=1
+	fi
 	sha_valid "$sha"
 	exec 9>"$PLATFORM_LOCK_FILE"
 	flock -w 300 9 || die 'timed out waiting for deployment lock'
@@ -498,17 +534,18 @@ apply() {
 		verify_target "$sha"
 	fi
 	release="$(prepare_release "$sha")"
-	validate_release "$release"
 	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
 	verify_fast_forward "$old_current" "$sha" "$mode"
+	[[ "$mode" == cluster-reconcile ]] && verify_cluster_scope "$old_current" "$release"
+	validate_release "$release"
 	old_previous="$(readlink "$PREVIOUS" 2>/dev/null || true)"
 	old_app_previous="$(readlink "$APP_PREVIOUS" 2>/dev/null || true)"
+	[[ "$mode" == app || "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] && verify_app_scope "$old_current" "$release" "$mode"
+	verify_singleton_scope "$old_current" "$release" "$mode"
 	record_singleton_transitions "$old_current" "$release"
 	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
 		previous_singleton_target="$(singleton_previous_target "$old_current" "$SINGLETON_APP_ID")"
 	fi
-	[[ "$mode" == app || "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] && verify_app_scope "$old_current" "$release" "$mode"
-	verify_singleton_scope "$old_current" "$release" "$mode"
 	backup "pre-$mode"
 	stop_removed_projects "$old_current" "$release"
 	tx="$(mktemp -d "$APP_ROOT/shared/runtime/transaction.XXXXXX")"
@@ -538,7 +575,7 @@ apply() {
 	# Normal source deployments change application code/config only. Image
 	# changes are explicit app-upgrade operations so a routine push cannot
 	# silently move production to a new image set.
-	if [[ "$mode" == foundation || "$mode" == cluster-reconcile ]]; then
+	if [[ "$mode" == foundation ]]; then
 		foundation_changed=1
 		install_foundation_files "$release"
 		install -m 600 "$release/ops/images.foundation.prod.env" "$FOUNDATION_IMAGE_ENV"
@@ -580,6 +617,10 @@ apply() {
 	rm -rf -- "$CONTROL_ROOT/descriptors"
 	[[ -d "$tx/descriptors" ]] && cp -a "$tx/descriptors" "$CONTROL_ROOT/descriptors"
 	rm -rf -- "$tx"
+	if [[ "$mode" == cluster-reconcile ]]; then
+		DEPLOY_SKIP_SINGLETONS=0
+		PLATFORM_RECONCILE_DISABLED_SINGLETONS=0
+	fi
 	DEPLOY_SYNC_SCOPE=all reconcile || true
 	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
 		SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-transition-fail "$SINGLETON_APP_ID" || true

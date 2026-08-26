@@ -11,6 +11,7 @@ services:
     pids_limit: ${WOODPECKER_AGENT_PIDS_LIMIT:-128}
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: woodpecker
       com.aichorage.component: foundation-woodpecker-worker
     volumes:
       - ${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker/agent}:/etc/woodpecker

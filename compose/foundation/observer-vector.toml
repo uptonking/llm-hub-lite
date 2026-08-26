@@ -20,6 +20,8 @@ source = '''
 .stream = .stream
 .labels = .label
 .node_id = get_env_var!("NODE_ID")
+.application = .label."com.aichorage.application"
+.component = .label."com.aichorage.component"
 '''
 
 [sinks.openobserve]
@@ -29,6 +31,10 @@ uri = "${OBSERVER_INGEST_URL}/api/${OBSERVER_LOG_ORGANIZATION}/${OBSERVER_LOG_ST
 method = "post"
 compression = "gzip"
 encoding.codec = "json"
+framing.method = "character_delimited"
+framing.character_delimited.delimiter = ","
+payload_prefix = "["
+payload_suffix = "]"
 auth.strategy = "basic"
 auth.user = "${OBSERVER_INGEST_USER}"
 auth.password = "${OBSERVER_INGEST_TOKEN}"
@@ -39,6 +45,9 @@ request.in_flight_limit = 1
 request.retry_attempts = 10
 request.retry_initial_backoff_secs = 1
 request.retry_max_duration_secs = 60
+
+[sinks.openobserve.healthcheck]
+enabled = false
 
 [sinks.openobserve.buffer]
 type = "disk"

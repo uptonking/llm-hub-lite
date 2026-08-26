@@ -84,8 +84,9 @@ journal until the target has been verified or deliberately rolled back.
 
 Legacy New API remains as a dormant manifest and is disabled by the committed
 policy. CPAPI is an enabled singleton consumer at `cpapi.aichorage.de` and is
-unrelated to the legacy New API. Pigeon (OutlookEmail) is an enabled singleton
-consumer at `pigeon.aichorage.de`, targeted to `worker-2` by default. OpenObserve
+unrelated to the legacy New API. Pigeon (OutlookEmail) remains packaged for a
+future opt-in but is disabled by committed policy and has no default workflow,
+route, container, or secret prompt. OpenObserve
 is an enabled Leader foundation service at `observer.aichorage.de`. LibreChat is
 enabled on Followers and is published at
 `chat.aichorage.de` and `chat-admin.aichorage.de` . It uses MongoDB Atlas and
@@ -110,7 +111,8 @@ the Leader's Caddy route. SQLite is intentionally local and is not replicated,
 so a target move is intentionally a fresh local deployment. Previous local
 state is retained in an archive directory until manually removed.
 
-Pigeon is the single-node OutlookEmail deployment at `pigeon.aichorage.de`.
+Pigeon is the dormant single-node OutlookEmail package for
+`pigeon.aichorage.de`.
 It uses the pinned `ghcr.io/assast/outlookemail:v3.0.6` release, a local SQLite
 database at `data/prod/pigeon/outlook_accounts.db`, and the same directory for
 encrypted account tokens and uploaded skins. It has no Redis, PostgreSQL, host
@@ -128,13 +130,14 @@ The manifest requires at least 32 characters for `PIGEON_SECRET_KEY` and 12 for
 the initial login password. Generate the encryption/session key with
 `openssl rand -hex 32`, and use a password-manager-generated login password.
 
-The default Pigeon target is `worker-2` in
-`config/cluster/apps/pigeon.policy`. To select another follower, run
-`ops/configure-single-follower.sh pigeon`, review the policy diff, and push it;
-the generated `singleton-stage-pigeon`/`singleton-switch-pigeon`/`singleton-stop-pigeon-*`
-workflow performs the fresh deployment and Leader route switch. Singleton data
-is local: moving Pigeon does not copy it, and the previous target directory is
-retained as a timestamped archive.
+Pigeon retains `worker-2` as its future target in
+`config/cluster/apps/pigeon.policy`, but `ENABLED=false` keeps it out of runtime
+placement and Woodpecker generation. To opt in later, select the target with
+`ops/configure-single-follower.sh pigeon`, set `ENABLED=true`, regenerate the
+Woodpecker workflows, run all validation, and deploy that reviewed control-plane
+change before provisioning secrets. Singleton data remains local: moving
+Pigeon does not copy it, and the previous target directory is retained as a
+timestamped archive.
 
 The default profile gives Aichorouter `0.9` CPU, `768m` container memory, one
 Go runtime thread ( `GOMAXPROCS=1` ), and a `500MiB` Go heap limit. This leaves
@@ -184,17 +187,28 @@ data size is a monitored operational target, not a hard quota; inspect it with
 through an online SQLite backup before each Restic snapshot.
 
 Every VPS runs a read-only Docker socket proxy and a small Vector collector.
-Only containers carrying `com.aichorage.platform=llm-hub-lite` are collected;
-containers may opt out with `com.aichorage.observer.ignore-logs=true`. Records
+Only containers carrying `com.aichorage.platform=llm-hub-lite` are collected.
+Every enrolled service also declares `com.aichorage.application` and
+`com.aichorage.component`; those values become top-level `application` and
+`component` fields alongside `node_id`, container, image, and stream. Health
+probes, socket proxies, Observer itself, and other noisy or recursive sidecars
+opt out with `com.aichorage.observer.ignore-logs=true`. Records
 are sent to `observer-ingest.<domain>` using a write-only OpenObserve ingestion
 token. The ingestion hostname must be DNS-only and resolve directly to the
 Leader; the public UI hostname may be proxied through Cloudflare. Each node's
 collector has a bounded 512 MiB disk buffer under
 `/opt/platform/observer/collector-buffer`; it is transient and excluded from
-Restic. `platformctl diagnose foundation` reports the Leader's durable data and
-the local collector buffer on every node. It warns at 8 GiB of durable data or
-80% of the configured buffer, but never deletes recent logs. Logs may contain
-request data or credentials, so restrict UI access and avoid logging secrets.
+Restic. `platformctl diagnose foundation` reports the Leader's durable data,
+the local collector buffer on every node, and a bounded, redacted sample of
+recent Vector warnings or delivery errors. It warns at 8 GiB of durable data
+or 80% of the configured buffer, but never deletes recent logs. Logs may
+contain request data or credentials, so restrict UI access and avoid logging
+secrets.
+
+Pinned Vector requires a disk buffer of at least `268435488` bytes (about 256
+MiB); the platform default remains 512 MiB. The collector intentionally uses one
+Vector worker thread by default to limit idle CPU and memory use. Increase
+`OBSERVER_LOG_SHIPPER_THREADS` only after observing sustained ingestion backlog.
 
 This replaces the earlier singleton-consumer Observer layout. A clean bootstrap
 creates the new Leader-owned data directory; it does not automatically move
@@ -221,12 +235,12 @@ reconciliation, validates the organization/stream path, and keeps the root
 credential on the Leader; Followers receive only the write-only collector
 token.
 
-On the selected follower, provision its root-only secrets once:
+On the selected followers, provision the enabled singleton services' root-only
+secrets once:
 
 ```bash
 sudo /opt/platform/control/current/ops/configure-app-secrets.sh aichorouter
 sudo /opt/platform/control/current/ops/configure-app-secrets.sh cpapi
-sudo /opt/platform/control/current/ops/configure-app-secrets.sh pigeon
 ```
 
 CPAPI exposes an unauthenticated `/healthz` endpoint that returns `{"status":"ok"}` .
@@ -313,20 +327,19 @@ cp .env.dev.example .env.dev
     - Woodpecker agent
     - Beszel agent
     - LibreChat
-    - Pigeon (default singleton target)
+    - Pigeon package retained but disabled
 
 SSH is used only for this one-time host bootstrap. Before starting, prepare the
 three VPS hosts, Cloudflare DNS, and the R2 Restic repositories. The Leader
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
 files are transferred to Followers before they start. Public domains `ci`,
-`ci-grpc`, `status`, `chat`, `chat-admin`, `aichorouter`, `cpapi`, `pigeon`, and
+`ci-grpc`, `status`, `chat`, `chat-admin`, `aichorouter`, `cpapi`, and
 `observer` point to the Leader. Add `observer-ingest` as a DNS-only record
 directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
 origins using the `worker1-` prefix point to Worker 1, while the stable-ID
-`worker2-` origin records point to Worker 2. In particular,
-`worker1-pigeon-origin.aichorage.de` must point to Worker 1 and
-`worker2-pigeon-origin.aichorage.de` must point to Worker 2, even though Pigeon
-defaults to Worker 2. The `leader` stable ID is the public Leader and therefore
+`worker2-` origin records point to Worker 2. Pigeon origin records are not
+required while it is disabled; create the selected Follower's DNS-only origin
+before opting it in. The `leader` stable ID is the public Leader and therefore
 does not need a private origin record for ingress.
 The Follower origin records must remain DNS-only. The Follower firewall only
 permits Docker HTTPS traffic from the Leader IP. After certificates work, the
@@ -486,8 +499,9 @@ different shared secrets independently on different nodes.
 When invoking a remote bootstrap with SSH, use `ssh -tt` so the confirmation
 and secret prompts receive a terminal. You may set `BOOTSTRAP_ASSUME_YES=1` to
 skip only the role confirmation; required secrets are still validated and must be supplied through the environment, bundle, or remaining prompts.
-On the Aichorouter, CPAPI, and Pigeon target Followers, the interactive bootstrap
-prompts for their singleton-local secrets. On the Leader, it prompts for the
+On the Aichorouter and CPAPI target Followers, the interactive bootstrap
+prompts for their singleton-local secrets. Disabled applications such as
+Pigeon do not prompt for secrets. On the Leader, bootstrap prompts for the
 OpenObserve root credentials and creates a named write-only ingestion token;
 only the ingestion username/token are copied in `shared-secrets.env` to
 Followers. The CPAPI management panel is enabled and protected by its
@@ -662,8 +676,17 @@ cluster workflow.
 
 Use the workflow that matches the changed paths. A normal LibreChat or legacy
 New API source/configuration change is handled by the generated `deploy-*`
-chain. Aichorouter, CPAPI, and Pigeon changes are handled by their generated
+chain. Aichorouter and CPAPI changes are handled by their generated
 `singleton-stage-*` -> `singleton-switch-*` -> `singleton-stop-*` chain.
+Disabled singleton applications have no generated workflows.
+When a singleton is disabled, its policy path moves into the automatic
+cluster-reconciliation workflow so every node removes stale containers and the
+Leader removes its stale route. Enabled singleton policies remain exclusively
+owned by their health-gated stage/switch/stop chain. Cluster reconciliation is
+strictly limited to committed cluster policy, node inventory, generated
+workflows, and their documentation; a commit containing foundation, application,
+image-manifest, or controller changes is rejected and must use the reviewed
+foundation workflow first.
 Observer changes are foundation changes and use the reviewed
 `foundation-upgrade-*` chain. Image digest changes are run through the generated manual
 `app-upgrade-worker-1` and `app-upgrade-worker-2` workflows, in order, for
@@ -679,8 +702,8 @@ For a local runtime-only change, edit the target node's root-owned
 ssh root@<target-follower> 'platformctl recreate app:/opt/platform/control/current/apps/aichorouter && platformctl health'
 ```
 
-The same command applies to `cpapi` and `pigeon` by replacing the application
-name in the path. Observer runtime values live in
+The same command applies to `cpapi` by replacing the application name in the
+path. Observer runtime values live in
 `/opt/platform/foundation/env/observer.env`; use `platformctl recreate
 observer-controller` and `platformctl recreate observer-collector` after an
 environment-file or collector configuration edit. Use `platformctl restart`
@@ -704,52 +727,34 @@ commit from consumer changes: after pushing them, run the generated manual
 `foundation-upgrade-leader` workflow and let its dependencies update the
 Followers before resuming normal delivery. A commit that mixes a control-plane
 path with an app path is intentionally rejected by the deployment scope check.
+When a reviewed release combines control-plane changes with disabling a
+singleton, push it, run `foundation-upgrade-leader` for that exact commit and
+let its Follower dependencies finish, then retry that commit's
+`cluster-reconcile-leader` pipeline. The first automatic reconciliation may
+stop at the installed-controller safety guard; after the foundation chain, the
+retry uses the new controller to remove the disabled app's stale route and
+containers on all nodes.
 App image manifest changes for active-active consumers use the generated manual
 `app-upgrade-<follower-id>` workflows instead of the normal source deployment;
 singleton image changes use the singleton chain described above. If an image
 digest and source change must ship together, use the workflow for that app and
 do not rely on the normal deploy job.
 
-### First Pigeon rollout
+### Enabling Pigeon later
 
-Introducing Pigeon for the first time changes both the deployment control plane
-and a singleton application. Treat that one release as two phases; routine
-Pigeon updates use only the normal singleton workflow afterward.
+Pigeon is disabled by default. Enabling it is a reviewed control-plane change:
 
-1. Commit and push the reviewed control-plane, node-inventory, image-manifest,
-   and Pigeon application changes. The automatic Pigeon pipeline for this mixed
-   commit may be rejected by the previously installed controller's scope guard;
-   do not bypass that guard or bootstrap the hosts again.
-2. Manually run `foundation-upgrade-leader` for that exact commit in
-   Woodpecker. Its dependencies upgrade `worker-1` and then `worker-2`. Every
-   foundation step sets `DEPLOY_SKIP_SINGLETONS=1`, so it installs the new
-   controller, image manifest, node inventory, and generated workflows without
-   requiring Pigeon secrets or publishing a Pigeon route. Existing singleton
-   routes remain unchanged.
-3. After all three foundation jobs are healthy, provision Pigeon's root-only
-   secrets once on its committed target, which defaults to `worker-2`:
-
-   ```bash
-   ssh -t root@<worker-2> \
-     'sudo /opt/platform/control/current/ops/configure-app-secrets.sh pigeon'
-   ```
-
-   Keep `PIGEON_SECRET_KEY` stable; changing it invalidates encrypted account
-   data and sessions. The initial login password must contain at least 12
-   characters. Optional provider values may remain as root-only overrides in
-   `/etc/llm-hub-lite/pigeon.env`.
-4. Retry the original Pigeon Woodpecker pipeline for the same commit. The
-   installed controller now evaluates that commit against the already-installed
-   release, so the mixed-release scope guard no longer blocks the singleton
-   operation. The generated chain runs
-   `singleton-stage-pigeon`, verifies the Worker 2 origin, runs
-   `singleton-switch-pigeon` on the Leader, and then runs the two stop jobs in
-   stable follower order. Verify `https://pigeon.<domain>/login` after the
-   switch.
-
-The foundation phase deliberately leaves a newly introduced singleton
-unpublished. This avoids exposing an unconfigured service and makes the first
-route switch use the same health-gated workflow as every later Pigeon update.
+1. Create the selected Follower's DNS-only origin, run
+   `ops/configure-single-follower.sh pigeon`, and set `ENABLED=true` in the app
+   policy.
+2. Run `ops/generate-woodpecker-workflows.sh generate`, repository validation,
+   and pre-commit, then commit the policy and generated workflows together.
+3. Push the commit and run the reviewed `foundation-upgrade-leader` chain so
+   every node installs the policy and workflows without publishing Pigeon.
+4. Provision Pigeon secrets once on its selected target with
+   `configure-app-secrets.sh pigeon`, then run the generated Pigeon singleton
+   stage/switch/stop chain. The public route switches only after origin health
+   succeeds.
 
 The automatic consumer path is ordered `Leader -> worker-1 -> worker-2` . Each
 node fetches the same full commit over HTTPS and keeps its own release and
@@ -820,8 +825,9 @@ ssh root@<node> 'tail -n 240 /opt/apps/llm-hub-lite/shared/logs/deploy.log'
 ```
 
 OpenObserve collects platform-labelled Docker logs from every VPS. Woodpecker,
-Aichorouter, CPAPI, Pigeon, LibreChat, Caddy, and Beszel containers are collected unless
-they carry the opt-out label. The short-lived deployment runner is intentionally
+Aichorouter, CPAPI, LibreChat, Caddy, and Beszel containers are collected unless
+they carry the opt-out label. Pigeon is enrolled when it is enabled. The
+short-lived deployment runner is intentionally
 excluded because `platform-submit` already streams its complete log into the
 Woodpecker step. The dedicated collector credentials are write-only; the
 OpenObserve root password is never distributed to Followers. The pipeline log
@@ -858,12 +864,10 @@ platformctl restart all
 platformctl restart caddy
 platformctl restart app:/opt/platform/control/current/apps/librechat
 platformctl restart app:/opt/platform/control/current/apps/cpapi
-platformctl restart app:/opt/platform/control/current/apps/pigeon
 
 # apply changed Compose limits, environment, or a local runtime secret
 platformctl recreate app:/opt/platform/control/current/apps/aichorouter
 platformctl recreate app:/opt/platform/control/current/apps/cpapi
-platformctl recreate app:/opt/platform/control/current/apps/pigeon
 platformctl recreate observer-controller
 platformctl recreate observer-collector
 

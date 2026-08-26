@@ -4,9 +4,9 @@
 
 Self-hosted, reproducible multi-node Docker platform for Caddy, Woodpecker CI,
 Beszel, and LibreChat.
-LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI,
-and Pigeon (OutlookEmail) are enabled singleton consumers targeted to configured
-followers, with Pigeon defaulting to worker-2. OpenObserve
+LibreChat is the enabled active-active follower consumer. Aichorouter and CPAPI
+are enabled singleton consumers targeted to configured followers. Pigeon
+(OutlookEmail) is retained but disabled by committed policy. OpenObserve
 (`observer`) is a Leader-only foundation service; read-only socket-proxy and
 bounded Vector collectors run on every node and forward platform-labelled logs
 to the Leader.
@@ -35,7 +35,8 @@ Legacy New API remains retained and disabled by policy.
 Production images stay digest-pinned in `ops/images.foundation.prod.env` and
 `ops/images.apps.prod.env` . Caddy remains mandatory and exposes 80, 443/TCP,
 and 443/UDP on the external `platform_edge` network. Role placement and
-intentional service disablement are committed in `config/cluster/policy.env` ;
+intentional service disablement are committed in `config/cluster/policy.env`
+and `config/cluster/apps/*.policy`;
 there are no per-service disable environment variables.
 
 ## Validation

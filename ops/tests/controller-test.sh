@@ -50,6 +50,7 @@ grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^APP_ID=pigeon$' "$repo_root/apps/pigeon/manifest.env"
 grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/pigeon/manifest.env"
 grep -q '^SECRET_MIN_LENGTHS=PIGEON_SECRET_KEY:32,PIGEON_LOGIN_PASSWORD:12$' "$repo_root/apps/pigeon/manifest.env"
+grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/pigeon.policy"
 grep -q '^PIGEON_TARGET_NODE_ID=worker-2$' "$repo_root/config/cluster/apps/pigeon.policy"
 grep -q '^FOUNDATION_LEADER=.*observer-controller' "$repo_root/config/cluster/policy.env"
 grep -q '^FOUNDATION_FOLLOWER=.*observer-collector' "$repo_root/config/cluster/policy.env"
@@ -96,7 +97,7 @@ fi
 grep -Fq '[api]' "$repo_root/compose/foundation/observer-vector.toml"
 grep -Fq 'OBSERVER_LOG_BUFFER_MAX_BYTES' "$repo_root/compose/foundation/observer-collector.yml"
 grep -Fq 'validate_observer_env()' "$repo_root/ops/platformctl.sh"
-grep -Fq 'Observer collector buffer size must be between 1 MiB and 8 GiB' "$repo_root/ops/platformctl.sh"
+grep -Fq 'Observer collector buffer size must be between 268435488 bytes (Vector disk-buffer minimum) and 8 GiB' "$repo_root/ops/platformctl.sh"
 grep -Fq 'Observer ingestion site must use http:// or https:// and contain no path' "$repo_root/ops/platformctl.sh"
 grep -Fq 'Observer log organization contains invalid path characters' "$repo_root/ops/platformctl.sh"
 grep -Fq 'docker_host = "http://observer-log-proxy:2375"' "$repo_root/compose/foundation/observer-vector.toml"
@@ -105,6 +106,13 @@ grep -Fq 'path_regexp ^/api/[^/]+/[^/]+/_json$' "$repo_root/config/foundation-ro
 grep -Fq 'method POST' "$repo_root/config/foundation-routes.d/observer.caddy"
 grep -Fq 'max_size 10MB' "$repo_root/config/foundation-routes.d/observer.caddy"
 grep -Fq 'batch.max_bytes = 5000000' "$repo_root/compose/foundation/observer-vector.toml"
+grep -Fq 'framing.method = "character_delimited"' "$repo_root/compose/foundation/observer-vector.toml"
+grep -Fq 'payload_prefix = "["' "$repo_root/compose/foundation/observer-vector.toml"
+grep -Fq 'payload_suffix = "]"' "$repo_root/compose/foundation/observer-vector.toml"
+grep -Fq '[sinks.openobserve.healthcheck]' "$repo_root/compose/foundation/observer-vector.toml"
+grep -Fq 'VECTOR_THREADS: ${OBSERVER_LOG_SHIPPER_THREADS:-1}' "$repo_root/compose/foundation/observer-collector.yml"
+grep -Fq '.application = .label."com.aichorage.application"' "$repo_root/compose/foundation/observer-vector.toml"
+grep -Fq '.component = .label."com.aichorage.component"' "$repo_root/compose/foundation/observer-vector.toml"
 grep -Fq 'site="$(env_value OBSERVER_SITE)"' "$repo_root/ops/configure-observer-ingest.sh"
 grep -Fq 'api_base="$(env_value OBSERVER_API_URL)"' "$repo_root/ops/configure-observer-ingest.sh"
 grep -Fq 'flock -w "${OBSERVER_INGEST_LOCK_WAIT:-300}"' "$repo_root/ops/configure-observer-ingest.sh"
@@ -178,10 +186,16 @@ grep -Fq 'health_uri /healthz' "$repo_root/apps/cpapi/route.leader.caddy"
 grep -Fq 'observer-health-probe:' "$repo_root/compose/foundation/observer-controller.yml"
 grep -Fq 'singleton-transition-fail' "$repo_root/ops/platformctl.sh"
 grep -Fq '[[ "$mode" == foundation ]] && DEPLOY_SKIP_SINGLETONS=1' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_RECONCILE_DISABLED_SINGLETONS=1' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'verify_cluster_scope "$old_current" "$release"' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'cluster reconciliation contains a non-cluster change' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT=' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'current_route="$RUNTIME_ROOT/config/routes.d/$a.caddy"' "$repo_root/ops/platformctl.sh"
 grep -Fq 'stopping retired Observer container' "$repo_root/ops/platformctl.sh"
+grep -Fq "stop_inactive || die 'inactive project cleanup failed'" "$repo_root/ops/platformctl.sh"
+grep -Fq 'Observer retention days must be between 1 and 365' "$repo_root/ops/platformctl.sh"
+grep -Fq '[observer-collector-recent]' "$repo_root/ops/platformctl.sh"
 grep -Fq 'transition_begin' "$repo_root/ops/platformctl.sh"
 if grep -Fq 'depends_on:' "$repo_root/.woodpecker/singleton-stage-cpapi.yml"; then
 	printf 'singleton stage must not depend on an unrelated cluster workflow\n' >&2
@@ -225,6 +239,54 @@ for compose_file in "$repo_root"/compose/foundation/*.yml; do
 	grep -Fq 'cpus:' "$compose_file"
 	grep -Fq 'pids_limit:' "$compose_file"
 done
+validate_observer_labels() {
+	awk '
+		function finish_service() {
+			if (service != "" && (!platform || !application || !component)) {
+				printf "missing Observer enrollment metadata in %s service %s\n", FILENAME, service > "/dev/stderr"
+				missing=1
+			}
+		}
+		$0 == "services:" { in_services=1; next }
+		in_services && /^[^[:space:]]/ { finish_service(); service=""; in_services=0 }
+		in_services && /^  [A-Za-z0-9_-]+:$/ {
+			finish_service()
+			service=$1
+			sub(/:$/, "", service)
+			platform=application=component=0
+			next
+		}
+		in_services && service != "" && /com\.aichorage\.platform: llm-hub-lite$/ { platform=1 }
+		in_services && service != "" && /com\.aichorage\.application: [a-z0-9-]+$/ { application=1 }
+		in_services && service != "" && /com\.aichorage\.component: [a-z0-9-]+$/ { component=1 }
+		END { finish_service(); exit missing }
+	' "$1"
+}
+for compose_file in "$repo_root"/compose/foundation/*.yml "$repo_root"/apps/*/compose.yml; do
+	validate_observer_labels "$compose_file"
+done
+service_opts_out_of_observer() {
+	awk -v wanted="$2" '
+		/^  [A-Za-z0-9_-]+:$/ { current=$1; sub(/:$/, "", current) }
+		current == wanted && /com\.aichorage\.observer\.ignore-logs: "true"$/ { found=1 }
+		END { exit !found }
+	' "$1"
+}
+while IFS='|' read -r compose_file service; do
+	service_opts_out_of_observer "$repo_root/$compose_file" "$service" || {
+		printf 'Observer sidecar must opt out of log collection: %s service %s\n' "$compose_file" "$service" >&2
+		exit 1
+	}
+done <<'EOF'
+apps/aichorouter/compose.yml|health-probe
+apps/cpapi/compose.yml|health-probe
+apps/pigeon/compose.yml|health-probe
+compose/foundation/beszel-worker.yml|beszel-socket-proxy
+compose/foundation/observer-controller.yml|observer-controller
+compose/foundation/observer-controller.yml|observer-health-probe
+compose/foundation/observer-collector.yml|observer-log-proxy
+compose/foundation/observer-collector.yml|observer-log-shipper
+EOF
 grep -Fq 'LIBRECHAT_AWS_ACCESS_KEY_ID' "$repo_root/ops/bootstrap-vps.sh"
 grep -Fq 'PathExists=/etc/llm-hub-lite/firewall-reconcile.request' "$repo_root/ops/systemd/platform-firewall.path"
 grep -Fq 'deployment failed; restoring previous complete bundle' "$repo_root/ops/deploy-controller.sh"

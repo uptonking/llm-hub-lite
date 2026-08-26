@@ -22,6 +22,7 @@ services:
     tmpfs: [/run, /tmp]
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: observer
       com.aichorage.component: foundation-observer-collector
       com.aichorage.observer.ignore-logs: "true"
     networks: [observer_private]
@@ -43,6 +44,7 @@ services:
     security_opt: ['no-new-privileges:true']
     environment:
       VECTOR_CONFIG: /etc/vector/vector.toml
+      VECTOR_THREADS: ${OBSERVER_LOG_SHIPPER_THREADS:-1}
       NODE_ID: ${NODE_ID:?NODE_ID must be set}
       OBSERVER_INGEST_URL: ${OBSERVER_INGEST_URL:?OBSERVER_INGEST_URL must be set}
       OBSERVER_INGEST_USER: ${OBSERVER_INGEST_USER:?OBSERVER_INGEST_USER must be set}
@@ -59,6 +61,7 @@ services:
         condition: service_healthy
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: observer
       com.aichorage.component: foundation-observer-collector
       com.aichorage.observer.ignore-logs: "true"
     tmpfs: [/tmp]

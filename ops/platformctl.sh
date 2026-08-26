@@ -300,6 +300,9 @@ render_routes() {
 	while IFS= read -r d; do
 		a="$(basename "$d")"
 		if [[ "${PLATFORM_SKIP_SINGLETONS:-0}" == 1 && "$(app_placement "$d")" == single-follower ]]; then
+			if [[ "${PLATFORM_RECONCILE_DISABLED_SINGLETONS:-0}" == 1 ]] && ! app_policy_enabled "$a"; then
+				continue
+			fi
 			current_route="$RUNTIME_ROOT/config/routes.d/$a.caddy"
 			[[ -f "$current_route" ]] && cp "$current_route" "$s/routes.d/$a.caddy"
 			continue
@@ -514,7 +517,7 @@ validate_descriptor() {
 	fi
 }
 validate_observer_env() {
-	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent env_file
+	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent shipper_threads env_file
 	observer_ingest_user_valid() {
 		local value="$1"
 		[[ -n "$value" && "${#value}" -le 256 ]] || return 1
@@ -537,13 +540,16 @@ validate_observer_env() {
 		buffer="$(env_value OBSERVER_LOG_BUFFER_MAX_BYTES "$env_file")"
 		[[ -n "$buffer" ]] || buffer=536870912
 		[[ "$buffer" =~ ^[0-9]+$ ]] || die 'Observer collector buffer size must be an integer number of bytes'
-		((buffer >= 1048576 && buffer <= 8589934592)) || die 'Observer collector buffer size must be between 1 MiB and 8 GiB'
+		((buffer >= 268435488 && buffer <= 8589934592)) || die 'Observer collector buffer size must be between 268435488 bytes (Vector disk-buffer minimum) and 8 GiB'
 		durable_warn="$(env_value OBSERVER_DURABLE_WARN_BYTES "$env_file")"
 		durable_warn="${durable_warn:-8589934592}"
 		[[ "$durable_warn" =~ ^[0-9]+$ ]] && ((durable_warn > 0)) || die 'Observer durable-data warning threshold must be a positive integer number of bytes'
 		buffer_warn_percent="$(env_value OBSERVER_LOG_BUFFER_WARN_PERCENT "$env_file")"
 		buffer_warn_percent="${buffer_warn_percent:-80}"
 		[[ "$buffer_warn_percent" =~ ^[0-9]+$ ]] && ((buffer_warn_percent >= 1 && buffer_warn_percent <= 100)) || die 'Observer collector buffer warning percentage must be between 1 and 100'
+		shipper_threads="$(env_value OBSERVER_LOG_SHIPPER_THREADS "$env_file")"
+		shipper_threads="${shipper_threads:-1}"
+		[[ "$shipper_threads" =~ ^[0-9]+$ ]] && ((shipper_threads >= 1 && shipper_threads <= 8)) || die 'Observer collector thread count must be between 1 and 8'
 		ingest_user="$(env_value OBSERVER_INGEST_USER "$env_file")"
 		observer_ingest_user_valid "$ingest_user" || die 'Observer ingestion username must contain only letters, numbers, hyphens, or underscores'
 		ingest_token="$(env_value OBSERVER_INGEST_TOKEN "$env_file")"
@@ -579,7 +585,8 @@ validate_observer_env() {
 		! placeholder_value "$root_user" || die 'Observer root email is still a placeholder'
 		! placeholder_value "$root_password" || die 'Observer root password is still a placeholder'
 		retention="$(env_value OBSERVER_DATA_RETENTION_DAYS "$env_file")"
-		[[ -z "$retention" || "$retention" =~ ^[0-9]+$ ]] || die 'Observer retention days must be a non-negative integer'
+		retention="${retention:-30}"
+		[[ "$retention" =~ ^[0-9]+$ ]] && ((retention >= 1 && retention <= 365)) || die 'Observer retention days must be between 1 and 365'
 		durable_warn="$(env_value OBSERVER_DURABLE_WARN_BYTES "$env_file")"
 		durable_warn="${durable_warn:-8589934592}"
 		[[ "$durable_warn" =~ ^[0-9]+$ ]] && ((durable_warn > 0)) || die 'Observer durable-data warning threshold must be a positive integer number of bytes'
@@ -651,6 +658,9 @@ project_enabled() {
 		# Normal application reconciliation deliberately skips singleton start and
 		# stop operations. Explicit singleton-stop sets the force flag below.
 		if [[ "${PLATFORM_SKIP_SINGLETONS:-0}" == 1 && "${PLATFORM_FORCE_SINGLETON_ACTION:-0}" != 1 && "$(app_placement "${1#app:}")" == single-follower ]]; then
+			if [[ "${PLATFORM_RECONCILE_DISABLED_SINGLETONS:-0}" == 1 ]] && ! app_policy_enabled "$(basename "${1#app:}")"; then
+				return 1
+			fi
 			return 0
 		fi
 		app_active "${1#app:}"
@@ -738,7 +748,7 @@ start_project() {
 	compose_up_wait
 }
 stop_project() {
-	local p="$1" project
+	local p="$1" project ids
 	if ! project_enabled "$p"; then
 		# Do not evaluate an inactive app's Compose file: disabled services may
 		# intentionally have empty required secrets. Remove only its containers;
@@ -758,29 +768,47 @@ stop_project() {
 			*) return 0 ;;
 			esac
 		fi
-		docker ps -aq --filter "label=com.docker.compose.project=$project" | xargs -r docker rm -f >/dev/null
+		if ! ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project")"; then
+			printf 'platformctl: unable to list containers for inactive project: %s\n' "$project" >&2
+			return 1
+		fi
+		while IFS= read -r id; do
+			[[ -n "$id" ]] || continue
+			docker rm -f "$id" >/dev/null || return 1
+		done <<<"$ids"
 		return 0
 	fi
 	[[ "$p" == app:* ]] && app_compose "${p#app:}" || foundation_compose "$p"
 	"${compose_command[@]}" down --remove-orphans
 }
 stop_inactive() {
-	local p
-	while IFS= read -r p; do project_enabled "$p" || stop_project "$p" || true; done < <(all_projects)
-	# Observer used to be a singleton consumer.  Its manifest is intentionally
-	# gone, so it cannot be discovered by all_projects/stop_project during an
-	# in-place upgrade or reboot recovery.  Retire only the old Compose project
-	# containers; keep the old app-observer data and volumes for an explicit
-	# operator cleanup or export.
+	local p failed=0 ids
+	while IFS= read -r p; do
+		if ! project_enabled "$p" && ! stop_project "$p"; then
+			printf 'platformctl: unable to stop inactive project: %s\n' "$p" >&2
+			failed=1
+		fi
+	done < <(all_projects)
+	# Observer used to be a singleton consumer. Its manifest is gone, so it is
+	# not discoverable through all_projects. Retire only the old containers;
+	# leave its data in place for explicit operator cleanup after verification.
 	local id ownership project
 	project=app-observer
+	if ! ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null)"; then
+		printf 'platformctl: unable to list retired Observer containers\n' >&2
+		return 1
+	fi
 	while IFS= read -r id; do
 		[[ -n "$id" ]] || continue
 		ownership="$(docker inspect --format '{{ index .Config.Labels "com.aichorage.platform" }}' "$id" 2>/dev/null || true)"
 		[[ "$ownership" == llm-hub-lite ]] || continue
 		printf 'platformctl: stopping retired Observer container %s\n' "$id" >&2
-		docker rm -f "$id" >/dev/null 2>&1 || true
-	done < <(docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null || true)
+		if ! docker rm -f "$id" >/dev/null 2>&1; then
+			printf 'platformctl: unable to stop retired Observer container %s\n' "$id" >&2
+			failed=1
+		fi
+	done <<<"$ids"
+	return "$failed"
 }
 health_scope() {
 	local scope="$1" failed=0 p
@@ -816,7 +844,7 @@ recover() {
 	while IFS= read -r p; do start_project "$p"; done < <(projects_foundation)
 	health_scope foundation || die 'foundation recovery failed'
 	while IFS= read -r p; do start_project "$p" || printf 'platformctl: consumer start failed: %s\n' "$p" >&2; done < <(projects_apps)
-	stop_inactive
+	stop_inactive || printf 'platformctl: one or more inactive projects could not be stopped; recovery will retry\n' >&2
 	health_scope consumers || printf 'platformctl: consumer recovery is incomplete; foundation remains healthy and recovery will retry\n' >&2
 	commit_routes
 	reload_caddy
@@ -831,7 +859,7 @@ sync() {
 	fi
 	if [[ "$scope" == apps || "$scope" == all ]]; then
 		while IFS= read -r p; do start_project "$p"; done < <(projects_apps)
-		stop_inactive
+		stop_inactive || die 'inactive project cleanup failed'
 		health_scope consumers
 	fi
 	commit_routes
@@ -889,7 +917,7 @@ diagnose() {
 		done < <("${compose_command[@]}" ps --all -q 2>/dev/null || true)
 	done < <(diagnose_projects "$scope")
 	if [[ "$scope" == foundation || "$scope" == all ]]; then
-		local observer_env observer_root observer_data observer_buffer observer_bytes buffer_bytes buffer_max durable_warn buffer_warn_percent utilization
+		local observer_env observer_root observer_data observer_buffer observer_bytes buffer_bytes buffer_max durable_warn buffer_warn_percent utilization observer_shipper_id observer_recent
 		observer_env="$(foundation_env observer-collector)"
 		if [[ -r "$observer_env" ]]; then
 			observer_root="$(env_value OBSERVER_DATA_ROOT "$observer_env")"
@@ -925,6 +953,15 @@ diagnose() {
 				else
 					printf '\n[observer-buffer]\npath=%s state=missing max_bytes=%s warn_percent=%s\n' \
 						"$observer_buffer" "$buffer_max" "$buffer_warn_percent"
+				fi
+				foundation_compose observer-collector
+				observer_shipper_id="$("${compose_command[@]}" ps --all -q observer-log-shipper 2>/dev/null | head -n1 || true)"
+				if [[ -n "$observer_shipper_id" ]]; then
+					observer_recent="$(docker logs --tail 80 "$observer_shipper_id" 2>&1 | grep -Ei 'error|warn|failed|retry|buffer' | tail -n 20 | sed -E 's/o2oi_[A-Za-z0-9]{32}/<redacted>/g; s/(Basic )[A-Za-z0-9+\/=_-]+/\1<redacted>/g; s/([Aa]uthorization:)[^,}]*/\1<redacted>/g' || true)"
+					printf '\n[observer-collector-recent]\n'
+					[[ -n "$observer_recent" ]] && printf '%s\n' "$observer_recent" || printf 'state=no-recent-warnings-or-errors\n'
+				else
+					printf '\n[observer-collector-recent]\nstate=container-missing\n'
 				fi
 			fi
 		fi

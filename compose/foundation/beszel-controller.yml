@@ -10,6 +10,7 @@ services:
     pids_limit: ${BESZEL_HUB_PIDS_LIMIT:-128}
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: beszel
       com.aichorage.component: foundation-beszel-controller
     environment:
       APP_URL: ${BESZEL_APP_URL:?BESZEL_APP_URL must be set}

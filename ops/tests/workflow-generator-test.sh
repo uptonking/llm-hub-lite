@@ -24,8 +24,10 @@ if grep -R -Eq '^[[:space:]]+role:' "$tmp/disabled"; then
 fi
 [[ -f "$tmp/disabled/deploy-worker-1.yml" && -f "$tmp/disabled/deploy-worker-2.yml" ]]
 [[ -f "$tmp/disabled/foundation-upgrade-worker-2.yml" && -f "$tmp/disabled/runner-upgrade-worker-2.yml" && -f "$tmp/disabled/rollback-leader.yml" ]]
-[[ -f "$tmp/disabled/singleton-stage-pigeon.yml" && -f "$tmp/disabled/singleton-switch-pigeon.yml" ]]
-[[ -f "$tmp/disabled/singleton-stop-pigeon-worker-1.yml" && -f "$tmp/disabled/singleton-stop-pigeon-worker-2.yml" ]]
+[[ -f "$tmp/disabled/singleton-stage-aichorouter.yml" && -f "$tmp/disabled/singleton-switch-aichorouter.yml" ]]
+[[ -f "$tmp/disabled/singleton-stage-cpapi.yml" && -f "$tmp/disabled/singleton-switch-cpapi.yml" ]]
+[[ ! -e "$tmp/disabled/singleton-stage-pigeon.yml" && ! -e "$tmp/disabled/singleton-switch-pigeon.yml" ]]
+[[ ! -e "$tmp/disabled/singleton-stop-pigeon-worker-1.yml" && ! -e "$tmp/disabled/singleton-stop-pigeon-worker-2.yml" ]]
 [[ ! -e "$tmp/disabled/singleton-stage-observer.yml" && ! -e "$tmp/disabled/singleton-switch-observer.yml" ]]
 grep -Fq 'DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit foundation-upgrade' "$tmp/disabled/foundation-upgrade-leader.yml"
 grep -Fq $'depends_on:\n  - foundation-upgrade-leader' "$tmp/disabled/foundation-upgrade-worker-1.yml"
@@ -41,6 +43,12 @@ if grep -Fq '        - apps/aichorouter/**' "$tmp/disabled/deploy-leader.yml"; t
 fi
 grep -Fq '        - config/routes.d/**' "$tmp/disabled/deploy-leader.yml"
 grep -Fq '        - config/cluster/apps/librechat.policy' "$tmp/disabled/cluster-reconcile-leader.yml"
+grep -Fq '        - config/cluster/apps/pigeon.policy' "$tmp/disabled/cluster-reconcile-leader.yml"
+if grep -Fq '        - config/cluster/apps/aichorouter.policy' "$tmp/disabled/cluster-reconcile-leader.yml"; then
+	printf 'enabled singleton policy must remain owned by its dedicated workflow\n' >&2
+	exit 1
+fi
+grep -Fq "grep -Fq 'verify_cluster_scope()' /opt/platform/control/current/ops/deploy-controller.sh" "$tmp/disabled/cluster-reconcile-leader.yml"
 # Foundation upgrades are explicitly manual and intentionally have no path
 # filter; the workflow is used for reviewed control-plane changes.
 if grep -Fq '        - config/cluster/apps/librechat.policy' "$tmp/disabled/deploy-leader.yml"; then
@@ -70,6 +78,23 @@ if grep -R -E 'group: llm-hub-lite-(production|cluster-reconcile|singleton-|app-
 fi
 if ! grep -R -Fq 'group: llm-hub-lite-deployment' "$tmp/disabled"; then
 	printf 'generated workflows are missing the shared deployment concurrency group\n' >&2
+	exit 1
+fi
+
+# A disabled singleton keeps its manifest valid and can be opted in later.
+# Exercise that path in an isolated generator checkout so this test never
+# mutates the working tree's committed policy.
+mkdir -p "$tmp/opt-in/ops"
+cp "$repo_root/ops/generate-woodpecker-workflows.sh" "$tmp/opt-in/ops/"
+cp -R "$repo_root/apps" "$tmp/opt-in/apps"
+cp -R "$repo_root/config" "$tmp/opt-in/config"
+sed 's/^ENABLED=.*/ENABLED=true/' "$tmp/opt-in/config/cluster/apps/pigeon.policy" >"$tmp/opt-in/config/cluster/apps/pigeon.policy.tmp"
+mv "$tmp/opt-in/config/cluster/apps/pigeon.policy.tmp" "$tmp/opt-in/config/cluster/apps/pigeon.policy"
+WOODPECKER_WORKFLOW_ROOT="$tmp/opt-in/workflows" "$tmp/opt-in/ops/generate-woodpecker-workflows.sh" generate
+[[ -f "$tmp/opt-in/workflows/singleton-stage-pigeon.yml" && -f "$tmp/opt-in/workflows/singleton-switch-pigeon.yml" ]]
+[[ -f "$tmp/opt-in/workflows/singleton-stop-pigeon-worker-1.yml" && -f "$tmp/opt-in/workflows/singleton-stop-pigeon-worker-2.yml" ]]
+if grep -Fq '        - config/cluster/apps/pigeon.policy' "$tmp/opt-in/workflows/cluster-reconcile-leader.yml"; then
+	printf 'enabled Pigeon policy remained in aggregate cluster reconciliation\n' >&2
 	exit 1
 fi
 

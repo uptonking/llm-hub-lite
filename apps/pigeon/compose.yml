@@ -16,6 +16,7 @@ services:
       - /root/.gunicorn:rw,noexec,nosuid,size=1m
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: pigeon
       com.aichorage.component: app-pigeon
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -63,6 +64,7 @@ services:
     tmpfs: [/tmp]
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: pigeon
       com.aichorage.component: app-pigeon
       com.aichorage.observer.ignore-logs: "true"
     depends_on:

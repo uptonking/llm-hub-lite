@@ -10,6 +10,7 @@ services:
     pids_limit: ${OBSERVER_PIDS_LIMIT:-256}
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: observer
       com.aichorage.component: foundation-observer-controller
       com.aichorage.observer.ignore-logs: "true"
     environment:
@@ -57,6 +58,7 @@ services:
     tmpfs: [/tmp]
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: observer
       com.aichorage.component: foundation-observer-controller
       com.aichorage.observer.ignore-logs: "true"
     depends_on:

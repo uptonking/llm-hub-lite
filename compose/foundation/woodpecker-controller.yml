@@ -10,6 +10,7 @@ services:
     pids_limit: ${WOODPECKER_SERVER_PIDS_LIMIT:-256}
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: woodpecker
       com.aichorage.component: foundation-woodpecker-controller
     logging:
       driver: local

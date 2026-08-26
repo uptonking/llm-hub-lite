@@ -30,6 +30,7 @@ set +e
 # short-lived, potentially secret-bearing build log in the Observer stream.
 docker run -d --name "$job" \
 	--label com.aichorage.platform=llm-hub-lite \
+	--label com.aichorage.application=platform \
 	--label com.aichorage.component=platform-deployment-runner \
 	--label com.aichorage.observer.ignore-logs=true \
 	-v /var/run/docker.sock:/var/run/docker.sock \

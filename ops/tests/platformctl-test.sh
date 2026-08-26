@@ -42,6 +42,7 @@ cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
+  *" ps --all -q observer-log-shipper"*) printf 'observer-log-shipper\n'; exit 0;;
   *" ps --all -q health-probe"*) printf 'health-probe\n'; exit 0;;
   *" ps --all -q"*) :;;
 esac
@@ -56,7 +57,18 @@ exit 0
 EOF
 cat >"$tmp/bin/docker" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >>"${DOCKER_CALL_LOG:?}"
 case "$1 $2" in "network inspect") exit 0;; "inspect --format") printf 'running healthy\n';; "run --rm") exit 0;; esac
+case "$1 $2" in "logs --tail") printf 'WARN retry buffer token=o2oi_11111111111111111111111111111111 Authorization: Basic dGVzdDpzZWNyZXQ=\n';; esac
+case "$*" in
+  "ps -aq --filter label=com.docker.compose.project=app-pigeon")
+    [ "${FAIL_DOCKER_PS:-0}" = 1 ] && exit 1
+    [ "${EMIT_PIGEON_CONTAINER:-0}" = 1 ] && printf 'stale-pigeon\n'
+    ;;
+  "rm -f stale-pigeon")
+    [ "${FAIL_DOCKER_RM:-0}" = 1 ] && exit 1
+    ;;
+esac
 exit 0
 EOF
 cat >"$tmp/bin/flock" <<'EOF'
@@ -65,7 +77,7 @@ exit 0
 EOF
 chmod +x "$tmp/bin"/*
 export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
-export COMPOSE_CALL_LOG="$tmp/compose.log"
+export COMPOSE_CALL_LOG="$tmp/compose.log" DOCKER_CALL_LOG="$tmp/docker.log"
 foundation_env_function="$(sed -n '/^foundation_env() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
 foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUNDATION_ENV_ROOT=/foundation bash -c '
 	eval "$FOUNDATION_ENV_FUNCTION"
@@ -79,6 +91,41 @@ foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUN
 	exit 1
 }
 bash "$repo_root/ops/platformctl.sh" validate
+for retention in 1 365; do
+	sed "s/^OBSERVER_DATA_RETENTION_DAYS=.*/OBSERVER_DATA_RETENTION_DAYS=$retention/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+	bash "$repo_root/ops/platformctl.sh" validate
+done
+for retention in 0 -1 invalid 366; do
+	sed "s/^OBSERVER_DATA_RETENTION_DAYS=.*/OBSERVER_DATA_RETENTION_DAYS=$retention/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+		printf 'invalid Observer retention was accepted: %s\n' "$retention" >&2
+		exit 1
+	fi
+done
+sed 's/^OBSERVER_DATA_RETENTION_DAYS=.*/OBSERVER_DATA_RETENTION_DAYS=30/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+for buffer in 1 268435487 8589934593 invalid; do
+	sed "s/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=$buffer/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+		printf 'invalid Observer buffer size was accepted: %s\n' "$buffer" >&2
+		exit 1
+	fi
+done
+sed 's/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=536870912/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+for threads in 0 9 invalid; do
+	sed "s/^OBSERVER_LOG_SHIPPER_THREADS=.*/OBSERVER_LOG_SHIPPER_THREADS=$threads/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+		printf 'invalid Observer collector thread count was accepted: %s\n' "$threads" >&2
+		exit 1
+	fi
+done
+sed 's/^OBSERVER_LOG_SHIPPER_THREADS=.*/OBSERVER_LOG_SHIPPER_THREADS=1/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 sed 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=0/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
 mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
@@ -126,6 +173,8 @@ fi
 leader_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 grep -Fq '[observer-storage]' <<<"$leader_diagnose"
 grep -Fq '[observer-buffer]' <<<"$leader_diagnose"
+grep -Fq '[observer-collector-recent]' <<<"$leader_diagnose"
+grep -Fq '<redacted>' <<<"$leader_diagnose"
 grep -Fq 'warn_bytes=8589934592' <<<"$leader_diagnose"
 grep -Fq 'warn_percent=80' <<<"$leader_diagnose"
 if grep -Fq 'test-observer-password' <<<"$leader_diagnose" || grep -Fq 'o2oi_' <<<"$leader_diagnose"; then
@@ -141,10 +190,10 @@ fi
 grep -Fq '[observer-buffer]' <<<"$worker_diagnose"
 sed -e 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=1/' \
 	-e 's/^OBSERVER_LOG_BUFFER_WARN_PERCENT=.*/OBSERVER_LOG_BUFFER_WARN_PERCENT=1/' \
-	-e 's/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=1048576/' \
+	-e 's/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=268435488/' \
 	"$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
 mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-dd if=/dev/zero of="$tmp/observer/collector-buffer/pressure" bs=1024 count=16 >/dev/null 2>&1
+dd if=/dev/zero of="$tmp/observer/collector-buffer/pressure" bs=1024 count=3072 >/dev/null 2>&1
 warning_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 grep -Fq 'WARNING: Observer collector buffer' <<<"$warning_diagnose"
 cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
@@ -176,6 +225,8 @@ PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef
 PIGEON_LOGIN_PASSWORD=test-pigeon-password
 EOF
 : >"$tmp/compose.log"
+sed 's/^ENABLED=.*/ENABLED=true/' "$tmp/control/current/config/cluster/apps/pigeon.policy" >"$tmp/control/current/config/cluster/apps/pigeon.policy.tmp"
+mv "$tmp/control/current/config/cluster/apps/pigeon.policy.tmp" "$tmp/control/current/config/cluster/apps/pigeon.policy"
 PLATFORM_ONLY_APP_ID=pigeon bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'app-pigeon' "$tmp/compose.log"
 grep -Fq 'reverse_proxy pigeon:5000' "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy"
@@ -184,6 +235,25 @@ PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate
 cmp -s "$tmp/pigeon-route.original" "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy"
 cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
 bash "$repo_root/ops/platformctl.sh" validate
+cp "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy" "$tmp/cpapi-route.before-disabled-reconcile"
+sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/pigeon.policy" >"$tmp/control/current/config/cluster/apps/pigeon.policy.tmp"
+mv "$tmp/control/current/config/cluster/apps/pigeon.policy.tmp" "$tmp/control/current/config/cluster/apps/pigeon.policy"
+: >"$tmp/docker.log"
+EMIT_PIGEON_CONTAINER=1 PLATFORM_SKIP_SINGLETONS=1 PLATFORM_RECONCILE_DISABLED_SINGLETONS=1 \
+	bash "$repo_root/ops/platformctl.sh" sync apps
+[[ ! -e "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" ]]
+cmp -s "$tmp/cpapi-route.before-disabled-reconcile" "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
+grep -Fq 'rm -f stale-pigeon' "$tmp/docker.log"
+if EMIT_PIGEON_CONTAINER=1 FAIL_DOCKER_RM=1 PLATFORM_SKIP_SINGLETONS=1 PLATFORM_RECONCILE_DISABLED_SINGLETONS=1 \
+	bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null 2>&1; then
+	printf 'inactive singleton cleanup failure did not fail reconciliation\n' >&2
+	exit 1
+fi
+if FAIL_DOCKER_PS=1 PLATFORM_SKIP_SINGLETONS=1 PLATFORM_RECONCILE_DISABLED_SINGLETONS=1 \
+	bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null 2>&1; then
+	printf 'inactive singleton discovery failure did not fail reconciliation\n' >&2
+	exit 1
+fi
 cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
 grep -Fq 'Do not evaluate an inactive app' "$repo_root/ops/platformctl.sh"
 grep -Fq -- '--force-recreate --wait' "$repo_root/ops/platformctl.sh"

@@ -11,6 +11,7 @@ services:
     pids_limit: ${WOODPECKER_DEPLOYER_PIDS_LIMIT:-128}
     labels:
       com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: woodpecker
       com.aichorage.component: foundation-woodpecker-deployer
     volumes:
       - ${WOODPECKER_DEPLOYER_CONFIG_ROOT:-/opt/platform/woodpecker/deployer}:/etc/woodpecker
