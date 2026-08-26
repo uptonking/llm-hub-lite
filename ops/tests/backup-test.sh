@@ -4,7 +4,7 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter"
+mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/pigeon"
 printf 'test-password\n' >"$tmp/config/restic-password"
 printf 'remote-password\n' >"$tmp/config/restic-remote-password"
 cat >"$tmp/control/current/apps/aichorouter/manifest.env" <<'EOF'
@@ -13,10 +13,18 @@ DATA_ROOT_REL=aichorouter
 EPHEMERAL_DATA_REL=log-buffer
 SQLITE_PATHS=aichorouter.db
 EOF
+cat >"$tmp/control/current/apps/pigeon/manifest.env" <<'EOF'
+RUNTIME_ENV_FILE=pigeon.env
+DATA_ROOT_REL=pigeon
+SQLITE_PATHS=outlook_accounts.db
+EOF
 printf 'AICHOROUTER_SESSION_SECRET=test\n' >"$tmp/config/aichorouter.env"
+printf 'PIGEON_SECRET_KEY=test\n' >"$tmp/config/pigeon.env"
 printf 'OBSERVER_DATA_ROOT=%s\n' "$tmp/platform/observer-custom" >"$tmp/platform/foundation/env/observer.env"
 mkdir -p "$tmp/platform/observer-custom/data/db"
 : >"$tmp/platform/observer-custom/data/db/metadata.sqlite"
+mkdir -p "$tmp/app/shared/data/prod/pigeon"
+: >"$tmp/app/shared/data/prod/pigeon/outlook_accounts.db"
 
 cat >"$tmp/bin/df" <<'EOF'
 #!/bin/sh
@@ -49,7 +57,12 @@ EOF
 cat >"$tmp/bin/sqlite3" <<'EOF'
 #!/bin/sh
 last=''
-for arg do last="$arg"; done
+source=''
+for arg do
+  last="$arg"
+  case "$arg" in /*) source="$arg" ;; esac
+done
+printf '%s\n' "$source" >>"${SQLITE_CALL_LOG:?}"
 case "$last" in
   .backup\ *)
     target="$(printf '%s\n' "$last" | sed -e "s/^\\.backup '//" -e "s/'\$//")"
@@ -66,7 +79,7 @@ chmod +x "$tmp/bin/df" "$tmp/bin/restic" "$tmp/bin/sqlite3"
 chmod +x "$tmp/bin/flock"
 
 export PATH="$tmp/bin:$PATH"
-export DF_CALL_LOG="$tmp/df.log" RESTIC_CALL_LOG="$tmp/restic.log"
+export DF_CALL_LOG="$tmp/df.log" RESTIC_CALL_LOG="$tmp/restic.log" SQLITE_CALL_LOG="$tmp/sqlite.log"
 export APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp/platform" CONFIG_ROOT="$tmp/config"
 export CONTROL_ROOT="$tmp/control" APPS_ROOT="$tmp/control/current/apps"
 export RESTIC_REPOSITORY="$tmp/repository" RESTIC_PASSWORD_FILE="$tmp/config/restic-password"
@@ -84,6 +97,8 @@ if grep -q -- '--skip-if-unchanged' "$tmp/restic.log"; then
 	exit 1
 fi
 grep -q "$tmp/config/aichorouter.env" "$tmp/restic.log"
+grep -q "$tmp/config/pigeon.env" "$tmp/restic.log"
+grep -qx "$tmp/app/shared/data/prod/pigeon/outlook_accounts.db" "$tmp/sqlite.log"
 grep -q -- "--exclude $tmp/app/shared/data/prod/aichorouter/log-buffer" "$tmp/restic.log"
 grep -q "$tmp/platform/observer-custom" "$tmp/restic.log"
 grep -q -- "--exclude $tmp/platform/observer-custom/collector-buffer" "$tmp/restic.log"

@@ -47,11 +47,16 @@ grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/aichorouter/manifest.env"
+grep -q '^APP_ID=pigeon$' "$repo_root/apps/pigeon/manifest.env"
+grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/pigeon/manifest.env"
+grep -q '^SECRET_MIN_LENGTHS=PIGEON_SECRET_KEY:32,PIGEON_LOGIN_PASSWORD:12$' "$repo_root/apps/pigeon/manifest.env"
+grep -q '^PIGEON_TARGET_NODE_ID=worker-2$' "$repo_root/config/cluster/apps/pigeon.policy"
 grep -q '^FOUNDATION_LEADER=.*observer-controller' "$repo_root/config/cluster/policy.env"
 grep -q '^FOUNDATION_FOLLOWER=.*observer-collector' "$repo_root/config/cluster/policy.env"
 grep -q '^AICHOROUTER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/aichorouter.policy"
 grep -q '^AICHOROUTER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^CPAPI_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^PIGEON_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^HEALTH_PROBE_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^OBSERVER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.foundation.prod.env"
 grep -q '^OBSERVER_LOG_PROXY_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.foundation.prod.env"
@@ -130,6 +135,27 @@ if grep -Eq 'ports:' "$repo_root/apps/cpapi/compose.yml"; then
 	printf 'CPAPI must not publish a host port\n' >&2
 	exit 1
 fi
+grep -Fq 'DATABASE_PATH: /data/outlook_accounts.db' "$repo_root/apps/pigeon/compose.yml"
+grep -Fq 'DOCKER_UPDATE_ENABLED: "false"' "$repo_root/apps/pigeon/compose.yml"
+grep -Fq 'test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/login >/dev/null"]' "$repo_root/apps/pigeon/compose.yml"
+grep -Fq 'curl -fsS http://pigeon:5000/login' "$repo_root/apps/pigeon/compose.yml"
+grep -Fq 'mem_limit: ${PIGEON_MEMORY_LIMIT:-512m}' "$repo_root/apps/pigeon/compose.yml"
+grep -Fq 'cpus: ${PIGEON_CPUS:-0.50}' "$repo_root/apps/pigeon/compose.yml"
+grep -Fq 'pids_limit: ${PIGEON_PIDS_LIMIT:-128}' "$repo_root/apps/pigeon/compose.yml"
+grep -q '^HEALTH_URL=/login$' "$repo_root/apps/pigeon/manifest.env"
+grep -Fq 'health_uri /login' "$repo_root/apps/pigeon/route.leader.caddy"
+grep -Fq 'reverse_proxy pigeon:5000' "$repo_root/apps/pigeon/route.follower.caddy"
+grep -Fq 'read_only: true' "$repo_root/apps/pigeon/compose.yml"
+grep -Fq 'cap_drop: [ALL]' "$repo_root/apps/pigeon/compose.yml"
+grep -Fq '/root/.gunicorn:rw,noexec,nosuid,size=1m' "$repo_root/apps/pigeon/compose.yml"
+if grep -Eq 'ports:' "$repo_root/apps/pigeon/compose.yml"; then
+	printf 'Pigeon must not publish a host port\n' >&2
+	exit 1
+fi
+if grep -Eiq 'postgres|redis|/var/run/docker.sock' "$repo_root/apps/pigeon/compose.yml"; then
+	printf 'Pigeon must not define external databases or Docker socket access\n' >&2
+	exit 1
+fi
 if grep -Eiq 'REDIS_CONN_STRING|SQL_DSN|postgres|redis' "$repo_root/apps/aichorouter/compose.yml"; then
 	printf 'aichorouter must not define Redis or PostgreSQL\n' >&2
 	exit 1
@@ -146,9 +172,15 @@ grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^HEALTH_URL=/healthz$' "$repo_root/apps/cpapi/manifest.env"
+grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/pigeon/manifest.env"
+grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/pigeon/manifest.env"
 grep -Fq 'health_uri /healthz' "$repo_root/apps/cpapi/route.leader.caddy"
 grep -Fq 'observer-health-probe:' "$repo_root/compose/foundation/observer-controller.yml"
 grep -Fq 'singleton-transition-fail' "$repo_root/ops/platformctl.sh"
+grep -Fq '[[ "$mode" == foundation ]] && DEPLOY_SKIP_SINGLETONS=1' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT=' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'current_route="$RUNTIME_ROOT/config/routes.d/$a.caddy"' "$repo_root/ops/platformctl.sh"
 grep -Fq 'stopping retired Observer container' "$repo_root/ops/platformctl.sh"
 grep -Fq 'transition_begin' "$repo_root/ops/platformctl.sh"
 if grep -Fq 'depends_on:' "$repo_root/.woodpecker/singleton-stage-cpapi.yml"; then

@@ -4,8 +4,9 @@
 
 Self-hosted, reproducible multi-node Docker platform for Caddy, Woodpecker CI,
 Beszel, and LibreChat.
-LibreChat is the enabled active-active follower consumer. Aichorouter and CPAPI
-are enabled singleton consumers targeted to configured followers. OpenObserve
+LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI,
+and Pigeon (OutlookEmail) are enabled singleton consumers targeted to configured
+followers, with Pigeon defaulting to worker-2. OpenObserve
 (`observer`) is a Leader-only foundation service; read-only socket-proxy and
 bounded Vector collectors run on every node and forward platform-labelled logs
 to the Leader.

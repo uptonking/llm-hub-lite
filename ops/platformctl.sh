@@ -20,6 +20,9 @@ CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster
 LOCK_FILE="${PLATFORM_LOCK_FILE:-/run/lock/llm-hub-lite/platform.lock}"
 MAINTENANCE_FILE="${PLATFORM_MAINTENANCE_FILE:-$CONFIG_ROOT/maintenance}"
 COMPOSE_WAIT_TIMEOUT="${COMPOSE_WAIT_TIMEOUT:-180}"
+# A pushed release can invoke this newer script through an older installed
+# controller. Preserve the controller's explicit singleton-skip intent.
+PLATFORM_SKIP_SINGLETONS="${PLATFORM_SKIP_SINGLETONS:-${DEPLOY_SKIP_SINGLETONS:-0}}"
 die() {
 	printf 'platformctl: %s\n' "$*" >&2
 	exit 1
@@ -136,7 +139,9 @@ app_in_reconcile_scope() {
 app_route_active() {
 	local id="$(basename "$1")"
 	case "$(app_placement "$1")" in follower | single-follower) ;; *) return 1 ;; esac
-	[[ "$(node_role)" == leader ]] || app_active "$1"
+	if [[ "$(node_role)" != leader ]]; then
+		app_active "$1" || return 1
+	fi
 	app_policy_enabled "$id"
 }
 foundation_file() { case "$1" in caddy) echo caddy.yml ;; woodpecker-controller) echo woodpecker-controller.yml ;; woodpecker-worker) echo woodpecker-worker.yml ;; woodpecker-deployer) echo woodpecker-deployer.yml ;; beszel-controller) echo beszel-controller.yml ;; beszel-worker) echo beszel-worker.yml ;; observer-controller) echo observer-controller.yml ;; observer-collector) echo observer-collector.yml ;; *) die "unknown foundation: $1" ;; esac }
@@ -159,6 +164,19 @@ descriptor_value() {
 	# HTTP smoke comparisons.
 	value="$(printf '%s\n' "$value" | sed -e "s/^'//" -e "s/'$//")"
 	printf '%s\n' "$value"
+}
+descriptor_secret_min_length() {
+	local d="$1" wanted="$2" rule key min_length
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		min_length="${rule#*:}"
+		if [[ "$key" == "$wanted" ]]; then
+			printf '%s\n' "$min_length"
+			return 0
+		fi
+	done < <(printf '%s\n' "$(descriptor_value "$d" SECRET_MIN_LENGTHS)" | tr ',' '\n')
+	printf '1\n'
 }
 app_declared() {
 	local d
@@ -273,15 +291,20 @@ render_template() {
 	CURRENT_ROUTE_DESCRIPTOR="$previous_descriptor"
 }
 render_routes() {
-	local s="$RUNTIME_ROOT/.config.staging.$$" d a t o f
+	local s="$RUNTIME_ROOT/.config.staging.$$" d a t o f current_route
 	install -d -m700 "$RUNTIME_ROOT"
 	rm -rf "$s"
 	install -d -m700 "$s/routes.d"
 	cp -a "$CONTROL_ROOT/current/config/." "$s/"
 	while IFS= read -r f; do render_template "$f"; done < <(find "$s" -type f -name '*.caddy' -print)
 	while IFS= read -r d; do
-		app_route_active "$d" || continue
 		a="$(basename "$d")"
+		if [[ "${PLATFORM_SKIP_SINGLETONS:-0}" == 1 && "$(app_placement "$d")" == single-follower ]]; then
+			current_route="$RUNTIME_ROOT/config/routes.d/$a.caddy"
+			[[ -f "$current_route" ]] && cp "$current_route" "$s/routes.d/$a.caddy"
+			continue
+		fi
+		app_route_active "$d" || continue
 		[[ "$(node_role)" == leader ]] && t="$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)" || t="$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)"
 		o="$s/routes.d/$a.caddy"
 		cp "$d/$t" "$o"
@@ -362,7 +385,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -382,7 +405,7 @@ validate_descriptor() {
 		[[ "$(app_target_node "$d")" != "$(leader_node_id)" ]] || die "singleton app target must be a follower: $d"
 		csv_has "$(policy_value NODE_IDS)" "$(app_target_node "$d")" || die "singleton app target is absent from inventory: $d"
 		[[ "$(descriptor_value "$d" PUBLIC_HOST)" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "invalid PUBLIC_HOST in singleton app $d/manifest.env"
-		if app_policy_enabled "$(basename "$d")" && [[ "$(node_role)" == follower && "$(node_id)" == "$(app_target_node "$d")" ]]; then
+		if app_in_reconcile_scope "$d"; then
 			[[ -f "$(app_runtime_env_file "$d")" ]] || die "missing runtime env file for active singleton app: $d"
 		fi
 		;;
@@ -392,6 +415,13 @@ validate_descriptor() {
 	while IFS= read -r k; do
 		[[ -z "$k" || "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid ENV_KEYS entry in $d/manifest.env: $k"
 	done < <(printf '%s\n' "$(descriptor_value "$d" ENV_KEYS)" | tr ',' '\n')
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		secret_key="${rule%%:*}"
+		min_length="${rule#*:}"
+		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ && "$min_length" =~ ^[1-9][0-9]*$ ]] || die "invalid SECRET_MIN_LENGTHS entry in $d/manifest.env: $rule"
+		csv_has "$(descriptor_value "$d" SECRET_KEYS)" "$secret_key" || die "SECRET_MIN_LENGTHS references undeclared secret in $d/manifest.env: $secret_key"
+	done < <(printf '%s\n' "$(descriptor_value "$d" SECRET_MIN_LENGTHS)" | tr ',' '\n')
 	[[ "$(descriptor_value "$d" COMPOSE_PROJECT)" =~ ^app-[a-z0-9-]+$ ]] || die "invalid COMPOSE_PROJECT in $d/manifest.env"
 	alias="$(descriptor_value "$d" NETWORK_ALIAS)"
 	[[ "$alias" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid NETWORK_ALIAS in $d/manifest.env"
@@ -406,7 +436,15 @@ validate_descriptor() {
 	need_file "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)"
 	need_file "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)"
 	grep -Fq "$alias" "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" || die "follower route does not target NETWORK_ALIAS in $d/manifest.env"
-	for k in $(descriptor_value "$d" IMAGE_KEYS); do [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && -n "$(env_value "$k" "$APP_IMAGE_ENV")" ]] || die "$k missing from image manifest"; done
+	for k in $(descriptor_value "$d" IMAGE_KEYS); do
+		[[ "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid IMAGE_KEYS entry in $d/manifest.env: $k"
+		# Candidate validation always uses the committed image manifest. A runtime
+		# foundation sync may retain the installed app image manifest while it
+		# deliberately skips all singleton actions.
+		if [[ "${VALIDATE_CHECK:-0}" == 1 ]] || app_in_reconcile_scope "$d"; then
+			[[ -n "$(env_value "$k" "$APP_IMAGE_ENV")" ]] || die "$k missing from image manifest"
+		fi
+	done
 	if app_in_reconcile_scope "$d"; then
 		app_compose "$d"
 		services="$("${compose_command[@]}" config --services 2>/dev/null || true)"
@@ -450,6 +488,8 @@ validate_descriptor() {
 			[[ -n "$k" ]] || continue
 			value="$(app_value "$d" "$k")"
 			[[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "active singleton requires a non-empty single-line secret: $k"
+			min_length="$(descriptor_secret_min_length "$d" "$k")"
+			((${#value} >= min_length)) || die "active singleton secret $k must contain at least $min_length characters"
 			! placeholder_value "$value" || die "active singleton secret placeholder is not allowed: $k"
 		done < <(printf '%s\n' "$(descriptor_value "$d" SECRET_KEYS)" | tr ',' '\n')
 	fi

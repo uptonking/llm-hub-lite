@@ -137,6 +137,26 @@ atomic_link() {
 	rm -f -- "$link"
 	mv -- "$tmp" "$link"
 }
+sync_node_config() {
+	local release="$1" destination="$2" runtime_source id source tmp key value
+	runtime_source="${3:-${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}}"
+	id="$(env_value NODE_ID "$runtime_source")"
+	[[ "$id" =~ ^[a-z][a-z0-9-]*$ ]] || die 'runtime node ID is invalid'
+	source="$release/config/cluster/nodes/$id.env"
+	[[ -f "$source" ]] || die "release is missing node inventory: $id"
+	install -d -m 700 "$(dirname "$destination")"
+	tmp="$(mktemp "${destination}.tmp.XXXXXX")"
+	cp "$source" "$tmp"
+	# node.env is committed inventory plus this one private, host-local field.
+	# Do not preserve arbitrary keys: that would let stale inventory or secrets
+	# become an undocumented second source of truth.
+	for key in LEADER_PUBLIC_IP; do
+		value="$(env_value "$key" "$runtime_source")"
+		[[ -n "$value" ]] && printf '%s=%s\n' "$key" "$value" >>"$tmp"
+	done
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$destination"
+}
 
 mkdir -p "$APP_ROOT/shared/logs" "$RELEASES" "$(dirname "$PLATFORM_LOCK_FILE")"
 exec > >(tee -a "$DEPLOY_LOG") 2>&1
@@ -323,12 +343,12 @@ validate_release() {
 	cp -a "$FOUNDATION_ROOT/env/." "$foundation_validate/env/" 2>/dev/null || true
 	install -d -m 700 "$control_validate/config/cluster/nodes"
 	cp -a "$release/config/cluster/." "$control_validate/config/cluster/"
-	install -m 600 "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" "$control_validate/node.env" 2>/dev/null || true
+	sync_node_config "$release" "$control_validate/node.env"
 	install -m 600 "$release/compose/foundation/caddy.yml" "$foundation_validate/caddy.yml"
 	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
 		install -m 600 "$release/compose/foundation/$file" "$foundation_validate/$file"
 	done
-	if ! CONTROL_ROOT="$control_validate" APPS_ROOT="$release/apps" RUNTIME_ROOT="$runtime" \
+	if ! PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$control_validate" APPS_ROOT="$release/apps" RUNTIME_ROOT="$runtime" \
 		APP_ENV="$APP_ENV" APP_IMAGE_ENV="$image_apps" FOUNDATION_IMAGE_ENV="$image_foundation" \
 		FOUNDATION_ROOT="$foundation_validate" FOUNDATION_ENV_ROOT="$foundation_validate/env" NODE_CONFIG_FILE="$control_validate/node.env" CLUSTER_POLICY_FILE="$control_validate/config/cluster/policy.env" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
@@ -463,6 +483,9 @@ cleanup() {
 
 apply() {
 	local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0 previous_singleton_target singleton_prepare_failed=0
+	# Foundation upgrades install shared control logic but never start, stop, or
+	# publish singleton consumers. Their dedicated workflow owns that change.
+	[[ "$mode" == foundation ]] && DEPLOY_SKIP_SINGLETONS=1
 	sha_valid "$sha"
 	exec 9>"$PLATFORM_LOCK_FILE"
 	flock -w 300 9 || die 'timed out waiting for deployment lock'
@@ -491,6 +514,7 @@ apply() {
 	tx="$(mktemp -d "$APP_ROOT/shared/runtime/transaction.XXXXXX")"
 	cp -f "$APP_IMAGE_ENV" "$tx/images.apps" 2>/dev/null || true
 	cp -f "$FOUNDATION_IMAGE_ENV" "$tx/images.foundation" 2>/dev/null || true
+	cp -f "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" "$tx/node.env" 2>/dev/null || true
 	for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do cp -f "$FOUNDATION_ROOT/$file" "$tx/$file" 2>/dev/null || true; done
 	[[ -d "$CONTROL_ROOT/descriptors" ]] && cp -a "$CONTROL_ROOT/descriptors" "$tx/descriptors"
 	if [[ -n "$old_current" ]]; then
@@ -499,7 +523,13 @@ apply() {
 	fi
 	atomic_link "$release" "$CURRENT"
 	atomic_link "$release" "$APP_CURRENT"
+	sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
 	refresh_descriptor_registry "$release"
+	# A newly introduced singleton needs its candidate image keys before
+	# singleton-prepare evaluates the Compose project to stop/archive it.
+	if [[ "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]]; then
+		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
+	fi
 	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
 		if ! SINGLETON_PREVIOUS_TARGET="$previous_singleton_target" SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-prepare "$SINGLETON_APP_ID"; then
 			singleton_prepare_failed=1
@@ -508,9 +538,6 @@ apply() {
 	# Normal source deployments change application code/config only. Image
 	# changes are explicit app-upgrade operations so a routine push cannot
 	# silently move production to a new image set.
-	if [[ "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]]; then
-		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
-	fi
 	if [[ "$mode" == foundation || "$mode" == cluster-reconcile ]]; then
 		foundation_changed=1
 		install_foundation_files "$release"
@@ -544,6 +571,7 @@ apply() {
 	[[ -n "$old_app_previous" ]] && atomic_link "$old_app_previous" "$APP_PREVIOUS" || rm -f -- "$APP_PREVIOUS"
 	if [[ -f "$tx/images.apps" ]]; then install -m 600 "$tx/images.apps" "$APP_IMAGE_ENV"; else rm -f -- "$APP_IMAGE_ENV"; fi
 	if [[ -f "$tx/images.foundation" ]]; then install -m 600 "$tx/images.foundation" "$FOUNDATION_IMAGE_ENV"; fi
+	if [[ -f "$tx/node.env" ]]; then install -m 600 "$tx/node.env" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; else rm -f -- "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; fi
 	if ((foundation_changed)); then
 		for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
 			[[ -f "$tx/$file" ]] && install -m 600 "$tx/$file" "$FOUNDATION_ROOT/$file"

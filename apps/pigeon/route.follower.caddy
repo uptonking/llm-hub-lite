@@ -1,0 +1,6 @@
+{$NODE_PIGEON_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy pigeon:5000 {
+    flush_interval -1
+  }
+}

@@ -24,7 +24,10 @@ if grep -R -Eq '^[[:space:]]+role:' "$tmp/disabled"; then
 fi
 [[ -f "$tmp/disabled/deploy-worker-1.yml" && -f "$tmp/disabled/deploy-worker-2.yml" ]]
 [[ -f "$tmp/disabled/foundation-upgrade-worker-2.yml" && -f "$tmp/disabled/runner-upgrade-worker-2.yml" && -f "$tmp/disabled/rollback-leader.yml" ]]
+[[ -f "$tmp/disabled/singleton-stage-pigeon.yml" && -f "$tmp/disabled/singleton-switch-pigeon.yml" ]]
+[[ -f "$tmp/disabled/singleton-stop-pigeon-worker-1.yml" && -f "$tmp/disabled/singleton-stop-pigeon-worker-2.yml" ]]
 [[ ! -e "$tmp/disabled/singleton-stage-observer.yml" && ! -e "$tmp/disabled/singleton-switch-observer.yml" ]]
+grep -Fq 'DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit foundation-upgrade' "$tmp/disabled/foundation-upgrade-leader.yml"
 grep -Fq $'depends_on:\n  - foundation-upgrade-leader' "$tmp/disabled/foundation-upgrade-worker-1.yml"
 grep -Fq $'depends_on:\n  - cluster-reconcile-leader' "$tmp/disabled/cluster-reconcile-worker-1.yml"
 grep -Fq '/var/run/docker.sock:/var/run/docker.sock' "$tmp/disabled/deploy-smoke.yml"

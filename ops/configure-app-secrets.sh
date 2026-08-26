@@ -35,6 +35,7 @@ policy_rel="$(value POLICY_FILE)"
 runtime_rel="$(value RUNTIME_ENV_FILE)"
 target_key="$(value TARGET_NODE_KEY)"
 secret_keys="$(value SECRET_KEYS)"
+secret_min_lengths="$(value SECRET_MIN_LENGTHS)"
 [[ "$(value PLACEMENT)" == single-follower ]] || {
 	printf '%s does not declare singleton placement\n' "$app_id" >&2
 	exit 1
@@ -73,12 +74,37 @@ install -d -m 700 "$(dirname "$runtime")"
 runtime_tmp="$(mktemp "$(dirname "$runtime")/.runtime.XXXXXX")"
 trap 'rm -f -- "$runtime_tmp"' EXIT
 [[ -f "$runtime" ]] && cp "$runtime" "$runtime_tmp"
+secret_min_length() {
+	local wanted="$1" rule key min_length
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		min_length="${rule#*:}"
+		[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$min_length" =~ ^[1-9][0-9]*$ ]] || {
+			printf 'invalid SECRET_MIN_LENGTHS entry: %s\n' "$rule" >&2
+			exit 1
+		}
+		if [[ "$key" == "$wanted" ]]; then
+			printf '%s\n' "$min_length"
+			return 0
+		fi
+	done < <(printf '%s\n' "$secret_min_lengths" | tr ',' '\n')
+	printf '1\n'
+}
 valid_secret_value() {
-	local key="$1" value="$2"
+	local key="$1" value="$2" min_length="${3:-1}"
 	[[ -n "$value" ]] || {
 		printf '%s is required\n' "$key" >&2
 		return 1
 	}
+	[[ "$min_length" =~ ^[1-9][0-9]*$ ]] || {
+		printf 'invalid minimum length for %s: %s\n' "$key" "$min_length" >&2
+		return 1
+	}
+	if ((${#value} < min_length)); then
+		printf '%s must contain at least %s characters\n' "$key" "$min_length" >&2
+		return 1
+	fi
 	# Avoid a Bash here-string: its implicit newline would reject every value.
 	if printf '%s' "$value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then
 		printf '%s contains control characters; provide a clean replacement\n' "$key" >&2
@@ -92,12 +118,13 @@ while IFS= read -r key; do
 		exit 1
 	}
 	secret_value="${!key:-}"
+	min_length="$(secret_min_length "$key")"
 	if [[ -z "$secret_value" && -f "$runtime" ]]; then
 		secret_value="$(sed -n "s/^${key}=//p" "$runtime" | tail -n1)"
 	fi
 	while :; do
 		if [[ -n "$secret_value" ]]; then
-			if valid_secret_value "$key" "$secret_value"; then break; fi
+			if valid_secret_value "$key" "$secret_value" "$min_length"; then break; fi
 			[[ -t 0 ]] || {
 				printf '%s is invalid; provide a clean replacement through the environment\n' "$key" >&2
 				exit 1
@@ -109,7 +136,7 @@ while IFS= read -r key; do
 			exit 1
 		fi
 		printf '\n'
-		if valid_secret_value "$key" "$secret_value"; then break; fi
+		if valid_secret_value "$key" "$secret_value" "$min_length"; then break; fi
 		printf 'Please enter %s again.\n' "$key" >&2
 	done
 	tmp_key="$(mktemp "$(dirname "$runtime")/.key.XXXXXX")"

@@ -290,11 +290,19 @@ clear_placeholder() {
 	case "$value" in replace-with-* | bootstrap-pending | example.invalid | *'<'* | *'>'* | *example.* | *your-upstash* | *account-id*) printf -v "$key" '%s' '' ;; esac
 }
 valid_input_value() {
-	local key="$1" value="$2"
+	local key="$1" value="$2" min_length="${3:-1}"
 	[[ -n "$value" ]] || {
 		printf '%s is required and cannot be empty\n' "$key" >&2
 		return 1
 	}
+	[[ "$min_length" =~ ^[1-9][0-9]*$ ]] || {
+		printf 'invalid minimum length for %s: %s\n' "$key" "$min_length" >&2
+		return 1
+	}
+	if ((${#value} < min_length)); then
+		printf '%s must contain at least %s characters\n' "$key" "$min_length" >&2
+		return 1
+	fi
 	# Secrets and connection strings must never contain C0 controls or DEL.
 	# In particular, an arrow key pasted into a prompt can introduce ESC.
 	# Use printf rather than a here-string: Bash here-strings append a newline,
@@ -305,11 +313,11 @@ valid_input_value() {
 	fi
 }
 prompt_required() {
-	local key="$1" prompt="$2" secret="${3:-0}" value
+	local key="$1" prompt="$2" secret="${3:-0}" min_length="${4:-1}" value
 	while :; do
 		value="${!key:-}"
 		if [[ -n "$value" ]]; then
-			if valid_input_value "$key" "$value"; then
+			if valid_input_value "$key" "$value" "$min_length"; then
 				return 0
 			fi
 			[[ -t 0 ]] || die "$key is invalid; provide a clean replacement through the environment or shared secret bundle"
@@ -323,13 +331,27 @@ prompt_required() {
 		else
 			if ! read -r -p "$prompt: " value; then die "$key input was not received"; fi
 		fi
-		if valid_input_value "$key" "$value"; then
+		if valid_input_value "$key" "$value" "$min_length"; then
 			printf -v "$key" '%s' "$value"
 			return 0
 		fi
 		printf 'Please enter %s again.\n' "$key" >&2
 		test -n "$value" || printf 'The value cannot be empty.\n' >&2
 	done
+}
+manifest_secret_min_length() {
+	local manifest="$1" wanted="$2" rule key min_length
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		min_length="${rule#*:}"
+		[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$min_length" =~ ^[1-9][0-9]*$ ]] || die "invalid SECRET_MIN_LENGTHS entry in $manifest: $rule"
+		if [[ "$key" == "$wanted" ]]; then
+			printf '%s\n' "$min_length"
+			return 0
+		fi
+	done < <(sed -n 's/^SECRET_MIN_LENGTHS=//p' "$manifest" | tail -n1 | tr ',' '\n')
+	printf '1\n'
 }
 prompt_observer_ingest_token() {
 	while :; do
@@ -749,7 +771,8 @@ for manifest in "$SOURCE_ROOT"/apps/*/manifest.env; do
 		[[ -n "$secret_key" ]] || continue
 		load_runtime_value "$secret_key" "$runtime_file"
 		clear_placeholder "$secret_key"
-		prompt_required "$secret_key" "$app_id $secret_key" 1
+		secret_min_length="$(manifest_secret_min_length "$manifest" "$secret_key")"
+		prompt_required "$secret_key" "$app_id $secret_key" 1 "$secret_min_length"
 	done
 	IFS="$old_ifs"
 done

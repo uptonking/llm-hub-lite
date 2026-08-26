@@ -94,6 +94,8 @@ cat >"$config_root/node.env" <<'EOF'
 NODE_ID=leader
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi-origin.example.invalid
 NODE_CPAPI_ORIGIN_HOST=worker2-cpapi-origin.example.invalid
+LEADER_PUBLIC_IP=192.0.2.10
+UNMANAGED_RUNTIME_VALUE=must-not-survive
 EOF
 cat >"$tmp/config.env" <<EOF
 APP_ROOT=$app_root
@@ -130,10 +132,36 @@ current_release="$(readlink "$platform_root/control/current")"
 [[ "$current_release" == "$platform_root/control/releases/$sha1" ]]
 grep -qx 'sync apps' "$tmp/platformctl.log"
 grep -qx 'snapshot pre-app' "$tmp/backup.log"
+grep -qx 'NODE_PIGEON_ORIGIN_HOST=leader-pigeon-origin.aichorage.de' "$config_root/node.env"
+grep -qx 'LEADER_PUBLIC_IP=192.0.2.10' "$config_root/node.env"
+if grep -q '^UNMANAGED_RUNTIME_VALUE=' "$config_root/node.env"; then
+	printf 'node inventory sync retained an undeclared runtime key\n' >&2
+	exit 1
+fi
 if grep -Eq '^pull (calciumion/new-api|eceasy/cli-proxy-api)' "$tmp/docker.log"; then
 	printf 'application deployment pulled an image for a disabled consumer\n' >&2
 	exit 1
 fi
+
+# A failed inventory reconciliation must restore both the release pointer and
+# the complete previous runtime node file, including the private Leader IP.
+cp "$config_root/node.env" "$tmp/node.before-failed-reconcile"
+sed 's/^NODE_CPAPI_ORIGIN_HOST=.*/NODE_CPAPI_ORIGIN_HOST=changed-cpapi-origin.aichorage.test/' \
+	"$work/config/cluster/nodes/leader.env" >"$tmp/leader.env.changed"
+mv "$tmp/leader.env.changed" "$work/config/cluster/nodes/leader.env"
+git -C "$work" add config/cluster/nodes/leader.env
+git -C "$work" -c commit.gpgsign=false commit --quiet -m node-inventory-change
+git -C "$work" push --quiet origin HEAD:main
+sha_node="$(git -C "$work" rev-parse HEAD)"
+if FAIL_SYNC=1 bash "$repo_root/ops/deploy-controller.sh" cluster-reconcile "$sha_node" >"$tmp/deploy-fail-node-sync.log" 2>&1; then
+	printf 'expected node inventory reconciliation failure\n' >&2
+	exit 1
+fi
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha1" ]]
+cmp -s "$tmp/node.before-failed-reconcile" "$config_root/node.env"
+FAIL_SYNC=0 bash "$repo_root/ops/deploy-controller.sh" cluster-reconcile "$sha_node" >/dev/null
+grep -qx 'NODE_CPAPI_ORIGIN_HOST=changed-cpapi-origin.aichorage.test' "$config_root/node.env"
+grep -qx 'LEADER_PUBLIC_IP=192.0.2.10' "$config_root/node.env"
 
 git -C "$work" rm --quiet -r apps/aichorouter
 git -C "$work" -c commit.gpgsign=false commit --quiet -m remove-singleton

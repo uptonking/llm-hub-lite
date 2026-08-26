@@ -8,6 +8,8 @@ bash -n "$script"
 grep -Fq 'DELETE LLM-HUB-LITE DATA' "$script"
 grep -Fq 'docker stop --time 90' "$script"
 grep -Fq 'log "deleting managed path: $path"' "$script"
+grep -Fq 'app-pigeon' "$script"
+grep -Fq 'app-pigeon_private' "$script"
 if grep -Eq 'local -n|declare -n' "$script"; then
 	printf 'cleanup must remain compatible with Bash 3.2\n' >&2
 	exit 1

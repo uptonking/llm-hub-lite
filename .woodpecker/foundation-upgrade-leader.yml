@@ -31,4 +31,4 @@ steps:
       - /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro
       - /usr/local/bin/upgrade-runner:/usr/local/bin/upgrade-runner:ro
     commands:
-      - /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"
+      - DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"

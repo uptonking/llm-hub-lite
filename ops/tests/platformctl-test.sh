@@ -25,6 +25,10 @@ cat >"$tmp/config/aichorouter.env" <<'EOF'
 AICHOROUTER_SESSION_SECRET=test-session-secret
 AICHOROUTER_CRYPTO_SECRET=test-crypto-secret
 EOF
+cat >"$tmp/config/pigeon.env" <<'EOF'
+PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef
+PIGEON_LOGIN_PASSWORD=test-pigeon-password
+EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi.example.invalid
@@ -32,6 +36,7 @@ NODE_CPAPI_ORIGIN_HOST=worker2-cpapi.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
+NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
@@ -45,6 +50,7 @@ case "$*" in
   *app-newapi*) printf 'newapi\n';;
   *app-cpapi*) printf 'cpapi\nhealth-probe\n';;
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
+  *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
 esac
 exit 0
 EOF
@@ -153,6 +159,29 @@ if grep -Fq 'app-librechat' "$tmp/compose.log"; then
 	printf 'singleton app scope reconciled an unrelated consumer\n' >&2
 	exit 1
 fi
+# A reviewed foundation upgrade must preserve installed singleton routes while
+# withholding a brand-new singleton. It must not require the new app's runtime
+# secrets or an app-image key that is not installed until singleton staging.
+cp "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy" "$tmp/cpapi-route.original"
+rm -f "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" "$tmp/config/pigeon.env"
+sed '/^PIGEON_IMAGE=/d' "$tmp/config/images.apps.prod.env" >"$tmp/config/images.apps.prod.env.tmp"
+mv "$tmp/config/images.apps.prod.env.tmp" "$tmp/config/images.apps.prod.env"
+cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
+PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate
+cmp -s "$tmp/cpapi-route.original" "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
+[[ ! -e "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" ]]
+cp "$repo_root/ops/images.apps.prod.env" "$tmp/config/images.apps.prod.env"
+cat >"$tmp/config/pigeon.env" <<'EOF'
+PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef
+PIGEON_LOGIN_PASSWORD=test-pigeon-password
+EOF
+: >"$tmp/compose.log"
+PLATFORM_ONLY_APP_ID=pigeon bash "$repo_root/ops/platformctl.sh" validate
+grep -Fq 'app-pigeon' "$tmp/compose.log"
+grep -Fq 'reverse_proxy pigeon:5000' "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy"
+cp "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" "$tmp/pigeon-route.original"
+PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate
+cmp -s "$tmp/pigeon-route.original" "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy"
 cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
 bash "$repo_root/ops/platformctl.sh" validate
 cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
@@ -210,9 +239,13 @@ cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
 bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'librechat-client:80' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 bash "$repo_root/ops/platformctl.sh" smoke "app:$tmp/control/current/apps/librechat"
+# Re-establish the Leader's installed route before simulating a target-policy
+# change. Earlier checks intentionally reuse this fixture as a Follower and
+# therefore replace its staged Caddy route with the Follower template.
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+bash "$repo_root/ops/platformctl.sh" validate
 cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.original"
 sed 's/^CPAPI_TARGET_NODE_ID=.*/CPAPI_TARGET_NODE_ID=worker-2/' "$tmp/cpapi-policy.original" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
 mkdir -p "$tmp/config/singleton-state"
 printf 'worker-1\n' >"$tmp/config/singleton-state/cpapi.previous-target"
 PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate

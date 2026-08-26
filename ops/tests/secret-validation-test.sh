@@ -12,6 +12,10 @@ for validator_name in valid_input_value valid_secret_value; do
 		set -Eeuo pipefail
 		eval "$VALIDATOR"
 		"$VALIDATOR_NAME" test-value valid
+		if "$VALIDATOR_NAME" test-value short 12; then
+			exit 1
+		fi
+		"$VALIDATOR_NAME" test-value sufficiently-long 12
 		bad_value="$(printf "bad\\033value")"
 		if "$VALIDATOR_NAME" test-value "$bad_value"; then
 			exit 1
@@ -45,5 +49,22 @@ CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
 	"$repo_root/ops/configure-app-secrets.sh" aichorouter >/dev/null
 grep -qx 'AICHOROUTER_SESSION_SECRET=valid-session' "$tmp/config/aichorouter.env"
 grep -qx 'AICHOROUTER_CRYPTO_SECRET=valid-crypto' "$tmp/config/aichorouter.env"
+
+pigeon_target="$(sed -n 's/^PIGEON_TARGET_NODE_ID=//p' "$repo_root/config/cluster/apps/pigeon.policy" | tail -n1)"
+printf 'NODE_ID=%s\n' "$pigeon_target" >"$tmp/node.env"
+if output="$(CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	PIGEON_SECRET_KEY=too-short PIGEON_LOGIN_PASSWORD=also-too-short \
+	"$repo_root/ops/configure-app-secrets.sh" pigeon 2>&1)"; then
+	printf 'weak Pigeon secrets were accepted\n' >&2
+	exit 1
+fi
+grep -Fq 'must contain at least 32 characters' <<<"$output"
+
+CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef \
+	PIGEON_LOGIN_PASSWORD=strong-login-password \
+	"$repo_root/ops/configure-app-secrets.sh" pigeon >/dev/null
+grep -qx 'PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef' "$tmp/config/pigeon.env"
+grep -qx 'PIGEON_LOGIN_PASSWORD=strong-login-password' "$tmp/config/pigeon.env"
 
 printf 'secret validation tests passed\n'

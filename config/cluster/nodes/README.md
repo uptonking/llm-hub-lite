@@ -5,9 +5,10 @@ this directory.
 Each node must define `NODE_ID` and the origin host keys declared by the active
 app manifests. The Leader uses those origin fields from every Follower
 descriptor to render Caddy routes. LibreChat and legacy New API use
-active-active health-checked upstreams. Aichorouter and CPAPI are singleton
-services: each target is stored in its app policy, and only that Follower is
-deployed. Their local state is intentionally not replicated. OpenObserve is a
+active-active health-checked upstreams. Aichorouter, CPAPI, and Pigeon are
+singleton services: each target is stored in its app policy, and only that
+Follower is deployed. Pigeon defaults to worker-2. Their local state is
+intentionally not replicated. OpenObserve is a
 Leader foundation service. Every node runs its read-only Docker socket proxy
 and Vector shipper; each shipper forwards platform-labelled container logs to
 the Leader's `observer-ingest` endpoint and keeps a bounded transient buffer
