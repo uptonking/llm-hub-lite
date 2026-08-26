@@ -7,6 +7,7 @@ PLATFORM_ROOT="${PLATFORM_ROOT:-/opt/platform}"
 CONFIG_ROOT="${CONFIG_ROOT:-/etc/llm-hub-lite}"
 CONTROL_ROOT="${CONTROL_ROOT:-$PLATFORM_ROOT/control}"
 FOUNDATION_ROOT="${FOUNDATION_ROOT:-$PLATFORM_ROOT/foundation}"
+OBSERVER_ENV_FILE="${OBSERVER_ENV_FILE:-$FOUNDATION_ROOT/env/observer.env}"
 APP_ENV="${APP_ENV:-$APP_ROOT/shared/.env.prod}"
 NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
 CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster/policy.env}"
@@ -48,6 +49,7 @@ env_value() {
 	[[ -f "$file" ]] || return 0
 	sed -n "s/^${key}=//p" "$file" | tail -n1
 }
+observer_env_value() { env_value "$1" "$OBSERVER_ENV_FILE"; }
 truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
 RESTIC_REMOTE_ENV_FILE="${RESTIC_REMOTE_ENV_FILE:-$(env_value RESTIC_REMOTE_ENV_FILE)}"
 RESTIC_REMOTE_ENV_FILE="${RESTIC_REMOTE_ENV_FILE:-$CONFIG_ROOT/restic-remote.env}"
@@ -118,6 +120,20 @@ LIBRECHAT_MONGO_BACKUP_NODE_ID="${LIBRECHAT_MONGO_BACKUP_NODE_ID:-worker-1}"
 WOODPECKER_DATA_ROOT="${WOODPECKER_DATA_ROOT:-$PLATFORM_ROOT/woodpecker/data}"
 BESZEL_DATA_ROOT="${BESZEL_DATA_ROOT:-$PLATFORM_ROOT/beszel/hub}"
 CADDY_DATA_ROOT="${CADDY_DATA_ROOT:-$PLATFORM_ROOT/caddy}"
+OBSERVER_DATA_ROOT="${OBSERVER_DATA_ROOT:-$(observer_env_value OBSERVER_DATA_ROOT)}"
+OBSERVER_DATA_ROOT="${OBSERVER_DATA_ROOT:-$PLATFORM_ROOT/observer}"
+safe_observer_data_root() {
+	case "$1" in
+	"$PLATFORM_ROOT"/*)
+		[[ "$1" != "$PLATFORM_ROOT/" && "$1" != *..* && "$1" != *$'\n'* && "$1" != *$'\r'* ]]
+		;;
+	*) return 1 ;;
+	esac
+}
+safe_observer_data_root "$OBSERVER_DATA_ROOT" || {
+	printf 'OBSERVER_DATA_ROOT must be a non-root path below %s: %s\n' "$PLATFORM_ROOT" "$OBSERVER_DATA_ROOT" >&2
+	exit 1
+}
 APPS_ROOT="${APPS_ROOT:-$CONTROL_ROOT/current/apps}"
 remote_enabled() { [[ "$RESTIC_REMOTE_ENABLED" == true || "$RESTIC_REMOTE_ENABLED" == TRUE || "$RESTIC_REMOTE_ENABLED" == 1 ]]; }
 remote_required() { [[ "$PRODUCTION_REQUIRE_REMOTE_BACKUP" == true || "$PRODUCTION_REQUIRE_REMOTE_BACKUP" == TRUE || "$PRODUCTION_REQUIRE_REMOTE_BACKUP" == 1 ]]; }
@@ -282,6 +298,7 @@ backup_sqlite() {
 	for attempt in 1 2 3 4 5; do
 		rm -f -- "$target"
 		if sqlite3 -cmd '.timeout 30000' "$source" ".backup '$target'" &&
+			[[ -f "$target" ]] &&
 			sqlite3 "$target" 'PRAGMA integrity_check;' | grep -qx ok; then return 0; fi
 		delay=$((attempt * 2))
 		printf 'SQLite backup retry %s/5 for %s in %s seconds\n' "$attempt" "$source" "$delay" >&2
@@ -368,6 +385,10 @@ snapshot() {
 		done
 	done < <(descriptor_ids)
 	backup_sqlite "$WOODPECKER_DATA_ROOT/woodpecker.sqlite" "$STAGE_ROOT/sqlite/woodpecker.sqlite"
+	# OpenObserve keeps its metadata catalog in SQLite beneath the mounted data
+	# directory.  Back it up through SQLite's online backup API rather than
+	# copying the live database/WAL files as part of the raw Observer tree.
+	backup_sqlite "$OBSERVER_DATA_ROOT/data/db/metadata.sqlite" "$STAGE_ROOT/sqlite/observer-metadata.sqlite"
 	backup_postgres
 	backup_librechat_mongo
 	: >"$STAGE_ROOT/sqlite/beszel-map.tsv"
@@ -387,7 +408,7 @@ snapshot() {
 	paths=(
 		"$DATA_ROOT" "$APP_ROOT/shared/.env.prod" "$APP_ROOT/shared/runtime"
 		"$APP_ROOT/current" "$APP_ROOT/previous" "$CONTROL_ROOT/current" "$CONTROL_ROOT/previous"
-		"$CONTROL_ROOT/releases" "$CONTROL_ROOT/descriptors" "$FOUNDATION_ROOT" "$CADDY_DATA_ROOT"
+		"$CONTROL_ROOT/releases" "$CONTROL_ROOT/descriptors" "$FOUNDATION_ROOT" "$CADDY_DATA_ROOT" "$OBSERVER_DATA_ROOT"
 		"$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel" "$CONFIG_ROOT/platform.env"
 		"$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env"
 		"$CONFIG_ROOT/images.apps.previous.env" "$CONFIG_ROOT/images.foundation.previous.env"
@@ -426,6 +447,8 @@ snapshot() {
 		--exclude "$WOODPECKER_DATA_ROOT/**/*.db" --exclude "$WOODPECKER_DATA_ROOT/**/*.db-*" --exclude "$WOODPECKER_DATA_ROOT/**/*.sqlite" --exclude "$WOODPECKER_DATA_ROOT/**/*.sqlite-*"
 		--exclude "$BESZEL_DATA_ROOT/*.db" --exclude "$BESZEL_DATA_ROOT/*.db-*" --exclude "$BESZEL_DATA_ROOT/*.sqlite" --exclude "$BESZEL_DATA_ROOT/*.sqlite-*"
 		--exclude "$BESZEL_DATA_ROOT/**/*.db" --exclude "$BESZEL_DATA_ROOT/**/*.db-*" --exclude "$BESZEL_DATA_ROOT/**/*.sqlite" --exclude "$BESZEL_DATA_ROOT/**/*.sqlite-*"
+		--exclude "$OBSERVER_DATA_ROOT/data/db/metadata.sqlite*"
+		--exclude "$OBSERVER_DATA_ROOT/collector-buffer"
 	)
 	if ((${#ephemeral_excludes[@]} > 0)); then excludes+=("${ephemeral_excludes[@]}"); fi
 	check_remote_repository

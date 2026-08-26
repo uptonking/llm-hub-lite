@@ -82,6 +82,8 @@ image_required() {
 	WOODPECKER_AGENT_IMAGE) foundation_enabled woodpecker-worker || foundation_enabled woodpecker-deployer ;;
 	BESZEL_HUB_IMAGE) foundation_enabled beszel-controller ;;
 	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) foundation_enabled beszel-worker ;;
+	OBSERVER_IMAGE | OBSERVER_HEALTH_PROBE_IMAGE) foundation_enabled observer-controller ;;
+	OBSERVER_LOG_PROXY_IMAGE | OBSERVER_LOG_SHIPPER_IMAGE) foundation_enabled observer-collector ;;
 	NEW_API_IMAGE) app_enabled_for_image newapi ;;
 	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) app_enabled_for_image librechat ;;
 	*)
@@ -164,6 +166,24 @@ verify_target() {
 	git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$sha" "refs/remotes/origin/$MAIN_BRANCH" || die 'target is not reachable from main'
 }
 
+verify_fast_forward() {
+	local old_release="$1" sha="$2" mode="$3" old_sha
+	[[ "$mode" == rollback || -z "$old_release" ]] && return 0
+	old_sha="$(basename "$old_release")"
+	if ! git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$old_sha" "$sha"; then
+		log "deployment ordering guard: current=$old_sha target=$sha mode=$mode"
+		die 'target commit is older than the installed release; retry the newest Woodpecker build (or use the explicit rollback workflow)'
+	fi
+}
+
+scope_failure() {
+	local old_sha="$1" new_sha="$2" mode="$3" path
+	log "deployment scope rejected: mode=$mode old=$old_sha new=$new_sha"
+	while IFS= read -r path; do
+		[[ -n "$path" ]] && log "changed path: $path"
+	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
+}
+
 verify_app_scope() {
 	local old_release="$1" new_release="$2" mode="${3:-app}" old_sha new_sha path
 	[[ -n "$old_release" ]] || return 0
@@ -171,25 +191,65 @@ verify_app_scope() {
 	new_sha="$(basename "$new_release")"
 	while IFS= read -r path; do
 		case "$path" in
-		apps/* | config/** | .woodpecker/** | README.md | LICENSE.md | ops/generate-woodpecker-workflows.sh) ;;
+		compose/foundation/** | ops/images.foundation.prod.env | ops/foundation/** | ops/systemd/** | ops/*.sh | ops/deploy-runner/** | ops/tests/**)
+			[[ "$mode" == foundation || "$mode" == cluster-reconcile || "$mode" == rollback ]] || {
+				scope_failure "$old_sha" "$new_sha" "$mode"
+				die "foundation/control-plane change requires the reviewed foundation workflow: $path"
+			}
+			continue
+			;;
+		esac
+		case "$path" in
+		apps/* | config/** | .woodpecker/** | README.md | LICENSE.md | .env.prod.example | .env.dev.example | ops/generate-woodpecker-workflows.sh) ;;
 		ops/images.apps.prod.env) ;;
-		*) die "application deployment contains foundation/control-plane change: $path; use the reviewed foundation workflow" ;;
+		*)
+			scope_failure "$old_sha" "$new_sha" "$mode"
+			die "application deployment contains foundation/control-plane change: $path; use the reviewed foundation workflow"
+			;;
 		esac
 		case "$path" in
 		config/cluster/policy.env | config/cluster/nodes/*)
-			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || die "cluster policy or inventory change requires the cluster-reconcile workflow: $path"
+			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || {
+				scope_failure "$old_sha" "$new_sha" "$mode"
+				die "cluster policy or inventory change requires the cluster-reconcile workflow: $path"
+			}
 			;;
 		config/cluster/apps/*)
-			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || die "cluster app policy requires its dedicated reconciliation workflow: $path"
+			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || {
+				scope_failure "$old_sha" "$new_sha" "$mode"
+				die "cluster app policy requires its dedicated reconciliation workflow: $path"
+			}
 			;;
 		config/cluster/*)
+			scope_failure "$old_sha" "$new_sha" "$mode"
 			die "unsupported cluster configuration path in application deployment: $path"
 			;;
 		esac
 		if [[ "$path" == ops/images.apps.prod.env && "$mode" != app-upgrade && "$mode" != singleton-stage && "$mode" != singleton-switch && "$mode" != singleton-stop ]]; then
+			scope_failure "$old_sha" "$new_sha" "$mode"
 			die "application image manifest changes require the app-upgrade or singleton workflow: $path"
 		fi
 	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
+}
+
+verify_singleton_scope() {
+	local old_release="$1" new_release="$2" mode="$3" app="${SINGLETON_APP_ID:-}" path
+	[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || return 0
+	[[ -n "$app" ]] || die 'singleton deployment is missing SINGLETON_APP_ID'
+	[[ -f "$new_release/apps/$app/manifest.env" ]] || die "singleton application is not present in target release: $app"
+	# There is no previous release to diff during the first deployment. The
+	# target manifest check above is sufficient; every file is new by definition.
+	[[ -n "$old_release" ]] || return 0
+	while IFS= read -r path; do
+		case "$path" in
+		apps/$app/** | config/cluster/apps/$app.policy | ops/images.apps.prod.env | .env.prod.example | .env.dev.example | \
+			.woodpecker/singleton-stage-$app.yml | .woodpecker/singleton-switch-$app.yml | .woodpecker/singleton-stop-$app-*.yml) ;;
+		*)
+			log "singleton scope rejected: app=$app mode=$mode path=$path"
+			die "singleton workflow for $app cannot apply unrelated path: $path"
+			;;
+		esac
+	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$(basename "$old_release")" "$(basename "$new_release")")
 }
 singleton_previous_target() {
 	local release="$1" app="$2" state_file
@@ -265,7 +325,7 @@ validate_release() {
 	cp -a "$release/config/cluster/." "$control_validate/config/cluster/"
 	install -m 600 "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" "$control_validate/node.env" 2>/dev/null || true
 	install -m 600 "$release/compose/foundation/caddy.yml" "$foundation_validate/caddy.yml"
-	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml; do
+	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
 		install -m 600 "$release/compose/foundation/$file" "$foundation_validate/$file"
 	done
 	if ! CONTROL_ROOT="$control_validate" APPS_ROOT="$release/apps" RUNTIME_ROOT="$runtime" \
@@ -301,19 +361,24 @@ install_foundation_files() {
 	local release="$1"
 	install -d -m 700 "$FOUNDATION_ROOT/env"
 	install -m 600 "$release/compose/foundation/caddy.yml" "$FOUNDATION_ROOT/caddy.yml"
-	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml; do
+	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
 		install -m 600 "$release/compose/foundation/$file" "$FOUNDATION_ROOT/$file"
 	done
 }
 
 refresh_descriptor_registry() {
-	local release="$1" descriptor id registry="$CONTROL_ROOT/descriptors"
+	local release="$1" descriptor id registry="$CONTROL_ROOT/descriptors" old
 	install -d -m 700 "$registry"
 	for descriptor in "$release"/apps/*; do
 		[[ -f "$descriptor/manifest.env" ]] || continue
 		id="$(basename "$descriptor")"
 		install -d -m 700 "$registry/$id"
 		install -m 600 "$descriptor/manifest.env" "$registry/$id/manifest.env"
+	done
+	for old in "$registry"/*; do
+		[[ -f "$old/manifest.env" ]] || continue
+		id="${old##*/}"
+		[[ -f "$release/apps/$id/manifest.env" ]] || rm -rf -- "$old"
 	done
 }
 
@@ -351,6 +416,7 @@ reconcile() {
 		FOUNDATION_ENV_ROOT="$FOUNDATION_ROOT/env" RUNTIME_ROOT="$APP_ROOT/shared/runtime" \
 		NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" \
 		CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster/policy.env}" \
+		PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
 		PLATFORM_LOCK_HELD=1 \
 		"$PLATFORMCTL_SCRIPT" sync "${DEPLOY_SYNC_SCOPE:-apps}"
@@ -363,6 +429,7 @@ smoke_apps() {
 		id="$(basename "$descriptor")"
 		placement="$(sed -n 's/^PLACEMENT=//p' "$descriptor/manifest.env" | tail -n1)"
 		[[ "$placement" == follower || "$placement" == single-follower ]] || continue
+		[[ -z "${PLATFORM_ONLY_APP_ID:-}" || "$id" == "$PLATFORM_ONLY_APP_ID" ]] || continue
 		[[ "${DEPLOY_SKIP_SINGLETONS:-0}" != 1 || "$placement" != single-follower ]] || continue
 		policy_file="$(sed -n 's/^POLICY_FILE=//p' "$descriptor/manifest.env" | tail -n1)"
 		[[ "$(sed -n 's/^ENABLED=//p' "$CONTROL_ROOT/current/config/$policy_file" | tail -n1)" != false ]] || continue
@@ -399,6 +466,7 @@ apply() {
 	sha_valid "$sha"
 	exec 9>"$PLATFORM_LOCK_FILE"
 	flock -w 300 9 || die 'timed out waiting for deployment lock'
+	log "deployment start: node=$(node_value NODE_ID) role=$(runtime_node_role) mode=$mode sha=$sha workflow=${DEPLOY_WORKFLOW:-unknown} pipeline=${DEPLOY_PIPELINE:-unknown} build=${DEPLOY_BUILD:-unknown}"
 	ensure_mirror
 	if [[ "$mode" == rollback ]]; then
 		git -C "$SOURCE_MIRROR" cat-file -e "$sha^{commit}" || die 'rollback target is not retained in the local mirror'
@@ -409,6 +477,7 @@ apply() {
 	release="$(prepare_release "$sha")"
 	validate_release "$release"
 	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
+	verify_fast_forward "$old_current" "$sha" "$mode"
 	old_previous="$(readlink "$PREVIOUS" 2>/dev/null || true)"
 	old_app_previous="$(readlink "$APP_PREVIOUS" 2>/dev/null || true)"
 	record_singleton_transitions "$old_current" "$release"
@@ -416,12 +485,13 @@ apply() {
 		previous_singleton_target="$(singleton_previous_target "$old_current" "$SINGLETON_APP_ID")"
 	fi
 	[[ "$mode" == app || "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] && verify_app_scope "$old_current" "$release" "$mode"
+	verify_singleton_scope "$old_current" "$release" "$mode"
 	backup "pre-$mode"
 	stop_removed_projects "$old_current" "$release"
 	tx="$(mktemp -d "$APP_ROOT/shared/runtime/transaction.XXXXXX")"
 	cp -f "$APP_IMAGE_ENV" "$tx/images.apps" 2>/dev/null || true
 	cp -f "$FOUNDATION_IMAGE_ENV" "$tx/images.foundation" 2>/dev/null || true
-	for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml; do cp -f "$FOUNDATION_ROOT/$file" "$tx/$file" 2>/dev/null || true; done
+	for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do cp -f "$FOUNDATION_ROOT/$file" "$tx/$file" 2>/dev/null || true; done
 	[[ -d "$CONTROL_ROOT/descriptors" ]] && cp -a "$CONTROL_ROOT/descriptors" "$tx/descriptors"
 	if [[ -n "$old_current" ]]; then
 		atomic_link "$old_current" "$PREVIOUS"
@@ -475,7 +545,7 @@ apply() {
 	if [[ -f "$tx/images.apps" ]]; then install -m 600 "$tx/images.apps" "$APP_IMAGE_ENV"; else rm -f -- "$APP_IMAGE_ENV"; fi
 	if [[ -f "$tx/images.foundation" ]]; then install -m 600 "$tx/images.foundation" "$FOUNDATION_IMAGE_ENV"; fi
 	if ((foundation_changed)); then
-		for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml; do
+		for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
 			[[ -f "$tx/$file" ]] && install -m 600 "$tx/$file" "$FOUNDATION_ROOT/$file"
 		done
 	fi

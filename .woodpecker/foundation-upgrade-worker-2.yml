@@ -14,7 +14,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-foundation
+  group: llm-hub-lite-deployment
 
 steps:
   foundation:

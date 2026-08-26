@@ -121,11 +121,32 @@ app_active() {
 	esac
 }
 app_route_active() { [[ "$(app_placement "$1")" == follower || "$(app_placement "$1")" == single-follower ]] && { [[ "$role" == leader ]] || app_active "$1"; } && [[ "$(app_policy_value "$1" ENABLED)" != false ]]; }
-foundation_file() { case "$1" in caddy) echo caddy.yml ;; woodpecker-controller) echo woodpecker-controller.yml ;; woodpecker-worker) echo woodpecker-worker.yml ;; woodpecker-deployer) echo woodpecker-deployer.yml ;; beszel-controller) echo beszel-controller.yml ;; beszel-worker) echo beszel-worker.yml ;; esac }
-foundation_env() { case "$1" in caddy) echo "$root/ops/foundation/caddy.env.example" ;; woodpecker-*) echo "$root/ops/foundation/woodpecker.env.example" ;; *) echo "$root/ops/foundation/beszel.env.example" ;; esac }
+foundation_file() {
+	case "$1" in
+	caddy) echo caddy.yml ;;
+	woodpecker-controller) echo woodpecker-controller.yml ;;
+	woodpecker-worker) echo woodpecker-worker.yml ;;
+	woodpecker-deployer) echo woodpecker-deployer.yml ;;
+	beszel-controller) echo beszel-controller.yml ;;
+	beszel-worker) echo beszel-worker.yml ;;
+	observer-controller) echo observer-controller.yml ;;
+	observer-collector) echo observer-collector.yml ;;
+	esac
+}
+foundation_env() {
+	case "$1" in
+	caddy) echo "$root/ops/foundation/caddy.env.example" ;;
+	woodpecker-*) echo "$root/ops/foundation/woodpecker.env.example" ;;
+	observer-*) echo "$root/ops/foundation/observer.env.example" ;;
+	*) echo "$root/ops/foundation/beszel.env.example" ;;
+	esac
+}
 fc() {
 	local n="$1"
-	command=("${compose_bin[@]}" --env-file "$env_file" --env-file "$(foundation_env "$n")" --env-file "$image_foundation" --env-file "$node_config" -f "$root/compose/foundation/$(foundation_file "$n")")
+	# Foundation examples provide defaults; the selected stack environment must
+	# override them for local development. Immutable image and node values remain
+	# authoritative through their later env files.
+	command=("${compose_bin[@]}" --env-file "$(foundation_env "$n")" --env-file "$env_file" --env-file "$image_foundation" --env-file "$node_config" -f "$root/compose/foundation/$(foundation_file "$n")")
 }
 ac() {
 	local d="$1" runtime_env
@@ -157,9 +178,20 @@ render() {
 		done < <(grep -oE '\{\$[A-Z0-9_]+\}' "$s/routes.d/$a.caddy" | sed 's/[^A-Z0-9_]//g' | sort -u)
 		unset CURRENT_ROUTE_DESCRIPTOR
 	done < <(app_dirs)
-	[[ "$role" == leader ]] || rm -f "$s/foundation-routes.d/woodpecker.caddy" "$s/foundation-routes.d/woodpecker-grpc.caddy" "$s/foundation-routes.d/beszel.caddy"
+	[[ "$role" == leader ]] || rm -f "$s/foundation-routes.d/woodpecker.caddy" "$s/foundation-routes.d/woodpecker-grpc.caddy" "$s/foundation-routes.d/beszel.caddy" "$s/foundation-routes.d/observer.caddy"
 }
-base_env() { export CADDY_CONFIG_ROOT="$runtime/config" CADDY_DATA_ROOT="$runtime/data" CADDY_HTTP_BIND="$bind" CADDY_HTTPS_BIND="$bind" PLATFORM_EDGE_NETWORK="$(get PLATFORM_EDGE_NETWORK)"; }
+base_env() {
+	export CADDY_CONFIG_ROOT="$runtime/config" CADDY_DATA_ROOT="$runtime/data" \
+		OBSERVER_DATA_ROOT="$runtime/data/observer" \
+		CADDY_HTTP_BIND="$bind" CADDY_HTTPS_BIND="$bind" PLATFORM_EDGE_NETWORK="$(get PLATFORM_EDGE_NETWORK)"
+}
+ensure_networks() {
+	local network
+	for network in "$(get PLATFORM_EDGE_NETWORK)" foundation-woodpecker_private foundation-observer_private; do
+		[[ -n "$network" ]] || continue
+		docker network inspect "$network" >/dev/null 2>&1 || docker network create "$network" >/dev/null
+	done
+}
 validate() {
 	base_env
 	render
@@ -179,6 +211,7 @@ validate() {
 }
 up() {
 	validate
+	ensure_networks
 	base_env
 	fc caddy
 	"${command[@]}" up -d --pull never --wait --wait-timeout 180
@@ -195,7 +228,7 @@ up() {
 }
 base_env
 case "$action" in validate) validate ;; up | restart) up ;; down)
-	for n in caddy woodpecker-controller woodpecker-worker woodpecker-deployer beszel-controller beszel-worker; do
+	for n in caddy woodpecker-controller woodpecker-worker woodpecker-deployer beszel-controller beszel-worker observer-controller observer-collector; do
 		fc "$n"
 		"${command[@]}" down --remove-orphans || true
 	done

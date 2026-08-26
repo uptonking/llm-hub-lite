@@ -7,6 +7,7 @@ PLATFORM_ROOT="${PLATFORM_ROOT:-/opt/platform}"
 CONFIG_ROOT="${CONFIG_ROOT:-/etc/llm-hub-lite}"
 CONTROL_ROOT="${CONTROL_ROOT:-$PLATFORM_ROOT/control}"
 FOUNDATION_ROOT="${FOUNDATION_ROOT:-$PLATFORM_ROOT/foundation}"
+OBSERVER_ENV_FILE="${OBSERVER_ENV_FILE:-$FOUNDATION_ROOT/env/observer.env}"
 APP_ENV="${APP_ENV:-$APP_ROOT/shared/.env.prod}"
 REPO="${RESTIC_REPOSITORY:-/opt/backups/llm-hub-lite/repository}"
 PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-$CONFIG_ROOT/restic-password}"
@@ -57,12 +58,15 @@ command -v sqlite3 >/dev/null 2>&1 || {
 	exit 1
 }
 env_value() {
-	local key="$1"
-	[[ -f "$APP_ENV" ]] || return 0
-	sed -n "s/^${key}=//p" "$APP_ENV" | tail -n1
+	local key="$1" file="${2:-$APP_ENV}"
+	[[ -f "$file" ]] || return 0
+	sed -n "s/^${key}=//p" "$file" | tail -n1
 }
+observer_env_value() { env_value "$1" "$OBSERVER_ENV_FILE"; }
 DATA_ROOT="${DATA_ROOT:-$(env_value DATA_ROOT)}"
 DATA_ROOT="${DATA_ROOT:-$APP_ROOT/shared/data/prod}"
+OBSERVER_DATA_ROOT="${OBSERVER_DATA_ROOT:-$(observer_env_value OBSERVER_DATA_ROOT)}"
+OBSERVER_DATA_ROOT="${OBSERVER_DATA_ROOT:-$PLATFORM_ROOT/observer}"
 NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
 NODE_ID="${NODE_ID:-$(sed -n 's/^NODE_ID=//p' "$NODE_CONFIG_FILE" 2>/dev/null | tail -n1)}"
 RESTORE_NODE_ID="${RESTORE_NODE_ID:-$NODE_ID}"
@@ -96,6 +100,17 @@ safe_target() { [[ "$1" == "$RESTORE_ROOT"/* && "$1" != *..* ]] || {
 	printf 'restore target must be below %s\n' "$RESTORE_ROOT" >&2
 	exit 1
 }; }
+
+safe_observer_data_root() {
+	case "$1" in
+	"$PLATFORM_ROOT"/*)
+		[[ "$1" != "$PLATFORM_ROOT/" && "$1" != *..* && "$1" != *$'\n'* && "$1" != *$'\r'* ]]
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
 
 validate_extract() {
 	local target="$1" database count=0
@@ -145,6 +160,10 @@ install_verified_databases() {
 		done <"$staged/map.tsv"
 	fi
 	[[ -f "$staged/woodpecker.sqlite" ]] && install -m 600 "$staged/woodpecker.sqlite" "$target$PLATFORM_ROOT/woodpecker/data/woodpecker.sqlite"
+	if [[ -f "$staged/observer-metadata.sqlite" ]]; then
+		install -d -m 700 "$target$OBSERVER_DATA_ROOT/data/db"
+		install -m 600 "$staged/observer-metadata.sqlite" "$target$OBSERVER_DATA_ROOT/data/db/metadata.sqlite"
+	fi
 	if [[ -f "$staged/beszel-map.tsv" ]]; then
 		while IFS=$'\t' read -r relative snapshot_file; do
 			[[ -n "$relative" && -n "$snapshot_file" && "$relative" != /* && "$relative" != *..* ]] || die 'invalid Beszel database restore map'
@@ -190,30 +209,43 @@ apply_snapshot() {
 		printf 'restore apply must run as root\n' >&2
 		exit 1
 	}
-	local stamp target rollback_root manifest path restored_node_id descriptor runtime_rel
+	local stamp target rollback_root manifest path restored_node_id descriptor runtime_rel restored_observer_data_root
 	local -a restore_paths
+	add_restore_path() {
+		local candidate="$1" existing
+		for existing in "${restore_paths[@]-}"; do
+			[[ "$existing" == "$candidate" ]] && return 0
+		done
+		restore_paths+=("$candidate")
+	}
 	stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 	target="${requested_target:-$RESTORE_ROOT/apply-$stamp}"
 	extract_snapshot "$target" >/dev/null
+	restored_observer_data_root="$(sed -n 's/^OBSERVER_DATA_ROOT=//p' "$target$FOUNDATION_ROOT/env/observer.env" 2>/dev/null | tail -n1)"
+	restored_observer_data_root="${restored_observer_data_root:-$PLATFORM_ROOT/observer}"
+	safe_observer_data_root "$OBSERVER_DATA_ROOT" || die "current Observer data root must be below $PLATFORM_ROOT: $OBSERVER_DATA_ROOT"
+	safe_observer_data_root "$restored_observer_data_root" || die "restored Observer data root must be below $PLATFORM_ROOT: $restored_observer_data_root"
 	if [[ "${RESTORE_IDENTITY:-0}" == 1 && -e "$target$CONFIG_ROOT/node.env" ]]; then
 		restored_node_id="$(sed -n 's/^NODE_ID=//p' "$target$CONFIG_ROOT/node.env" | tail -n1)"
 		[[ "$restored_node_id" =~ ^[a-z][a-z0-9-]*$ ]] || die 'explicit identity restore contains an invalid NODE_ID'
 		[[ -f "$target$CONTROL_ROOT/current/config/cluster/nodes/$restored_node_id.env" ]] || die 'explicit identity restore is not present in the restored cluster inventory'
 	fi
 	install_verified_databases "$target"
-	restore_paths=(
-		"$DATA_ROOT" "$APP_ROOT/shared/runtime" "$APP_ROOT/shared/.env.prod" "$APP_ROOT/current" "$APP_ROOT/previous"
-		"$CONTROL_ROOT/current" "$CONTROL_ROOT/previous" "$CONTROL_ROOT/releases" "$CONTROL_ROOT/descriptors" "$FOUNDATION_ROOT"
-		"$PLATFORM_ROOT/caddy" "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel"
-		"$CONFIG_ROOT/platform.env" "$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/singleton-state"
-		"$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token"
-		"${RESTIC_REMOTE_PASSWORD_FILE:-$CONFIG_ROOT/restic-remote-password}" "$RESTIC_REMOTE_ENV_FILE"
-	)
+	for path in \
+		"$DATA_ROOT" "$APP_ROOT/shared/runtime" "$APP_ROOT/shared/.env.prod" "$APP_ROOT/current" "$APP_ROOT/previous" \
+		"$CONTROL_ROOT/current" "$CONTROL_ROOT/previous" "$CONTROL_ROOT/releases" "$CONTROL_ROOT/descriptors" "$FOUNDATION_ROOT" \
+		"$PLATFORM_ROOT/caddy" "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel" \
+		"$OBSERVER_DATA_ROOT" "$restored_observer_data_root" \
+		"$CONFIG_ROOT/platform.env" "$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/singleton-state" \
+		"$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token" \
+		"${RESTIC_REMOTE_PASSWORD_FILE:-$CONFIG_ROOT/restic-remote-password}" "$RESTIC_REMOTE_ENV_FILE"; do
+		add_restore_path "$path"
+	done
 	while IFS= read -r descriptor; do
 		runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$descriptor" | tail -n1)"
 		[[ -n "$runtime_rel" ]] || continue
 		[[ "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die "unsafe runtime env path in restored manifest: $descriptor"
-		restore_paths+=("$CONFIG_ROOT/$runtime_rel")
+		add_restore_path "$CONFIG_ROOT/$runtime_rel"
 	done < <(find -L "$target$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null | sort)
 	"$BACKUP_SCRIPT" snapshot pre-restore
 	install -d -m 700 "$(dirname "$MAINTENANCE_FILE")"

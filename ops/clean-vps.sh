@@ -65,9 +65,25 @@ fi
 have() { command -v "$1" >/dev/null 2>&1; }
 append_unique() {
 	local name="$1" value="$2" item
-	local -n values="$name"
-	for item in "${values[@]}"; do [[ "$item" == "$value" ]] && return 0; done
-	values+=("$value")
+	case "$name" in
+	units)
+		for item in "${units[@]}"; do [[ "$item" == "$value" ]] && return 0; done
+		units+=("$value")
+		;;
+	containers)
+		for item in "${containers[@]}"; do [[ "$item" == "$value" ]] && return 0; done
+		containers+=("$value")
+		;;
+	networks)
+		for item in "${networks[@]}"; do [[ "$item" == "$value" ]] && return 0; done
+		networks+=("$value")
+		;;
+	images)
+		for item in "${images[@]}"; do [[ "$item" == "$value" ]] && return 0; done
+		images+=("$value")
+		;;
+	*) die "unknown cleanup list: $name" ;;
+	esac
 }
 owned_container() {
 	local id="$1" label name
@@ -85,12 +101,12 @@ units=(platform.target platform-network.service platform-firewall.service
 	platform-backup-check.service platform-backup-check.timer
 	platform-beszel-enroll.service platform-beszel-enroll.timer)
 wrappers=(platformctl restart-platform backup-platform restore-platform configure-beszel
-	configure-firewall enroll-beszel upgrade-runner platform-submit deploy-controller
+	configure-firewall configure-observer-ingest enroll-beszel upgrade-runner platform-submit deploy-controller
 	generate-woodpecker-workflows git-auth.sh platform-compose)
 projects=(foundation-caddy foundation-beszel-controller foundation-beszel-worker
 	foundation-woodpecker-controller foundation-woodpecker-worker foundation-woodpecker-deployer
-	app-librechat app-newapi app-aichorouter app-cpapi app-observer)
-containers=() networks=(platform_edge foundation-woodpecker_private app-librechat_private
+	foundation-observer-controller foundation-observer-collector app-librechat app-newapi app-aichorouter app-cpapi)
+containers=() networks=(platform_edge foundation-woodpecker_private foundation-observer_private app-librechat_private
 	app-newapi_private app-aichorouter_private app-cpapi_private app-observer_private) images=(llm-hub-lite/deploy-runner:current)
 
 collect_systemd_units() {

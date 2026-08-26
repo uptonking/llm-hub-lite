@@ -36,6 +36,18 @@ env_value() {
 	[[ -f "$f" ]] || return 0
 	sed -n "s/^${k}=//p" "$f" | tail -n1
 }
+path_bytes() {
+	local path="$1" bytes
+	[[ -e "$path" || -L "$path" ]] || return 1
+	bytes="$(LC_ALL=C du -sb "$path" 2>/dev/null | awk 'NR == 1 {print $1}')"
+	if [[ "$bytes" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "$bytes"
+		return 0
+	fi
+	bytes="$(LC_ALL=C du -sk "$path" 2>/dev/null | awk 'NR == 1 {print $1 * 1024}')"
+	[[ "$bytes" =~ ^[0-9]+$ ]] || return 1
+	printf '%s\n' "$bytes"
+}
 policy_value() { env_value "$1" "$CLUSTER_POLICY_FILE"; }
 node_value() { env_value "$1" "$NODE_CONFIG_FILE"; }
 csv_has() {
@@ -64,7 +76,7 @@ acquire_lock() {
 edge_network() { printf '%s\n' "$(env_value PLATFORM_EDGE_NETWORK)" | sed '/^$/s//platform_edge/'; }
 ensure_network() {
 	local n
-	for n in "$(edge_network)" foundation-woodpecker_private; do docker network inspect "$n" >/dev/null 2>&1 || docker network create "$n" >/dev/null; done
+	for n in "$(edge_network)" foundation-woodpecker_private foundation-observer_private; do docker network inspect "$n" >/dev/null 2>&1 || docker network create "$n" >/dev/null; done
 }
 node_id() { printf '%s\n' "${NODE_ID:-$(node_value NODE_ID)}" | sed '/^$/s//leader/'; }
 leader_node_id() { printf '%s\n' "$(policy_value LEADER_NODE_ID)"; }
@@ -118,6 +130,7 @@ app_active() {
 app_in_reconcile_scope() {
 	local d="$1"
 	app_active "$d" || return 1
+	[[ -z "${PLATFORM_ONLY_APP_ID:-}" || "$(basename "$d")" == "$PLATFORM_ONLY_APP_ID" ]] || return 1
 	[[ "${PLATFORM_SKIP_SINGLETONS:-0}" != 1 || "$(app_placement "$d")" != single-follower ]]
 }
 app_route_active() {
@@ -126,12 +139,13 @@ app_route_active() {
 	[[ "$(node_role)" == leader ]] || app_active "$1"
 	app_policy_enabled "$id"
 }
-foundation_file() { case "$1" in caddy) echo caddy.yml ;; woodpecker-controller) echo woodpecker-controller.yml ;; woodpecker-worker) echo woodpecker-worker.yml ;; woodpecker-deployer) echo woodpecker-deployer.yml ;; beszel-controller) echo beszel-controller.yml ;; beszel-worker) echo beszel-worker.yml ;; *) die "unknown foundation: $1" ;; esac }
+foundation_file() { case "$1" in caddy) echo caddy.yml ;; woodpecker-controller) echo woodpecker-controller.yml ;; woodpecker-worker) echo woodpecker-worker.yml ;; woodpecker-deployer) echo woodpecker-deployer.yml ;; beszel-controller) echo beszel-controller.yml ;; beszel-worker) echo beszel-worker.yml ;; observer-controller) echo observer-controller.yml ;; observer-collector) echo observer-collector.yml ;; *) die "unknown foundation: $1" ;; esac }
 foundation_env() {
 	case "$1" in
 	caddy) echo "$FOUNDATION_ENV_ROOT/caddy.env" ;;
 	woodpecker-*) echo "$FOUNDATION_ENV_ROOT/woodpecker.env" ;;
 	beszel-*) echo "$FOUNDATION_ENV_ROOT/beszel.env" ;;
+	observer-*) echo "$FOUNDATION_ENV_ROOT/observer.env" ;;
 	*) die "unknown foundation environment: $1" ;;
 	esac
 }
@@ -189,7 +203,20 @@ cluster_upstreams() {
 effective_value() {
 	local k="$1" v d target target_file mode groups public_key origin_key upstream_key primary_key primary public_host domain state_file previous_target
 	d="${CURRENT_ROUTE_DESCRIPTOR:-}"
-	v="$(env_value "$k")"
+	# Foundation-owned route values must come from their foundation env file.
+	# Keeping them in the shared application env is useful for bootstrap
+	# compatibility, but allowing that copy to win would make a runtime edit to
+	# observer.env (or another foundation env) silently leave Caddy on stale
+	# hostnames until the application env is edited as well.
+	case "$k" in
+	OBSERVER_SITE | OBSERVER_INGEST_SITE)
+		v="$(env_value "$k" "$FOUNDATION_ENV_ROOT/observer.env")"
+		;;
+	*)
+		v=""
+		;;
+	esac
+	[[ -n "$v" ]] || v="$(env_value "$k")"
 	[[ -n "$v" ]] || v="$(node_value "$k")"
 	if [[ -n "$d" ]]; then
 		groups="$(descriptor_value "$d" ROUTE_GROUPS)"
@@ -262,6 +289,7 @@ render_routes() {
 	done < <(descriptor_ids)
 	foundation_active woodpecker-controller || rm -f "$s/foundation-routes.d/woodpecker.caddy" "$s/foundation-routes.d/woodpecker-grpc.caddy"
 	foundation_active beszel-controller || rm -f "$s/foundation-routes.d/beszel.caddy"
+	foundation_active observer-controller || rm -f "$s/foundation-routes.d/observer.caddy"
 	RUNTIME_CONFIG_CANDIDATE="$s"
 }
 commit_routes() {
@@ -334,7 +362,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file local_buffer_bytes
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -402,12 +430,6 @@ validate_descriptor() {
 			! placeholder_value "$(env_value "$k")" || die "production LibreChat placeholder is not allowed: $k"
 		done
 	fi
-	if [[ "$(basename "$d")" == observer ]]; then
-		local_buffer_bytes="$(app_value "$d" OBSERVER_LOG_BUFFER_MAX_BYTES)"
-		[[ -n "$local_buffer_bytes" ]] || local_buffer_bytes=8589934592
-		[[ "$local_buffer_bytes" =~ ^[0-9]+$ ]] || die 'observer log buffer size must be an integer number of bytes'
-		((local_buffer_bytes >= 1048576 && local_buffer_bytes <= 8589934592)) || die 'observer log buffer size must be between 1 MiB and 8 GiB'
-	fi
 	if [[ "$(descriptor_value "$d" STATE_MODE)" == sqlite ]]; then
 		[[ -n "$(descriptor_value "$d" SQLITE_PATHS)" ]] || die "SQLite app is missing SQLITE_PATHS: $d"
 		! grep -Eiq 'REDIS_CONN_STRING|SQL_DSN|postgres|redis' "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "SQLite app must not define Redis or PostgreSQL: $d"
@@ -451,6 +473,78 @@ validate_descriptor() {
 		grep -Fq 'NODE_OPTIONS:' "$compose_file" || die 'LibreChat Compose must define Node heap limits'
 	fi
 }
+validate_observer_env() {
+	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent env_file
+	observer_ingest_user_valid() {
+		local value="$1"
+		[[ -n "$value" && "${#value}" -le 256 ]] || return 1
+		case "$value" in *[!A-Za-z0-9_-]*) return 1 ;; esac
+	}
+	observer_ingest_token_valid() {
+		local value="$1" suffix
+		case "$value" in o2oi_*) suffix="${value#o2oi_}" ;; *) return 1 ;; esac
+		[[ "${#suffix}" -eq 32 ]] || return 1
+		case "$suffix" in *[!A-Za-z0-9]*) return 1 ;; esac
+	}
+	if foundation_active observer-collector; then
+		env_file="$(foundation_env observer-collector)"
+		observer_data_root="$(env_value OBSERVER_DATA_ROOT "$env_file")"
+		observer_data_root="${observer_data_root:-$PLATFORM_ROOT/observer}"
+		case "$observer_data_root" in
+		"$PLATFORM_ROOT"/*) [[ "$observer_data_root" != "$PLATFORM_ROOT/" && "$observer_data_root" != *..* && "$observer_data_root" != *$'\n'* && "$observer_data_root" != *$'\r'* ]] || die 'Observer data root must be a non-root path below PLATFORM_ROOT' ;;
+		*) die 'Observer data root must be below PLATFORM_ROOT' ;;
+		esac
+		buffer="$(env_value OBSERVER_LOG_BUFFER_MAX_BYTES "$env_file")"
+		[[ -n "$buffer" ]] || buffer=536870912
+		[[ "$buffer" =~ ^[0-9]+$ ]] || die 'Observer collector buffer size must be an integer number of bytes'
+		((buffer >= 1048576 && buffer <= 8589934592)) || die 'Observer collector buffer size must be between 1 MiB and 8 GiB'
+		durable_warn="$(env_value OBSERVER_DURABLE_WARN_BYTES "$env_file")"
+		durable_warn="${durable_warn:-8589934592}"
+		[[ "$durable_warn" =~ ^[0-9]+$ ]] && ((durable_warn > 0)) || die 'Observer durable-data warning threshold must be a positive integer number of bytes'
+		buffer_warn_percent="$(env_value OBSERVER_LOG_BUFFER_WARN_PERCENT "$env_file")"
+		buffer_warn_percent="${buffer_warn_percent:-80}"
+		[[ "$buffer_warn_percent" =~ ^[0-9]+$ ]] && ((buffer_warn_percent >= 1 && buffer_warn_percent <= 100)) || die 'Observer collector buffer warning percentage must be between 1 and 100'
+		ingest_user="$(env_value OBSERVER_INGEST_USER "$env_file")"
+		observer_ingest_user_valid "$ingest_user" || die 'Observer ingestion username must contain only letters, numbers, hyphens, or underscores'
+		ingest_token="$(env_value OBSERVER_INGEST_TOKEN "$env_file")"
+		if [[ "$ingest_token" == bootstrap-pending ]]; then
+			[[ "$(node_role)" == leader && "${PLATFORM_ALLOW_OBSERVER_BOOTSTRAP:-0}" == 1 ]] || die 'Observer ingestion token is still bootstrap-pending; provision it on the Leader before normal recovery'
+		else
+			observer_ingest_token_valid "$ingest_token" || die 'Observer ingestion token must use the OpenObserve o2oi_<32 characters> format'
+		fi
+		ingest_site="$(env_value OBSERVER_INGEST_SITE "$env_file")"
+		[[ "$ingest_site" =~ ^https?://[^[:space:]/]+$ ]] || die 'Observer ingestion site must use http:// or https:// and contain no path'
+		ingest_url="$(env_value OBSERVER_INGEST_URL "$env_file")"
+		[[ "$ingest_url" =~ ^https?://[^[:space:]/]+$ ]] || die 'Observer collector ingestion URL must use http:// or https:// and contain no path'
+		[[ "$ingest_url" == "$ingest_site" ]] || die 'Observer ingestion URL and site must match exactly'
+		ingest_url_base="$(env_value OBSERVER_API_URL "$env_file")"
+		[[ -z "$ingest_url_base" || "$ingest_url_base" =~ ^https?://[^[:space:]/]+$ ]] || die 'Observer API URL must use http:// or https:// and contain no path'
+		organization="$(env_value OBSERVER_LOG_ORGANIZATION "$env_file")"
+		stream="$(env_value OBSERVER_LOG_STREAM "$env_file")"
+		organization="${organization:-default}"
+		stream="${stream:-docker}"
+		[[ "$organization" =~ ^[A-Za-z0-9._-]+$ ]] || die 'Observer log organization contains invalid path characters'
+		[[ "$stream" =~ ^[A-Za-z0-9._-]+$ ]] || die 'Observer log stream contains invalid path characters'
+	fi
+	if foundation_active observer-controller; then
+		env_file="$(foundation_env observer-controller)"
+		observer_site="$(env_value OBSERVER_SITE "$env_file")"
+		[[ "$observer_site" =~ ^https?://[^[:space:]/]+$ ]] || die 'Observer site URL must use http:// or https:// and contain no path'
+		observer_api_url="$(env_value OBSERVER_API_URL "$env_file")"
+		[[ -z "$observer_api_url" || "$observer_api_url" =~ ^https?://[^[:space:]/]+$ ]] || die 'Observer API URL must use http:// or https:// and contain no path'
+		root_user="$(env_value OBSERVER_ROOT_USER_EMAIL "$env_file")"
+		[[ "$root_user" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die 'Observer root email is invalid'
+		root_password="$(env_value OBSERVER_ROOT_USER_PASSWORD "$env_file")"
+		[[ -n "$root_password" && "$root_password" != *$'\n'* && "$root_password" != *$'\r'* ]] || die 'Observer root password must be a non-empty single-line value'
+		! placeholder_value "$root_user" || die 'Observer root email is still a placeholder'
+		! placeholder_value "$root_password" || die 'Observer root password is still a placeholder'
+		retention="$(env_value OBSERVER_DATA_RETENTION_DAYS "$env_file")"
+		[[ -z "$retention" || "$retention" =~ ^[0-9]+$ ]] || die 'Observer retention days must be a non-negative integer'
+		durable_warn="$(env_value OBSERVER_DURABLE_WARN_BYTES "$env_file")"
+		durable_warn="${durable_warn:-8589934592}"
+		[[ "$durable_warn" =~ ^[0-9]+$ ]] && ((durable_warn > 0)) || die 'Observer durable-data warning threshold must be a positive integer number of bytes'
+	fi
+}
 validate_images() {
 	local f="$1" k v
 	while IFS='=' read -r k v; do
@@ -460,14 +554,17 @@ validate_images() {
 }
 projects_foundation() {
 	printf 'caddy\n'
-	printf '%s\n' "$(role_foundations)" | tr ',' '\n' | sed '/^$/d;/^caddy$/d' | sort -u
+	# Preserve the committed policy order. Observer's controller must start
+	# before its collectors so a fresh node does not begin shipping to an
+	# unavailable ingestion endpoint.
+	printf '%s\n' "$(role_foundations)" | tr ',' '\n' | sed '/^$/d;/^caddy$/d' | awk '!seen[$0]++'
 }
 projects_apps() {
 	local d
 	while IFS= read -r d; do app_in_reconcile_scope "$d" && printf 'app:%s\n' "$d"; done < <(descriptor_ids)
 }
 all_projects() {
-	printf 'caddy\nwoodpecker-controller\nwoodpecker-worker\nwoodpecker-deployer\nbeszel-controller\nbeszel-worker\n'
+	printf 'caddy\nwoodpecker-controller\nwoodpecker-worker\nwoodpecker-deployer\nbeszel-controller\nbeszel-worker\nobserver-controller\nobserver-collector\n'
 	while IFS= read -r d; do printf 'app:%s\n' "$d"; done < <(descriptor_ids)
 }
 validate() {
@@ -476,6 +573,7 @@ validate() {
 	need_file "$APP_ENV"
 	validate_images "$APP_IMAGE_ENV"
 	validate_images "$FOUNDATION_IMAGE_ENV"
+	validate_observer_env
 	need_file "$CONTROL_ROOT/current/config/Caddyfile"
 	need_file "$FOUNDATION_ROOT/caddy.yml"
 	while IFS= read -r d; do
@@ -615,6 +713,8 @@ stop_project() {
 			woodpecker-deployer) project=foundation-woodpecker-deployer ;;
 			beszel-controller) project=foundation-beszel-controller ;;
 			beszel-worker) project=foundation-beszel-worker ;;
+			observer-controller) project=foundation-observer-controller ;;
+			observer-collector) project=foundation-observer-collector ;;
 			*) return 0 ;;
 			esac
 		fi
@@ -627,6 +727,20 @@ stop_project() {
 stop_inactive() {
 	local p
 	while IFS= read -r p; do project_enabled "$p" || stop_project "$p" || true; done < <(all_projects)
+	# Observer used to be a singleton consumer.  Its manifest is intentionally
+	# gone, so it cannot be discovered by all_projects/stop_project during an
+	# in-place upgrade or reboot recovery.  Retire only the old Compose project
+	# containers; keep the old app-observer data and volumes for an explicit
+	# operator cleanup or export.
+	local id ownership project
+	project=app-observer
+	while IFS= read -r id; do
+		[[ -n "$id" ]] || continue
+		ownership="$(docker inspect --format '{{ index .Config.Labels "com.aichorage.platform" }}' "$id" 2>/dev/null || true)"
+		[[ "$ownership" == llm-hub-lite ]] || continue
+		printf 'platformctl: stopping retired Observer container %s\n' "$id" >&2
+		docker rm -f "$id" >/dev/null 2>&1 || true
+	done < <(docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null || true)
 }
 health_scope() {
 	local scope="$1" failed=0 p
@@ -682,6 +796,99 @@ sync() {
 	fi
 	commit_routes
 	reload_caddy
+}
+diagnose_projects() {
+	case "$1" in
+	foundation)
+		projects_foundation
+		;;
+	consumers)
+		projects_apps
+		;;
+	all)
+		projects_foundation
+		projects_apps
+		;;
+	app:*)
+		local id="${1#app:}" d
+		while IFS= read -r d; do
+			[[ "$(basename "$d")" == "$id" ]] || continue
+			printf 'app:%s\n' "$d"
+			return 0
+		done < <(descriptor_ids)
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+diagnose() {
+	local scope="${1:-all}" p id
+	case "$scope" in
+	foundation | consumers | all) ;;
+	app:*) app_declared "${scope#app:}" || die "unknown application: ${scope#app:}" ;;
+	*) die 'diagnose scope must be foundation, consumers, all, or app:<id>' ;;
+	esac
+	printf 'platformctl diagnose: node=%s role=%s scope=%s\n' "$(node_id)" "$(node_role)" "$scope"
+	printf 'current=%s\nprevious=%s\nmaintenance=%s\n' \
+		"$(readlink "$CONTROL_ROOT/current" 2>/dev/null || printf '<missing>')" \
+		"$(readlink "$CONTROL_ROOT/previous" 2>/dev/null || printf '<missing>')" \
+		"$(maintenance status 2>/dev/null | tr '\n' ' ' | cut -c1-160)"
+	while IFS= read -r p; do
+		[[ -n "$p" ]] || continue
+		printf '\n[%s]\n' "$p"
+		if [[ "$p" == app:* ]]; then
+			app_compose "${p#app:}"
+		else
+			foundation_compose "$p"
+		fi
+		"${compose_command[@]}" ps --all 2>&1 | sed -n '1,80p' || true
+		while IFS= read -r id; do
+			[[ -n "$id" ]] || continue
+			docker inspect --format 'container={{.Name}} status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{{range .State.Health.Log}}{{printf "\n  health exit=%d output=%q" .ExitCode .Output}}{{end}}' "$id" 2>&1 | sed -n '1,24p' || true
+		done < <("${compose_command[@]}" ps --all -q 2>/dev/null || true)
+	done < <(diagnose_projects "$scope")
+	if [[ "$scope" == foundation || "$scope" == all ]]; then
+		local observer_env observer_root observer_data observer_buffer observer_bytes buffer_bytes buffer_max durable_warn buffer_warn_percent utilization
+		observer_env="$(foundation_env observer-collector)"
+		if [[ -r "$observer_env" ]]; then
+			observer_root="$(env_value OBSERVER_DATA_ROOT "$observer_env")"
+			observer_root="${observer_root:-$PLATFORM_ROOT/observer}"
+			buffer_max="$(env_value OBSERVER_LOG_BUFFER_MAX_BYTES "$observer_env")"
+			buffer_max="${buffer_max:-536870912}"
+			durable_warn="$(env_value OBSERVER_DURABLE_WARN_BYTES "$observer_env")"
+			durable_warn="${durable_warn:-8589934592}"
+			buffer_warn_percent="$(env_value OBSERVER_LOG_BUFFER_WARN_PERCENT "$observer_env")"
+			buffer_warn_percent="${buffer_warn_percent:-80}"
+			if foundation_active observer-controller; then
+				observer_data="$observer_root/data"
+				if observer_bytes="$(path_bytes "$observer_data")"; then
+					printf '\n[observer-storage]\npath=%s bytes=%s warn_bytes=%s retention_days=%s\n' \
+						"$observer_data" "$observer_bytes" "$durable_warn" "$(env_value OBSERVER_DATA_RETENTION_DAYS "$observer_env" | sed '/^$/s//30/')"
+					if ((observer_bytes >= durable_warn)); then
+						printf 'WARNING: Observer durable data is at or above its %s-byte warning threshold; retention remains time-based and no data was deleted.\n' "$durable_warn" >&2
+					fi
+				else
+					printf '\n[observer-storage]\npath=%s state=missing warn_bytes=%s retention_days=%s\n' \
+						"$observer_data" "$durable_warn" "$(env_value OBSERVER_DATA_RETENTION_DAYS "$observer_env" | sed '/^$/s//30/')"
+				fi
+			fi
+			if foundation_active observer-collector; then
+				observer_buffer="$observer_root/collector-buffer"
+				if buffer_bytes="$(path_bytes "$observer_buffer")"; then
+					utilization="$(awk -v bytes="$buffer_bytes" -v maximum="$buffer_max" 'BEGIN { if (maximum > 0) printf "%.1f", (bytes * 100) / maximum; else print "0.0" }')"
+					printf '\n[observer-buffer]\npath=%s bytes=%s max_bytes=%s utilization_percent=%s warn_percent=%s\n' \
+						"$observer_buffer" "$buffer_bytes" "$buffer_max" "$utilization" "$buffer_warn_percent"
+					if awk -v bytes="$buffer_bytes" -v maximum="$buffer_max" -v threshold="$buffer_warn_percent" 'BEGIN { exit !(maximum > 0 && bytes * 100 >= maximum * threshold) }'; then
+						printf 'WARNING: Observer collector buffer is at or above %s%%; delivery may be dropping newest records if it reaches max_bytes.\n' "$buffer_warn_percent" >&2
+					fi
+				else
+					printf '\n[observer-buffer]\npath=%s state=missing max_bytes=%s warn_percent=%s\n' \
+						"$observer_buffer" "$buffer_max" "$buffer_warn_percent"
+				fi
+			fi
+		fi
+	fi
 }
 restart_project() {
 	local p="$1"
@@ -947,7 +1154,7 @@ singleton_stop() {
 	fi
 }
 op="${1:-status}"
-case "$op" in status | health | validate) ;; *) acquire_lock ;; esac
+case "$op" in status | health | validate | diagnose) ;; *) acquire_lock ;; esac
 case "$op" in validate) [[ "${2:-}" == --check ]] && VALIDATE_CHECK=1 validate || validate ;; status) [[ "${2:-}" == --json ]] && printf '{"node":"%s","role":"%s"}\n' "$(node_id)" "$(node_role)" || {
 	printf 'node=%s role=%s\n' "$(node_id)" "$(node_role)"
 	health
@@ -980,4 +1187,4 @@ singleton-transition-fail)
 smoke) [[ "${2:-}" == all ]] && while IFS= read -r d; do app_route_active "$d" && smoke_project "$d"; done < <(descriptor_ids) || {
 	[[ "${2:-}" == app:* ]] || die 'usage: platformctl smoke {all|app:<descriptor>}'
 	smoke_project "${2#app:}"
-} ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|status|health|recover|ensure-network|start|sync|restart|recreate|stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|maintenance|reload|backup|restore}' ;; esac
+} ;; diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|status|health|diagnose|recover|ensure-network|start|sync|restart|recreate|stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|maintenance|reload|backup|restore}' ;; esac

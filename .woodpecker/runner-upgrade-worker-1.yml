@@ -14,7 +14,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-runner
+  group: llm-hub-lite-deployment
 
 steps:
   runner:

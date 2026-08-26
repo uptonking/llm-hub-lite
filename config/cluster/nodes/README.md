@@ -5,17 +5,15 @@ this directory.
 Each node must define `NODE_ID` and the origin host keys declared by the active
 app manifests. The Leader uses those origin fields from every Follower
 descriptor to render Caddy routes. LibreChat and legacy New API use
-active-active health-checked upstreams. Aichorouter, CPAPI, and OpenObserve are
-singleton services: each target is stored in its app policy, and only that
-Follower is deployed. Their local state is intentionally not replicated.
-OpenObserve's local data is retained by the node Restic snapshot, but moving it
-to another Follower starts with fresh data. On its target Follower only,
-OpenObserve also runs a read-only Docker socket proxy and Vector shipper. The
-shipper forwards platform-labelled container logs to the local observer over
-the private network and keeps an ephemeral disk buffer capped at 8 GiB; the
-buffer is excluded from Restic and discarded during a fresh singleton move.
-Keep origin names DNS-only and resolve them to the corresponding Follower
-public IP.
+active-active health-checked upstreams. Aichorouter and CPAPI are singleton
+services: each target is stored in its app policy, and only that Follower is
+deployed. Their local state is intentionally not replicated. OpenObserve is a
+Leader foundation service. Every node runs its read-only Docker socket proxy
+and Vector shipper; each shipper forwards platform-labelled container logs to
+the Leader's `observer-ingest` endpoint and keeps a bounded transient buffer
+under `/opt/platform/observer/collector-buffer`. The buffer is excluded from
+Restic. Keep origin names DNS-only and resolve them to the corresponding
+Follower public IP; `observer-ingest` must resolve directly to the Leader.
 
 `LEADER_NODE_ID` in `../policy.env` is the only role selector. A node whose
 stable ID equals it is the Leader; every other node is a Follower. Do not add

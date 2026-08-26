@@ -19,7 +19,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-singleton-cpapi
+  group: llm-hub-lite-deployment
 
 steps:
   stop:

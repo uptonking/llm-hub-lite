@@ -6,11 +6,25 @@ bootstrap="$repo_root/ops/bootstrap-vps.sh"
 bash -n "$bootstrap"
 grep -Fq 'shell xtrace was disabled before loading secrets' "$bootstrap"
 grep -Fq "printf '%s' \"\$value\" | LC_ALL=C grep '[[:cntrl:]]'" "$bootstrap"
+grep -Fq 'bootstrap-pending' "$bootstrap"
+grep -Fq 'prompt_observer_ingest_token()' "$bootstrap"
+grep -Fq 'OBSERVER_INGEST_TOKEN must be an OpenObserve token' "$bootstrap"
 grep -Fq 'AICHOROUTER_MEMORY_LIMIT="${AICHOROUTER_MEMORY_LIMIT:-768m}"' "$bootstrap"
 grep -Fq 'AICHOROUTER_CPUS="${AICHOROUTER_CPUS:-0.9}"' "$bootstrap"
 grep -Fq 'AICHOROUTER_GOMEMLIMIT="${AICHOROUTER_GOMEMLIMIT:-500MiB}"' "$bootstrap"
 grep -Fq 'RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-3600}"' "$bootstrap"
 grep -Fq 'runtime_setting()' "$bootstrap"
+grep -Fq 'OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-}"' "$bootstrap"
+grep -Fq 'OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-llm-hub-lite-collector}"' "$bootstrap"
+grep -Fq 'observer_default_value()' "$bootstrap"
+grep -Fq 'OBSERVER_DURABLE_WARN_BYTES=$(observer_default_value OBSERVER_DURABLE_WARN_BYTES 8589934592)' "$bootstrap"
+grep -Fq 'OBSERVER_LOG_BUFFER_WARN_PERCENT=$(observer_default_value OBSERVER_LOG_BUFFER_WARN_PERCENT 80)' "$bootstrap"
+grep -Fq 'safe_observer_data_root()' "$bootstrap"
+grep -Fq 'OBSERVER_DATA_ROOT must be a non-root path below' "$bootstrap"
+grep -Fq 'remove_key "$observer_env" OBSERVER_ROOT_USER_EMAIL' "$bootstrap"
+grep -Fq 'remove_key "$observer_env" OBSERVER_ROOT_USER_PASSWORD' "$bootstrap"
+grep -Fq 'Credentials are deliberately written with set_key' "$bootstrap"
+grep -Fq 'set_key "$observer_env" "$observer_key" "$observer_value"' "$bootstrap"
 grep -Fq 'RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-$(runtime_setting RESTIC_COMPRESSION)}"' "$bootstrap"
 grep -Fq 'RESTIC_SKIP_IF_UNCHANGED="${RESTIC_SKIP_IF_UNCHANGED:-$(runtime_setting RESTIC_SKIP_IF_UNCHANGED)}"' "$bootstrap"
 grep -Fq 'normalize_restic_compression' "$bootstrap"
@@ -54,7 +68,7 @@ image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bas
 	eval "$IMAGE_FUNCTION"
 	tmp_policy="$(mktemp)"
 	trap '\''rm -f "$tmp_policy"'\'' EXIT
-	printf "FOUNDATION_FOLLOWER=beszel-worker,woodpecker-worker\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
+	printf "FOUNDATION_FOLLOWER=beszel-worker,woodpecker-worker,observer-collector\\nFOUNDATION_LEADER=observer-controller,observer-collector\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
 	policy_file="$tmp_policy" NODE_ROLE=follower NODE_ID=worker-1
 	newapi_enabled=0 librechat_enabled=1
 	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
@@ -68,7 +82,7 @@ grep -Fqx 'LIBRECHAT_API_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$image_selection"
 grep -Fqx 'CPAPI_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'AICHOROUTER_IMAGE=required' <<<"$image_selection"
-grep -Fqx 'OBSERVER_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'OBSERVER_IMAGE=skipped' <<<"$image_selection"
 grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$image_selection"
 leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bash -c '
@@ -76,7 +90,7 @@ leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_ro
 	eval "$IMAGE_FUNCTION"
 	tmp_policy="$(mktemp)"
 	trap '\''rm -f "$tmp_policy"'\'' EXIT
-	printf "FOUNDATION_LEADER=caddy,woodpecker-controller,woodpecker-deployer,beszel-controller,beszel-worker\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
+	printf "FOUNDATION_LEADER=caddy,woodpecker-controller,woodpecker-deployer,beszel-controller,beszel-worker,observer-controller,observer-collector\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
 	policy_file="$tmp_policy" NODE_ROLE=leader NODE_ID=leader
 	newapi_enabled=1 librechat_enabled=1
 	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
@@ -88,9 +102,9 @@ grep -Fqx 'LIBRECHAT_API_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'CPAPI_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'AICHOROUTER_IMAGE=skipped' <<<"$leader_image_selection"
-grep -Fqx 'OBSERVER_IMAGE=skipped' <<<"$leader_image_selection"
-grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=skipped' <<<"$leader_image_selection"
-grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'OBSERVER_IMAGE=required' <<<"$leader_image_selection"
+grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=required' <<<"$leader_image_selection"
+grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$leader_image_selection"
 grep -Fq 'if [[ "$NODE_ROLE" == leader ]]; then' "$bootstrap"
 grep -Fq 'missing cluster policy' "$bootstrap"
 grep -Fq 'newapi_enabled=0' "$bootstrap"
@@ -147,7 +161,7 @@ leader_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summary
 	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
-grep -Fq 'Foundation: Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer' <<<"$leader_summary"
+grep -Fq 'Foundation: Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer, Observer, Observer Collector' <<<"$leader_summary"
 grep -Fq 'Consumers: none' <<<"$leader_summary"
 grep -Fq 'LibreChat: https://chat.example.test (available after a Follower is healthy)' <<<"$leader_summary"
 grep -Fq 'Bootstrap worker-1, then worker-2.' <<<"$leader_summary"
@@ -159,8 +173,8 @@ follower_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summa
 	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
-grep -Fq 'Foundation: Caddy, Beszel Agent, Woodpecker Agent' <<<"$follower_summary"
-grep -Fq 'Consumers: Aichorouter, CPAPI, LibreChat, OpenObserve' <<<"$follower_summary"
+grep -Fq 'Foundation: Caddy, Beszel Agent, Woodpecker Agent, Observer Collector' <<<"$follower_summary"
+grep -Fq 'Consumers: Aichorouter, CPAPI, LibreChat' <<<"$follower_summary"
 grep -Fq 'LibreChat origin: https://worker-chat-origin.example.test' <<<"$follower_summary"
 grep -Fq 'Daily deployments are workflow-driven' <<<"$follower_summary"
 wrapper_declaration="$(sed -n '/^for script in /p' "$bootstrap")"

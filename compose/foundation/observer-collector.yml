@@ -1,0 +1,75 @@
+name: foundation-observer-collector
+services:
+  observer-log-proxy:
+    image: ${OBSERVER_LOG_PROXY_IMAGE:?OBSERVER_LOG_PROXY_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${OBSERVER_LOG_PROXY_MEMORY_LIMIT:-32m}
+    cpus: ${OBSERVER_LOG_PROXY_CPUS:-0.10}
+    pids_limit: ${OBSERVER_LOG_PROXY_PIDS_LIMIT:-64}
+    read_only: true
+    security_opt: ['no-new-privileges:true']
+    environment:
+      CONTAINERS: "1"
+      EVENTS: "1"
+      INFO: "1"
+      PING: "1"
+      VERSION: "1"
+      ALLOW_LOGS: "1"
+      POST: "0"
+      LOG_LEVEL: warning
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    tmpfs: [/run, /tmp]
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: foundation-observer-collector
+      com.aichorage.observer.ignore-logs: "true"
+    networks: [observer_private]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:2375/_ping | grep -qx OK"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+  observer-log-shipper:
+    image: ${OBSERVER_LOG_SHIPPER_IMAGE:?OBSERVER_LOG_SHIPPER_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: ${OBSERVER_LOG_SHIPPER_MEMORY_LIMIT:-96m}
+    cpus: ${OBSERVER_LOG_SHIPPER_CPUS:-0.10}
+    pids_limit: ${OBSERVER_LOG_SHIPPER_PIDS_LIMIT:-128}
+    read_only: true
+    security_opt: ['no-new-privileges:true']
+    environment:
+      VECTOR_CONFIG: /etc/vector/vector.toml
+      NODE_ID: ${NODE_ID:?NODE_ID must be set}
+      OBSERVER_INGEST_URL: ${OBSERVER_INGEST_URL:?OBSERVER_INGEST_URL must be set}
+      OBSERVER_INGEST_USER: ${OBSERVER_INGEST_USER:?OBSERVER_INGEST_USER must be set}
+      OBSERVER_INGEST_TOKEN: ${OBSERVER_INGEST_TOKEN:?OBSERVER_INGEST_TOKEN must be set}
+      OBSERVER_LOG_ORGANIZATION: ${OBSERVER_LOG_ORGANIZATION:-default}
+      OBSERVER_LOG_STREAM: ${OBSERVER_LOG_STREAM:-docker}
+      OBSERVER_LOG_BUFFER_MAX_BYTES: ${OBSERVER_LOG_BUFFER_MAX_BYTES:-536870912}
+    volumes:
+      - ./observer-vector.toml:/etc/vector/vector.toml:ro
+      - ${OBSERVER_DATA_ROOT:-/opt/platform/observer}/collector-buffer:/var/lib/vector
+    networks: [observer_private]
+    depends_on:
+      observer-log-proxy:
+        condition: service_healthy
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.component: foundation-observer-collector
+      com.aichorage.observer.ignore-logs: "true"
+    tmpfs: [/tmp]
+    command: ["--config", "/etc/vector/vector.toml"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8686/health >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+networks:
+  observer_private:
+    name: foundation-observer_private
+    external: true

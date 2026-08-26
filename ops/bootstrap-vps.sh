@@ -30,6 +30,10 @@ AICHOROUTER_SESSION_SECRET="${AICHOROUTER_SESSION_SECRET:-}"
 AICHOROUTER_CRYPTO_SECRET="${AICHOROUTER_CRYPTO_SECRET:-}"
 CPAPI_API_KEY="${CPAPI_API_KEY:-}"
 CPAPI_MANAGEMENT_KEY="${CPAPI_MANAGEMENT_KEY:-}"
+OBSERVER_ROOT_USER_EMAIL="${OBSERVER_ROOT_USER_EMAIL:-}"
+OBSERVER_ROOT_USER_PASSWORD="${OBSERVER_ROOT_USER_PASSWORD:-}"
+OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-}"
+OBSERVER_INGEST_TOKEN="${OBSERVER_INGEST_TOKEN:-}"
 LIBRECHAT_MONGO_URI="${LIBRECHAT_MONGO_URI:-}"
 LIBRECHAT_REDIS_URI="${LIBRECHAT_REDIS_URI:-}"
 LIBRECHAT_JWT_SECRET="${LIBRECHAT_JWT_SECRET:-}"
@@ -69,6 +73,7 @@ GITHUB_TOKEN_FILE="${GITHUB_TOKEN_FILE:-${PLATFORM_GITHUB_TOKEN_FILE:-}}"
 SHARED_SECRET_BUNDLE_FILE="${SHARED_SECRET_BUNDLE_FILE:-${PLATFORM_SECRET_BUNDLE_FILE:-$CONFIG_ROOT/shared-secrets.env}}"
 app_env="$APP_ROOT/shared/.env.prod"
 woodpecker_env="$PLATFORM_ROOT/foundation/env/woodpecker.env"
+observer_env="$PLATFORM_ROOT/foundation/env/observer.env"
 runtime_setting() {
 	local key="$1"
 	[[ -r "$app_env" ]] || return 0
@@ -114,6 +119,17 @@ die() {
 }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
+safe_observer_data_root() {
+	local root="$1"
+	case "$root" in
+	"$PLATFORM_ROOT"/*)
+		[[ "$root" != "$PLATFORM_ROOT/" && "$root" != *..* && "$root" != *$'\n'* && "$root" != *$'\r'* ]]
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
 remote_enabled() { truthy "$RESTIC_REMOTE_ENABLED"; }
 csv_contains() {
 	local csv=",${1//[[:space:]]/},"
@@ -181,6 +197,8 @@ image_required() {
 	WOODPECKER_AGENT_IMAGE) bootstrap_foundation_enabled woodpecker-worker || bootstrap_foundation_enabled woodpecker-deployer ;;
 	BESZEL_HUB_IMAGE) bootstrap_foundation_enabled beszel-controller ;;
 	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) bootstrap_foundation_enabled beszel-worker ;;
+	OBSERVER_IMAGE | OBSERVER_HEALTH_PROBE_IMAGE) bootstrap_foundation_enabled observer-controller ;;
+	OBSERVER_LOG_PROXY_IMAGE | OBSERVER_LOG_SHIPPER_IMAGE) bootstrap_foundation_enabled observer-collector ;;
 	NEW_API_IMAGE) ((newapi_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
 	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) ((librechat_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
 	*)
@@ -269,7 +287,7 @@ load_runtime_value() {
 clear_placeholder() {
 	local key="$1" value
 	value="${!key:-}"
-	case "$value" in replace-with-* | example.invalid | *'<'* | *'>'* | *example.* | *your-upstash* | *account-id*) printf -v "$key" '%s' '' ;; esac
+	case "$value" in replace-with-* | bootstrap-pending | example.invalid | *'<'* | *'>'* | *example.* | *your-upstash* | *account-id*) printf -v "$key" '%s' '' ;; esac
 }
 valid_input_value() {
 	local key="$1" value="$2"
@@ -313,6 +331,29 @@ prompt_required() {
 		test -n "$value" || printf 'The value cannot be empty.\n' >&2
 	done
 }
+prompt_observer_ingest_token() {
+	while :; do
+		prompt_required OBSERVER_INGEST_TOKEN 'OpenObserve collector ingestion token' 1
+		observer_token_suffix="${OBSERVER_INGEST_TOKEN#o2oi_}"
+		if [[ "$OBSERVER_INGEST_TOKEN" == o2oi_* && "${#observer_token_suffix}" -eq 32 && "$observer_token_suffix" != *[!A-Za-z0-9]* ]]; then
+			return 0
+		fi
+		printf 'OBSERVER_INGEST_TOKEN must be an OpenObserve token in the o2oi_<32 characters> format.\n' >&2
+		[[ -t 0 ]] || die 'OBSERVER_INGEST_TOKEN is invalid; provide the full token through the environment or shared secret bundle'
+		OBSERVER_INGEST_TOKEN=''
+	done
+}
+prompt_observer_ingest_user() {
+	while :; do
+		prompt_required OBSERVER_INGEST_USER 'OpenObserve collector ingestion username'
+		if [[ -n "$OBSERVER_INGEST_USER" && "${#OBSERVER_INGEST_USER}" -le 256 && "$OBSERVER_INGEST_USER" != *[!A-Za-z0-9_-]* ]]; then
+			return 0
+		fi
+		printf 'OBSERVER_INGEST_USER must contain only letters, numbers, hyphens, or underscores.\n' >&2
+		[[ -t 0 ]] || die 'OBSERVER_INGEST_USER is invalid; provide a valid name through the environment or shared secret bundle'
+		OBSERVER_INGEST_USER=''
+	done
+}
 if [[ -n "$RESTIC_REMOTE_ENV_SOURCE_FILE" ]]; then
 	[[ -s "$RESTIC_REMOTE_ENV_SOURCE_FILE" ]] || die "Restic remote environment file does not exist: $RESTIC_REMOTE_ENV_SOURCE_FILE"
 	install -o root -g root -m 600 "$RESTIC_REMOTE_ENV_SOURCE_FILE" "$RESTIC_REMOTE_ENV_FILE"
@@ -343,7 +384,7 @@ generate_shared_secret() {
 if [[ -z "$LEADER_PUBLIC_IP" && -r "$CONFIG_ROOT/node.env" ]]; then
 	LEADER_PUBLIC_IP="$(sed -n 's/^LEADER_PUBLIC_IP=//p' "$CONFIG_ROOT/node.env" 2>/dev/null | tail -n1)"
 fi
-for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
+for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET OBSERVER_INGEST_USER OBSERVER_INGEST_TOKEN; do
 	load_bundle_value "$shared_key"
 done
 for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET WOODPECKER_GITHUB_CLIENT WOODPECKER_GITHUB_SECRET; do
@@ -361,6 +402,16 @@ done
 for runtime_key in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET WOODPECKER_GITHUB_CLIENT WOODPECKER_GITHUB_SECRET; do
 	load_runtime_value "$runtime_key" "$woodpecker_env"
 done
+for runtime_key in OBSERVER_ROOT_USER_EMAIL OBSERVER_ROOT_USER_PASSWORD OBSERVER_INGEST_USER OBSERVER_INGEST_TOKEN; do
+	load_runtime_value "$runtime_key" "$observer_env"
+done
+# The default is applied only after the shared bundle and existing foundation
+# environment have had a chance to provide a custom collector username. This
+# keeps the username and its token paired when Followers bootstrap from the
+# Leader's bundle.
+OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-llm-hub-lite-collector}"
+clear_placeholder OBSERVER_INGEST_USER
+clear_placeholder OBSERVER_INGEST_TOKEN
 if [[ -z "$NODE_ID" ]]; then read -r -p 'Stable cluster node ID (for example leader, worker-1): ' NODE_ID; fi
 [[ "$NODE_ID" =~ ^[a-z][a-z0-9-]*$ ]] || die 'invalid NODE_ID'
 
@@ -622,6 +673,18 @@ valid_ipv4 "$LEADER_PUBLIC_IP" || die 'LEADER_PUBLIC_IP must be a valid IPv4 add
 printf 'Derived node role: %s (Leader node ID: %s)\n' "$NODE_ROLE" "$leader_node_id"
 [[ "$WOODPECKER_AGENT_LABELS" == node=unknown,* ]] && WOODPECKER_AGENT_LABELS="node=$NODE_ID,deployment=true,target=production,repo=$REPO_SLUG"
 [[ "$WOODPECKER_DEPLOYER_LABELS" == node=unknown,* ]] && WOODPECKER_DEPLOYER_LABELS="node=$NODE_ID,deployment=true,target=production,repo=$REPO_SLUG"
+
+# Observer is a Leader-owned foundation service. A host that previously ran
+# the retired singleton layout may still have the controller's root password
+# in its local foundation environment; Followers only need the write-only
+# ingestion credential, so remove those stale administrator values.
+if [[ "$NODE_ROLE" == follower ]]; then
+	remove_key "$observer_env" OBSERVER_ROOT_USER_EMAIL
+	remove_key "$observer_env" OBSERVER_ROOT_USER_PASSWORD
+	OBSERVER_ROOT_USER_EMAIL=''
+	OBSERVER_ROOT_USER_PASSWORD=''
+fi
+
 if [[ "${BOOTSTRAP_ASSUME_YES:-0}" != 1 && -t 0 ]]; then
 	if ! read -r -p "Continue bootstrapping $NODE_ID as $NODE_ROLE? [y/N]: " confirm; then
 		die 'bootstrap confirmation was not received; rerun with ssh -tt or set BOOTSTRAP_ASSUME_YES=1'
@@ -657,6 +720,18 @@ if ((librechat_enabled)); then
 		prompt_required LIBRECHAT_JWT_SECRET 'Shared LibreChat JWT secret' 1
 		prompt_required LIBRECHAT_JWT_REFRESH_SECRET 'Shared LibreChat JWT refresh secret' 1
 		prompt_required LIBRECHAT_ADMIN_PANEL_SESSION_SECRET 'Shared LibreChat admin panel session secret' 1
+	fi
+fi
+if bootstrap_foundation_enabled observer-controller; then
+	clear_placeholder OBSERVER_ROOT_USER_EMAIL
+	clear_placeholder OBSERVER_ROOT_USER_PASSWORD
+	prompt_required OBSERVER_ROOT_USER_EMAIL 'OpenObserve root email'
+	prompt_required OBSERVER_ROOT_USER_PASSWORD 'OpenObserve root password' 1
+fi
+if bootstrap_foundation_enabled observer-collector; then
+	prompt_observer_ingest_user
+	if [[ "$NODE_ROLE" == follower ]]; then
+		prompt_observer_ingest_token
 	fi
 fi
 for manifest in "$SOURCE_ROOT"/apps/*/manifest.env; do
@@ -727,7 +802,7 @@ if [[ ! -f "$app_env" ]]; then
 		printf 'NEW_API_SESSION_SECRET=%s\nNEW_API_CRYPTO_SECRET=%s\nNEW_API_SQL_DSN=%s\n' "${NEW_API_SESSION_SECRET:-}" "${NEW_API_CRYPTO_SECRET:-}" "${NEW_API_SQL_DSN:-}"
 		printf 'LIBRECHAT_MONGO_URI=%s\nLIBRECHAT_REDIS_URI=%s\nLIBRECHAT_JWT_SECRET=%s\nLIBRECHAT_JWT_REFRESH_SECRET=%s\nLIBRECHAT_ADMIN_PANEL_SESSION_SECRET=%s\nLIBRECHAT_AWS_ENDPOINT_URL=%s\nLIBRECHAT_AWS_ACCESS_KEY_ID=%s\nLIBRECHAT_AWS_SECRET_ACCESS_KEY=%s\nLIBRECHAT_AWS_REGION=%s\nLIBRECHAT_AWS_BUCKET_NAME=%s\nLIBRECHAT_AWS_FORCE_PATH_STYLE=%s\n' "$LIBRECHAT_MONGO_URI" "$LIBRECHAT_REDIS_URI" "$LIBRECHAT_JWT_SECRET" "$LIBRECHAT_JWT_REFRESH_SECRET" "$LIBRECHAT_ADMIN_PANEL_SESSION_SECRET" "$LIBRECHAT_AWS_ENDPOINT_URL" "$LIBRECHAT_AWS_ACCESS_KEY_ID" "$LIBRECHAT_AWS_SECRET_ACCESS_KEY" "$LIBRECHAT_AWS_REGION" "$LIBRECHAT_AWS_BUCKET_NAME" "$LIBRECHAT_AWS_FORCE_PATH_STYLE"
 		printf 'NEW_API_SITE=https://newapi.%s\nLIBRECHAT_DOMAIN_CLIENT=https://chat.%s\nLIBRECHAT_DOMAIN_SERVER=https://chat.%s\nLIBRECHAT_ADMIN_PANEL_URL=https://chat-admin.%s\nWOODPECKER_SITE=https://ci.%s\nBESZEL_SITE=https://status.%s\nSESSION_COOKIE_TRUSTED_URL=https://newapi.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME"
-		printf 'WOODPECKER_GRPC_SITE=https://ci-grpc.%s\n' "$DOMAIN_NAME"
+		printf 'WOODPECKER_GRPC_SITE=https://ci-grpc.%s\nOBSERVER_SITE=https://observer.%s\nOBSERVER_INGEST_SITE=https://observer-ingest.%s\nOBSERVER_INGEST_URL=https://observer-ingest.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME"
 		while IFS= read -r manifest; do
 			public_key="$(sed -n 's/^PUBLIC_URL_KEY=//p' "$manifest" | tail -n1)"
 			public_host="$(sed -n 's/^PUBLIC_HOST=//p' "$manifest" | tail -n1)"
@@ -742,6 +817,9 @@ set_key "$app_env" RESTIC_SKIP_IF_UNCHANGED "$RESTIC_SKIP_IF_UNCHANGED"
 remove_key "$app_env" NODE_ROLE
 remove_key "$app_env" LEADER_PUBLIC_IP
 ensure_key "$app_env" WOODPECKER_GRPC_SITE "https://ci-grpc.$DOMAIN_NAME"
+ensure_key "$app_env" OBSERVER_SITE "https://observer.$DOMAIN_NAME"
+ensure_key "$app_env" OBSERVER_INGEST_SITE "https://observer-ingest.$DOMAIN_NAME"
+ensure_key "$app_env" OBSERVER_INGEST_URL "https://observer-ingest.$DOMAIN_NAME"
 while IFS= read -r manifest; do
 	public_key="$(sed -n 's/^PUBLIC_URL_KEY=//p' "$manifest" | tail -n1)"
 	public_host="$(sed -n 's/^PUBLIC_HOST=//p' "$manifest" | tail -n1)"
@@ -891,6 +969,79 @@ for shared_key in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
 done
 chmod 600 "$woodpecker_env" "$beszel_env"
 
+if [[ ! -f "$observer_env" ]]; then : >"$observer_env"; fi
+observer_data_root="$(sed -n 's/^OBSERVER_DATA_ROOT=//p' "$observer_env" | tail -n1)"
+observer_data_root="${observer_data_root:-$PLATFORM_ROOT/observer}"
+safe_observer_data_root "$observer_data_root" || die "OBSERVER_DATA_ROOT must be a non-root path below $PLATFORM_ROOT: $observer_data_root"
+install -d -m 700 "$observer_data_root/data" "$observer_data_root/collector-buffer"
+observer_token_value="$OBSERVER_INGEST_TOKEN"
+[[ "$NODE_ROLE" == leader && -z "$observer_token_value" ]] && observer_token_value=bootstrap-pending
+# Keep non-secret defaults in one canonical template. Existing operator values
+# in observer.env still win; generated domains and credentials remain explicit.
+observer_default_value() {
+	local key="$1" fallback="$2" value=''
+	if [[ -r "$SOURCE_ROOT/ops/foundation/observer.env.example" ]]; then
+		value="$(sed -n "s/^${key}=//p" "$SOURCE_ROOT/ops/foundation/observer.env.example" | tail -n1)"
+	fi
+	printf '%s\n' "${value:-$fallback}"
+}
+for pair in \
+	"OBSERVER_DATA_ROOT=$observer_data_root" \
+	"OBSERVER_SITE=https://observer.$DOMAIN_NAME" \
+	"OBSERVER_API_URL=$(observer_default_value OBSERVER_API_URL http://observer-controller:5080)" \
+	"OBSERVER_COOKIE_SECURE_ONLY=$(observer_default_value OBSERVER_COOKIE_SECURE_ONLY true)" \
+	"OBSERVER_INGEST_SITE=https://observer-ingest.$DOMAIN_NAME" \
+	"OBSERVER_INGEST_URL=https://observer-ingest.$DOMAIN_NAME" \
+	"OBSERVER_ROOT_USER_EMAIL=$OBSERVER_ROOT_USER_EMAIL" \
+	"OBSERVER_ROOT_USER_PASSWORD=$OBSERVER_ROOT_USER_PASSWORD" \
+	"OBSERVER_INGEST_USER=$OBSERVER_INGEST_USER" \
+	"OBSERVER_INGEST_TOKEN=$observer_token_value" \
+	"OBSERVER_LOG_ORGANIZATION=$(observer_default_value OBSERVER_LOG_ORGANIZATION default)" \
+	"OBSERVER_LOG_STREAM=$(observer_default_value OBSERVER_LOG_STREAM docker)" \
+	"OBSERVER_LOG_BUFFER_MAX_BYTES=$(observer_default_value OBSERVER_LOG_BUFFER_MAX_BYTES 536870912)" \
+	"OBSERVER_DURABLE_WARN_BYTES=$(observer_default_value OBSERVER_DURABLE_WARN_BYTES 8589934592)" \
+	"OBSERVER_LOG_BUFFER_WARN_PERCENT=$(observer_default_value OBSERVER_LOG_BUFFER_WARN_PERCENT 80)" \
+	"OBSERVER_MEMORY_LIMIT=$(observer_default_value OBSERVER_MEMORY_LIMIT 512m)" \
+	"OBSERVER_CPUS=$(observer_default_value OBSERVER_CPUS 0.50)" \
+	"OBSERVER_PIDS_LIMIT=$(observer_default_value OBSERVER_PIDS_LIMIT 256)" \
+	"OBSERVER_DATA_RETENTION_DAYS=$(observer_default_value OBSERVER_DATA_RETENTION_DAYS 30)" \
+	"OBSERVER_QUERY_THREAD_NUM=$(observer_default_value OBSERVER_QUERY_THREAD_NUM 1)" \
+	"OBSERVER_HTTP_WORKER_NUM=$(observer_default_value OBSERVER_HTTP_WORKER_NUM 1)" \
+	"OBSERVER_HTTP_WORKER_MAX_BLOCKING=$(observer_default_value OBSERVER_HTTP_WORKER_MAX_BLOCKING 16)" \
+	"OBSERVER_GRPC_RUNTIME_WORKER_NUM=$(observer_default_value OBSERVER_GRPC_RUNTIME_WORKER_NUM 1)" \
+	"OBSERVER_GRPC_RUNTIME_BLOCKING_WORKER_NUM=$(observer_default_value OBSERVER_GRPC_RUNTIME_BLOCKING_WORKER_NUM 16)" \
+	"OBSERVER_JOB_RUNTIME_WORKER_NUM=$(observer_default_value OBSERVER_JOB_RUNTIME_WORKER_NUM 1)" \
+	"OBSERVER_JOB_RUNTIME_BLOCKING_WORKER_NUM=$(observer_default_value OBSERVER_JOB_RUNTIME_BLOCKING_WORKER_NUM 16)" \
+	"OBSERVER_WAL_RUNTIME_WORKER_NUM=$(observer_default_value OBSERVER_WAL_RUNTIME_WORKER_NUM 1)" \
+	"OBSERVER_WAL_WRITE_QUEUE_SIZE=$(observer_default_value OBSERVER_WAL_WRITE_QUEUE_SIZE 1000)" \
+	"OBSERVER_COMPACT_INTERVAL=$(observer_default_value OBSERVER_COMPACT_INTERVAL 30)" \
+	"OBSERVER_COMPACT_DATA_RETENTION_INTERVAL=$(observer_default_value OBSERVER_COMPACT_DATA_RETENTION_INTERVAL 3600)" \
+	"OBSERVER_COMPACT_TANTIVY_BUILDER_THREAD_NUM=$(observer_default_value OBSERVER_COMPACT_TANTIVY_BUILDER_THREAD_NUM 1)" \
+	"OBSERVER_ENABLE_INVERTED_INDEX=$(observer_default_value OBSERVER_ENABLE_INVERTED_INDEX false)" \
+	"OBSERVER_DISK_CACHE_MAX_SIZE=$(observer_default_value OBSERVER_DISK_CACHE_MAX_SIZE 128)" \
+	"OBSERVER_LOG_PROXY_MEMORY_LIMIT=$(observer_default_value OBSERVER_LOG_PROXY_MEMORY_LIMIT 32m)" \
+	"OBSERVER_LOG_PROXY_CPUS=$(observer_default_value OBSERVER_LOG_PROXY_CPUS 0.10)" \
+	"OBSERVER_LOG_PROXY_PIDS_LIMIT=$(observer_default_value OBSERVER_LOG_PROXY_PIDS_LIMIT 64)" \
+	"OBSERVER_LOG_SHIPPER_MEMORY_LIMIT=$(observer_default_value OBSERVER_LOG_SHIPPER_MEMORY_LIMIT 96m)" \
+	"OBSERVER_LOG_SHIPPER_CPUS=$(observer_default_value OBSERVER_LOG_SHIPPER_CPUS 0.10)" \
+	"OBSERVER_LOG_SHIPPER_PIDS_LIMIT=$(observer_default_value OBSERVER_LOG_SHIPPER_PIDS_LIMIT 128)"; do
+	ensure_key "$observer_env" "${pair%%=*}" "${pair#*=}"
+done
+# Credentials are deliberately written with set_key.  An earlier singleton
+# deployment may have left a placeholder in the foundation environment; using
+# ensure_key for these fields would preserve that placeholder and make the new
+# controller fail even after the operator entered valid credentials.
+for observer_key in OBSERVER_ROOT_USER_EMAIL OBSERVER_ROOT_USER_PASSWORD OBSERVER_INGEST_USER OBSERVER_INGEST_TOKEN; do
+	observer_value="${!observer_key:-}"
+	[[ -n "$observer_value" ]] || continue
+	set_key "$observer_env" "$observer_key" "$observer_value"
+done
+if [[ "$NODE_ROLE" == follower ]]; then
+	remove_key "$observer_env" OBSERVER_ROOT_USER_EMAIL
+	remove_key "$observer_env" OBSERVER_ROOT_USER_PASSWORD
+fi
+chmod 600 "$observer_env"
+
 beszel_credentials="$CONFIG_ROOT/beszel-initial-credentials"
 beszel_key_exists=0
 beszel_token_exists=0
@@ -961,11 +1112,14 @@ if [[ "$NODE_ROLE" == leader && ! -s "$CONFIG_ROOT/shared-secrets.env" ]]; then
 		printf 'LIBRECHAT_ADMIN_PANEL_SESSION_SECRET=%s\n' "$(sed -n 's/^LIBRECHAT_ADMIN_PANEL_SESSION_SECRET=//p' "$app_env" | tail -n1)"
 		printf 'WOODPECKER_AGENT_SECRET=%s\n' "$(sed -n 's/^WOODPECKER_AGENT_SECRET=//p' "$woodpecker_env" | tail -n1)"
 		printf 'WOODPECKER_GRPC_SECRET=%s\n' "$(sed -n 's/^WOODPECKER_GRPC_SECRET=//p' "$woodpecker_env" | tail -n1)"
+		printf 'OBSERVER_INGEST_USER=%s\nOBSERVER_INGEST_TOKEN=%s\n' "$(sed -n 's/^OBSERVER_INGEST_USER=//p' "$observer_env" | tail -n1)" "$(sed -n 's/^OBSERVER_INGEST_TOKEN=//p' "$observer_env" | tail -n1)"
 	} >"$CONFIG_ROOT/shared-secrets.env"
 	chmod 600 "$CONFIG_ROOT/shared-secrets.env"
 fi
 if [[ "$NODE_ROLE" == leader ]]; then
 	set_key "$CONFIG_ROOT/shared-secrets.env" LEADER_PUBLIC_IP "$LEADER_PUBLIC_IP"
+	set_key "$CONFIG_ROOT/shared-secrets.env" OBSERVER_INGEST_USER "$(sed -n 's/^OBSERVER_INGEST_USER=//p' "$observer_env" | tail -n1)"
+	set_key "$CONFIG_ROOT/shared-secrets.env" OBSERVER_INGEST_TOKEN "$(sed -n 's/^OBSERVER_INGEST_TOKEN=//p' "$observer_env" | tail -n1)"
 fi
 
 sha="$(git -C "$SOURCE_ROOT" rev-parse "origin/$MAIN_BRANCH" 2>/dev/null || git -C "$SOURCE_ROOT" rev-parse HEAD)"
@@ -985,12 +1139,12 @@ for descriptor in "$release"/apps/*; do
 	install -m 600 "$descriptor/manifest.env" "$CONTROL_ROOT/descriptors/$descriptor_id/manifest.env"
 done
 install -o root -g root -m 600 "$SOURCE_ROOT/compose/foundation/caddy.yml" "$FOUNDATION_ROOT/caddy.yml"
-for foundation_file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml; do
+for foundation_file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
 	install -o root -g root -m 600 "$SOURCE_ROOT/compose/foundation/$foundation_file" "$FOUNDATION_ROOT/$foundation_file"
 done
 
 install -d -m 700 /usr/local/libexec
-for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-secrets enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
+for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-secrets configure-observer-ingest enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
 	cat >"/usr/local/bin/$script" <<EOF
 #!/bin/sh
 exec /opt/platform/control/current/ops/$script.sh "\$@"
@@ -1033,7 +1187,7 @@ docker build --pull=false --build-arg COMPOSE_ARCH="$compose_arch" --build-arg C
 runner_image_id="$(docker image inspect --format '{{.Id}}' llm-hub-lite/deploy-runner:current)"
 [[ -n "$runner_image_id" ]] || die 'deployment runner image was not created'
 set_key "$platform_env" PLATFORM_RUNNER_IMAGE_ID "$runner_image_id"
-PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl validate
+PLATFORM_ALLOW_OBSERVER_BOOTSTRAP=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl validate
 # Apply follower Docker ingress filtering before any public container starts.
 /usr/local/bin/configure-firewall
 if [[ "$NODE_ROLE" == follower ]]; then
@@ -1047,6 +1201,8 @@ if [[ "$NODE_ROLE" == follower && -s "$CONFIG_ROOT/beszel-enrollment.env" ]]; th
 if [[ "$NODE_ROLE" == leader ]]; then
 	PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl start beszel-controller
 	/usr/local/bin/enroll-beszel || printf 'Beszel enrollment deferred; platform-beszel-enroll.timer will retry it\n' >&2
+	PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl start observer-controller
+	/usr/local/bin/configure-observer-ingest
 fi
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl recover --quiet
@@ -1058,15 +1214,18 @@ PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot p
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet\n' >&2
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet\n' >&2
 print_bootstrap_summary() {
-	local foundation consumers disabled manifest app_id display_name placement origin_key public_key public_host route_label route_index groups availability_note
+	local foundation consumers disabled manifest app_id display_name placement origin_key public_key public_host route_label route_index groups availability_note summary_observer_root
 	local -a local_consumers=()
-	foundation='Caddy, Beszel Agent'
+	# Keep the summary callable from tests and recovery tooling that do not run
+	# the full data-directory initialization block first.
+	summary_observer_root="${observer_data_root:-${OBSERVER_DATA_ROOT:-${PLATFORM_ROOT:-/opt/platform}/observer}}"
+	foundation='Caddy, Beszel Agent, Observer Collector'
 	consumers='none'
 	disabled='none'
 	if [[ "$NODE_ROLE" == leader ]]; then
-		foundation='Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer'
+		foundation='Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer, Observer, Observer Collector'
 	else
-		foundation='Caddy, Beszel Agent, Woodpecker Agent'
+		foundation='Caddy, Beszel Agent, Woodpecker Agent, Observer Collector'
 	fi
 	while IFS= read -r manifest; do
 		[[ -f "$manifest" ]] || continue
@@ -1097,6 +1256,8 @@ print_bootstrap_summary() {
 	if [[ "$NODE_ROLE" == leader ]]; then
 		printf '  Woodpecker: https://ci.%s\n' "$DOMAIN_NAME"
 		printf '  Beszel: https://status.%s\n' "$DOMAIN_NAME"
+		printf '  OpenObserve: https://observer.%s\n' "$DOMAIN_NAME"
+		printf '  OpenObserve ingest (DNS-only): https://observer-ingest.%s\n' "$DOMAIN_NAME"
 		while IFS= read -r manifest; do
 			[[ -f "$manifest" ]] || continue
 			app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
@@ -1153,7 +1314,7 @@ print_bootstrap_summary() {
 		printf '  1. Transfer %s/shared-secrets.env and %s/beszel-enrollment.env to each Follower.\n' "$CONFIG_ROOT" "$CONFIG_ROOT"
 		printf '  2. Bootstrap worker-1, then worker-2.\n'
 		printf '  3. Sign in to Woodpecker and enable this repository as trusted.\n'
-		printf '  4. Verify cluster health after both Followers join.\n'
+		printf '  4. Verify cluster health and Observer ingestion after both Followers join.\n'
 	else
 		printf '  1. Verify this node\047s origin endpoints from the Leader.\n'
 		printf '  2. Verify https://chat.%s and https://chat-admin.%s.\n' "$DOMAIN_NAME" "$DOMAIN_NAME"
@@ -1161,7 +1322,8 @@ print_bootstrap_summary() {
 	fi
 
 	printf '\nOperations\n'
-	printf '  platformctl status\n  platformctl health\n  docker ps\n  systemctl --failed\n'
+	printf '  platformctl status\n  platformctl health\n  platformctl diagnose foundation\n  docker ps\n  systemctl --failed\n'
+	printf '\nObserver\n  Retention: 30 days\n  Durable data: %s/data (8 GiB is an operational target, not a hard quota)\n  Collector buffer: %s/collector-buffer (bounded and excluded from backups)\n' "$summary_observer_root" "$summary_observer_root"
 	printf '\nDaily deployments are workflow-driven: push to GitHub and let Woodpecker update the nodes.\n'
 	printf 'SSH remains available for recovery, but is not required for routine deployments.\n'
 }

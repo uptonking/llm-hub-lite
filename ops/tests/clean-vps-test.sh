@@ -8,6 +8,10 @@ bash -n "$script"
 grep -Fq 'DELETE LLM-HUB-LITE DATA' "$script"
 grep -Fq 'docker stop --time 90' "$script"
 grep -Fq 'log "deleting managed path: $path"' "$script"
+if grep -Eq 'local -n|declare -n' "$script"; then
+	printf 'cleanup must remain compatible with Bash 3.2\n' >&2
+	exit 1
+fi
 if grep -Fq 'docker rm -f' "$script"; then
 	printf 'cleanup must stop containers before removing them\n' >&2
 	exit 1

@@ -1,0 +1,23 @@
+{$OBSERVER_SITE} {
+  import common_proxy
+  reverse_proxy observer-controller:5080
+}
+
+{$OBSERVER_INGEST_SITE} {
+  import common_proxy
+  @ingest {
+    method POST
+    path_regexp ^/api/[^/]+/[^/]+/_json$
+  }
+  handle @ingest {
+    request_body {
+      max_size 10MB
+    }
+    reverse_proxy observer-controller:5080 {
+      flush_interval -1
+    }
+  }
+  handle {
+    respond 404
+  }
+}

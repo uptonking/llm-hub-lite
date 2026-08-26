@@ -19,7 +19,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-singleton-aichorouter
+  group: llm-hub-lite-deployment
 
 steps:
   stop:

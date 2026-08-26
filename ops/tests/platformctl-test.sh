@@ -8,15 +8,22 @@ cp -a "$repo_root/apps" "$repo_root/config" "$tmp/control/releases/test/"
 ln -s "$tmp/control/releases/test" "$tmp/control/current"
 for f in "$repo_root"/compose/foundation/*.yml; do cp "$f" "$tmp/foundation/"; done
 cp "$repo_root"/ops/foundation/*.env.example "$tmp/foundation/env/"
+cp "$repo_root/ops/foundation/observer.env.example" "$tmp/foundation/env/observer.env"
+sed -e "s#^OBSERVER_DATA_ROOT=.*#OBSERVER_DATA_ROOT=$tmp/observer#" \
+	-e 's#^OBSERVER_ROOT_USER_EMAIL=.*#OBSERVER_ROOT_USER_EMAIL=observer-admin@aichorage.test#' \
+	-e 's#^OBSERVER_ROOT_USER_PASSWORD=.*#OBSERVER_ROOT_USER_PASSWORD=test-observer-password#' \
+	-e 's#^OBSERVER_INGEST_TOKEN=.*#OBSERVER_INGEST_TOKEN=o2oi_00000000000000000000000000000000#' \
+	"$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
 cp "$repo_root"/ops/images.*.prod.env "$tmp/config/"
 cat >"$tmp/config/cpapi.env" <<'EOF'
 CPAPI_API_KEY=test-api-key
 CPAPI_MANAGEMENT_KEY=test-management-key
 EOF
-cat >"$tmp/config/observer.env" <<'EOF'
-OBSERVER_ROOT_USER_EMAIL=admin@observer.test
-OBSERVER_ROOT_USER_PASSWORD=test-observer-password
+cat >"$tmp/config/aichorouter.env" <<'EOF'
+AICHOROUTER_SESSION_SECRET=test-session-secret
+AICHOROUTER_CRYPTO_SECRET=test-crypto-secret
 EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
@@ -25,10 +32,10 @@ NODE_CPAPI_ORIGIN_HOST=worker2-cpapi.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
-NODE_OBSERVER_ORIGIN_HOST=worker2-observer.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
   *" ps --all -q health-probe"*) printf 'health-probe\n'; exit 0;;
   *" ps --all -q"*) :;;
@@ -38,7 +45,6 @@ case "$*" in
   *app-newapi*) printf 'newapi\n';;
   *app-cpapi*) printf 'cpapi\nhealth-probe\n';;
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
-  *app-observer*) printf 'observer\nhealth-probe\n';;
 esac
 exit 0
 EOF
@@ -53,6 +59,7 @@ exit 0
 EOF
 chmod +x "$tmp/bin"/*
 export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
+export COMPOSE_CALL_LOG="$tmp/compose.log"
 foundation_env_function="$(sed -n '/^foundation_env() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
 foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUNDATION_ENV_ROOT=/foundation bash -c '
 	eval "$FOUNDATION_ENV_FUNCTION"
@@ -66,12 +73,88 @@ foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUN
 	exit 1
 }
 bash "$repo_root/ops/platformctl.sh" validate
-sed 's/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=8589934593/' "$tmp/app/shared/.env.prod" >"$tmp/observer-invalid.env"
-mv "$tmp/observer-invalid.env" "$tmp/app/shared/.env.prod"
+sed 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=0/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-	printf 'observer buffer limit above 8 GiB was accepted\n' >&2
+	printf 'zero Observer durable warning threshold was accepted\n' >&2
 	exit 1
 fi
+sed 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=8589934592/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+sed 's/^OBSERVER_LOG_BUFFER_WARN_PERCENT=.*/OBSERVER_LOG_BUFFER_WARN_PERCENT=101/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+	printf 'Observer buffer warning percentage above 100 was accepted\n' >&2
+	exit 1
+fi
+sed 's/^OBSERVER_LOG_BUFFER_WARN_PERCENT=.*/OBSERVER_LOG_BUFFER_WARN_PERCENT=80/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+sed 's/^OBSERVER_INGEST_TOKEN=.*/OBSERVER_INGEST_TOKEN=bootstrap-pending/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+PLATFORM_ALLOW_OBSERVER_BOOTSTRAP=1 bash "$repo_root/ops/platformctl.sh" validate
+if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+	printf 'Observer bootstrap-pending token was accepted outside the bootstrap phase\n' >&2
+	exit 1
+fi
+sed 's#^OBSERVER_INGEST_TOKEN=.*#OBSERVER_INGEST_TOKEN=o2oi_00000000000000000000000000000000#' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+sed 's#^OBSERVER_SITE=.*#OBSERVER_SITE=https://stale-app.example.invalid#; s#^OBSERVER_INGEST_SITE=.*#OBSERVER_INGEST_SITE=https://stale-ingest.example.invalid#' "$tmp/app/shared/.env.prod" >"$tmp/app/shared/.env.prod.tmp"
+mv "$tmp/app/shared/.env.prod.tmp" "$tmp/app/shared/.env.prod"
+sed 's#^OBSERVER_SITE=.*#OBSERVER_SITE=https://foundation.example.invalid#; s#^OBSERVER_INGEST_SITE=.*#OBSERVER_INGEST_SITE=https://foundation-ingest.example.invalid#; s#^OBSERVER_INGEST_URL=.*#OBSERVER_INGEST_URL=https://foundation-ingest.example.invalid#' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+mkdir -p "$tmp/observer/data" "$tmp/observer/collector-buffer"
+printf 'observer-data\n' >"$tmp/observer/data/log.txt"
+printf 'collector-buffer\n' >"$tmp/observer/collector-buffer/buffer"
+bash "$repo_root/ops/platformctl.sh" validate
+grep -Fq 'foundation.example.invalid' "$tmp/app/shared/runtime/config/Caddyfile" "$tmp/app/shared/runtime/config/foundation-routes.d/observer.caddy"
+grep -Fq 'foundation-ingest.example.invalid' "$tmp/app/shared/runtime/config/foundation-routes.d/observer.caddy"
+if grep -Fq 'stale-app.example.invalid' "$tmp/app/shared/runtime/config/foundation-routes.d/observer.caddy"; then
+	printf 'Observer Caddy route used stale shared application URL instead of foundation env\n' >&2
+	exit 1
+fi
+PLATFORM_ONLY_APP_ID=cpapi bash "$repo_root/ops/platformctl.sh" diagnose app:cpapi >/dev/null
+if bash "$repo_root/ops/platformctl.sh" diagnose app:not-an-app >/dev/null 2>&1; then
+	printf 'diagnose accepted an unknown application\n' >&2
+	exit 1
+fi
+leader_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
+grep -Fq '[observer-storage]' <<<"$leader_diagnose"
+grep -Fq '[observer-buffer]' <<<"$leader_diagnose"
+grep -Fq 'warn_bytes=8589934592' <<<"$leader_diagnose"
+grep -Fq 'warn_percent=80' <<<"$leader_diagnose"
+if grep -Fq 'test-observer-password' <<<"$leader_diagnose" || grep -Fq 'o2oi_' <<<"$leader_diagnose"; then
+	printf 'Observer diagnostics exposed a credential\n' >&2
+	exit 1
+fi
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+worker_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
+if grep -Fq '[observer-storage]' <<<"$worker_diagnose"; then
+	printf 'follower diagnostics reported Leader-only Observer storage\n' >&2
+	exit 1
+fi
+grep -Fq '[observer-buffer]' <<<"$worker_diagnose"
+sed -e 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=1/' \
+	-e 's/^OBSERVER_LOG_BUFFER_WARN_PERCENT=.*/OBSERVER_LOG_BUFFER_WARN_PERCENT=1/' \
+	-e 's/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=1048576/' \
+	"$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+dd if=/dev/zero of="$tmp/observer/collector-buffer/pressure" bs=1024 count=16 >/dev/null 2>&1
+warning_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
+grep -Fq 'WARNING: Observer collector buffer' <<<"$warning_diagnose"
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+leader_warning_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
+grep -Fq 'WARNING: Observer durable data' <<<"$leader_warning_diagnose"
+cp "$tmp/compose.log" "$tmp/compose-all.log"
+: >"$tmp/compose.log"
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+PLATFORM_ONLY_APP_ID=cpapi bash "$repo_root/ops/platformctl.sh" validate
+grep -Fq 'app-cpapi' "$tmp/compose.log"
+if grep -Fq 'app-librechat' "$tmp/compose.log"; then
+	printf 'singleton app scope reconciled an unrelated consumer\n' >&2
+	exit 1
+fi
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+bash "$repo_root/ops/platformctl.sh" validate
 cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
 grep -Fq 'Do not evaluate an inactive app' "$repo_root/ops/platformctl.sh"
 grep -Fq -- '--force-recreate --wait' "$repo_root/ops/platformctl.sh"
@@ -79,6 +162,7 @@ grep -Fq 'Compose project state after failed health wait' "$repo_root/ops/platfo
 grep -Fq 'failed during recreate' "$repo_root/ops/platformctl.sh"
 grep -Fq 'restart command failed' "$repo_root/ops/platformctl.sh"
 grep -Fq 'app_in_reconcile_scope' "$repo_root/ops/platformctl.sh"
+grep -Fq 'stopping retired Observer container' "$repo_root/ops/platformctl.sh"
 grep -Fq 'singleton-origin-smoke' "$repo_root/ops/platformctl.sh"
 grep -Fq 'oom={{.State.OOMKilled}}' "$repo_root/ops/platformctl.sh"
 grep -Fq 'LibreChat Upstash Redis URI must use TLS (rediss://)' "$repo_root/ops/platformctl.sh"
@@ -87,7 +171,6 @@ grep -Fq 'cpapi.localhost' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
 grep -Fq 'lb_policy random_choose 2' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'header_up Host {http.reverse_proxy.upstream.hostport}' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'reverse_proxy https://worker1-aichorouter-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
-grep -Fq 'observer.localhost' "$tmp/app/shared/runtime/config/routes.d/observer.caddy"
 grep -Fq 'location = /health' "$repo_root/apps/librechat/client.nginx.conf"
 grep -Fq 'mem_limit:' "$repo_root/apps/librechat/compose.yml"
 grep -Fq 'MONGO_MAX_POOL_SIZE:' "$repo_root/apps/librechat/compose.yml"

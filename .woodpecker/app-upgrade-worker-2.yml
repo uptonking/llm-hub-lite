@@ -11,7 +11,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-app-upgrade
+  group: llm-hub-lite-deployment
 
 steps:
   upgrade:

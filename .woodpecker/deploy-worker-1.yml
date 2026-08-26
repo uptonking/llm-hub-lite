@@ -20,7 +20,7 @@ depends_on:
   - deploy-leader
 concurrency:
   limit: 1
-  group: llm-hub-lite-production
+  group: llm-hub-lite-deployment
 
 steps:
   deploy:

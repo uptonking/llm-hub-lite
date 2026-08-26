@@ -4,10 +4,11 @@
 
 Self-hosted, reproducible multi-node Docker platform for Caddy, Woodpecker CI,
 Beszel, and LibreChat.
-LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI,
-and OpenObserve (`observer`) are enabled singleton consumers targeted to a
-configured follower. Observer also collects platform-labelled Docker logs on
-its target host through a read-only socket proxy and bounded Vector buffer.
+LibreChat is the enabled active-active follower consumer. Aichorouter and CPAPI
+are enabled singleton consumers targeted to configured followers. OpenObserve
+(`observer`) is a Leader-only foundation service; read-only socket-proxy and
+bounded Vector collectors run on every node and forward platform-labelled logs
+to the Leader.
 Legacy New API remains retained and disabled by policy.
 
 ## Architecture
@@ -18,10 +19,13 @@ Legacy New API remains retained and disabled by policy.
   route templates.
 - Generated runtime Caddy configuration: `/opt/apps/llm-hub-lite/shared/runtime/config`.
 - Persistent app data: `/opt/apps/llm-hub-lite/shared/data/prod`.
-- Foundation state: `/opt/platform/{caddy,woodpecker,beszel}`.
+- Foundation state: `/opt/platform/{caddy,woodpecker,beszel,observer}`.
 - Root-only runtime configuration: `/etc/llm-hub-lite`.
-- Observer durable data is under `shared/data/prod/observer`; its transient
-  `log-buffer` is excluded from Restic and discarded when the singleton moves.
+- Observer durable data is under `/opt/platform/observer/data`; per-node
+  collector buffers under `/opt/platform/observer/collector-buffer` are
+  transient and excluded from Restic. `platformctl diagnose foundation` reports
+  both paths where applicable and warns at the configured thresholds without
+  deleting data.
 
 ## Operations
 

@@ -14,7 +14,6 @@ type = "remap"
 inputs = ["exclude_observer_sidecars"]
 source = '''
 .message = string!(.message)
-.timestamp = .timestamp
 .container_id = .container_id
 .container_name = .container_name
 .image = .image
@@ -26,14 +25,15 @@ source = '''
 [sinks.openobserve]
 type = "http"
 inputs = ["add_metadata"]
-uri = "http://observer:5080/api/${OBSERVER_LOG_ORGANIZATION}/${OBSERVER_LOG_STREAM}/_json"
+uri = "${OBSERVER_INGEST_URL}/api/${OBSERVER_LOG_ORGANIZATION}/${OBSERVER_LOG_STREAM}/_json"
 method = "post"
 compression = "gzip"
 encoding.codec = "json"
 auth.strategy = "basic"
-auth.user = "${OBSERVER_ROOT_USER_EMAIL}"
-auth.password = "${OBSERVER_ROOT_USER_PASSWORD}"
+auth.user = "${OBSERVER_INGEST_USER}"
+auth.password = "${OBSERVER_INGEST_TOKEN}"
 batch.max_events = 100
+batch.max_bytes = 5000000
 batch.timeout_secs = 5
 request.in_flight_limit = 1
 request.retry_attempts = 10
@@ -42,8 +42,6 @@ request.retry_max_duration_secs = 60
 
 [sinks.openobserve.buffer]
 type = "disk"
-# The Compose environment supplies the validated 8 GiB default. This queue is
-# intentionally transient and resource-bounded.
 max_size = ${OBSERVER_LOG_BUFFER_MAX_BYTES}
 when_full = "drop_newest"
 

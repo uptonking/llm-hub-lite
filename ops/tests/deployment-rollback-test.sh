@@ -83,6 +83,13 @@ cp "$repo_root/.env.prod.example" "$app_root/shared/.env.prod"
 cp "$repo_root/ops/images.apps.prod.env" "$config_root/images.apps.env"
 cp "$repo_root/ops/images.foundation.prod.env" "$config_root/images.foundation.env"
 cp "$repo_root/ops/foundation"/*.env.example "$platform_root/foundation/env/"
+cp "$repo_root/ops/foundation/observer.env.example" \
+	"$platform_root/foundation/env/observer.env"
+sed -e 's#^OBSERVER_ROOT_USER_EMAIL=.*#OBSERVER_ROOT_USER_EMAIL=observer-admin@aichorage.test#' \
+	-e 's#^OBSERVER_ROOT_USER_PASSWORD=.*#OBSERVER_ROOT_USER_PASSWORD=test-observer-password#' \
+	-e 's#^OBSERVER_INGEST_TOKEN=.*#OBSERVER_INGEST_TOKEN=o2oi_00000000000000000000000000000000#' \
+	"$platform_root/foundation/env/observer.env" >"$platform_root/foundation/env/observer.env.tmp"
+mv "$platform_root/foundation/env/observer.env.tmp" "$platform_root/foundation/env/observer.env"
 cat >"$config_root/node.env" <<'EOF'
 NODE_ID=leader
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi-origin.example.invalid
@@ -160,6 +167,43 @@ else
 	exit 1
 fi
 
+# Environment examples are committed templates, not live host state. A
+# template update may ship with an application change through the normal path.
+printf '\ncombined template and app change\n' >>"$work/.env.prod.example"
+printf '\n# combined app change\n' >>"$work/apps/cpapi/compose.yml"
+git -C "$work" add .env.prod.example apps/cpapi/compose.yml
+git -C "$work" -c commit.gpgsign=false commit --quiet -m template-and-app-change
+git -C "$work" push --quiet origin HEAD:main
+sha_template_app="$(git -C "$work" rev-parse HEAD)"
+if ! FAIL_SYNC=0 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha_template_app" >"$tmp/deploy-template-app.log" 2>&1; then
+	printf 'template-plus-application change was rejected by the normal deployment path\n' >&2
+	exit 1
+fi
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
+
+# A delayed Woodpecker build must not roll a node back implicitly. Explicit
+# rollback is the only path allowed to target an older retained release.
+if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha3" >"$tmp/deploy-stale.log" 2>&1; then
+	printf 'stale normal deployment was accepted\n' >&2
+	exit 1
+fi
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
+grep -Fq 'target commit is older than the installed release' "$tmp/deploy-stale.log"
+
+# Singleton jobs are app-scoped. An unrelated path in the same commit must be
+# rejected before any backup, route, or Compose mutation occurs.
+printf '\n# cpapi singleton change\n' >>"$work/apps/cpapi/compose.yml"
+printf '\nunrelated file\n' >>"$work/README.md"
+git -C "$work" add apps/cpapi/compose.yml README.md
+git -C "$work" -c commit.gpgsign=false commit --quiet -m singleton-scope-change
+git -C "$work" push --quiet origin HEAD:main
+sha_singleton_scope="$(git -C "$work" rev-parse HEAD)"
+if SINGLETON_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" singleton-stage "$sha_singleton_scope" >"$tmp/deploy-singleton-scope.log" 2>&1; then
+	printf 'singleton workflow accepted an unrelated path\n' >&2
+	exit 1
+fi
+grep -Fq 'cannot apply unrelated path: README.md' "$tmp/deploy-singleton-scope.log"
+
 aichorouter_image="$(sed -n 's/^AICHOROUTER_IMAGE=//p' "$work/ops/images.apps.prod.env")"
 aichorouter_prefix="${aichorouter_image%@sha256:*}"
 aichorouter_digest="${aichorouter_image##*@sha256:}"
@@ -180,7 +224,7 @@ if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha_image" >"$tmp/deploy-
 	printf 'application image manifest change was accepted by the normal deployment path\n' >&2
 	exit 1
 fi
-[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
 grep -Fq 'application image manifest changes require the app-upgrade or singleton workflow' "$tmp/deploy-image-change.log"
 
 printf '\nfoundation change\n' >>"$work/compose/foundation/caddy.yml"

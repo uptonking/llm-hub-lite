@@ -6,6 +6,7 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 policy="${CLUSTER_POLICY_FILE:-$root/config/cluster/policy.env}"
 output="${WOODPECKER_WORKFLOW_ROOT:-$root/.woodpecker}"
 mode="${1:-generate}"
+deployment_group='llm-hub-lite-deployment'
 
 value() { sed -n "s/^$1=//p" "$policy" | tail -n1; }
 csv_items() { printf '%s\n' "$(value "$1")" | tr ',' '\n' | sed '/^[[:space:]]*$/d'; }
@@ -117,7 +118,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-cluster-reconcile
+  group: $deployment_group
 
 steps:
   reconcile:
@@ -154,7 +155,7 @@ labels:
 $dep
 concurrency:
   limit: 1
-  group: llm-hub-lite-production
+  group: $deployment_group
 
 steps:
   deploy:
@@ -201,7 +202,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-singleton-$app
+  group: $deployment_group
 
 steps:
   stage:
@@ -240,7 +241,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-singleton-$app
+  group: $deployment_group
 
 steps:
   switch:
@@ -288,7 +289,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-singleton-$app
+  group: $deployment_group
 
 steps:
   stop:
@@ -326,7 +327,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-app-upgrade
+  group: $deployment_group
 
 steps:
   upgrade:
@@ -378,7 +379,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-$kind
+  group: $deployment_group
 
 steps:
   $kind:
@@ -448,7 +449,7 @@ generate() {
 		printf '%s' "$app_source_paths"
 		printf '%s\n' '        - config/Caddyfile' '        - config/foundation-routes.d/**' '        - config/routes.d/**' '' 'depends_on:'
 		for id in "${ordered[@]}"; do printf '  - deploy-%s\n' "$id"; done
-		printf '%s\n' '' 'labels:' "  node: $leader_id" '  deployment: "true"' '  target: production' "  repo: $repo_slug" '' 'concurrency:' '  limit: 1' '  group: llm-hub-lite-production' '' 'steps:' '  smoke:' '    image: llm-hub-lite/deploy-runner:current' '    pull: false' '    volumes:' '      - /var/run/docker.sock:/var/run/docker.sock' '      - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite' '      - /opt/platform:/opt/platform' '      - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite' '      - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite' '      - /etc/llm-hub-lite:/etc/llm-hub-lite' '      - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro' '    commands:' '      - /usr/local/bin/platformctl health' '      - /usr/local/bin/platformctl smoke all'
+		printf '%s\n' '' 'labels:' "  node: $leader_id" '  deployment: "true"' '  target: production' "  repo: $repo_slug" '' 'concurrency:' '  limit: 1' "  group: $deployment_group" '' 'steps:' '  smoke:' '    image: llm-hub-lite/deploy-runner:current' '    pull: false' '    volumes:' '      - /var/run/docker.sock:/var/run/docker.sock' '      - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite' '      - /opt/platform:/opt/platform' '      - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite' '      - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite' '      - /etc/llm-hub-lite:/etc/llm-hub-lite' '      - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro' '    commands:' '      - /usr/local/bin/platformctl health' '      - /usr/local/bin/platformctl smoke all'
 	} >"$output/deploy-smoke.yml"
 	local previous=''
 	for id in "${ordered[@]}"; do

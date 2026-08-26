@@ -18,7 +18,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-cluster-reconcile
+  group: llm-hub-lite-deployment
 
 steps:
   reconcile:

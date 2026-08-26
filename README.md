@@ -24,9 +24,12 @@ VPS public ingress does not use its default-route interface.
 Set `REPO_SLUG` in `config/cluster/policy.env` to the GitHub owner/repository
 that runs this stack; generated Woodpecker labels use that value.
 
-The control plane is intentionally single-controller: Woodpecker and Beszel
-use persistent SQLite on the Leader. LibreChat replicas share external Atlas
-MongoDB and Upstash Redis state. This provides consumer availability.
+The control plane is intentionally single-controller: Woodpecker, Beszel, and
+OpenObserve use persistent local state on the Leader. Lightweight Observer
+collectors run on every node and send platform-labelled Docker logs to the
+Leader. LibreChat replicas share external Atlas MongoDB and Upstash Redis
+state. This provides consumer availability without making the logging store a
+consumer dependency.
 
 ## Configuration
 
@@ -81,8 +84,8 @@ journal until the target has been verified or deliberately rolled back.
 
 Legacy New API remains as a dormant manifest and is disabled by the committed
 policy. CPAPI is an enabled singleton consumer at `cpapi.aichorage.de` and is
-unrelated to the legacy New API. OpenObserve is an enabled singleton consumer
-at `observer.aichorage.de` . LibreChat is enabled on Followers and is published at
+unrelated to the legacy New API. OpenObserve is an enabled Leader foundation
+service at `observer.aichorage.de` . LibreChat is enabled on Followers and is published at
 `chat.aichorage.de` and `chat-admin.aichorage.de` . It uses MongoDB Atlas and
 Upstash Redis; provide `LIBRECHAT_MONGO_URI` and `LIBRECHAT_REDIS_URI` (plus
 the generated JWT and admin-panel secrets) in the root-only bundle or during
@@ -142,56 +145,37 @@ git diff -- config/cluster/apps/aichorouter.policy
 git add config/cluster/apps/aichorouter.policy && git commit -m 'target aichorouter follower' && git push
 ```
 
-OpenObserve is the enabled singleton observability service at
-`observer.aichorage.de` . It runs the official single-binary image in local disk
-mode with no Redis, PostgreSQL, NATS, or object-storage dependency. Its data is
-stored at `data/prod/observer` and its root credentials are kept in
-`/etc/llm-hub-lite/observer.env` on the selected follower. The default profile
-uses `512m` memory, `0.50` CPU, one query/HTTP worker, a disabled in-memory
-cache, and 30 days of local retention. Inverted indexes are disabled by default
-to reduce CPU and disk use; set `OBSERVER_ENABLE_INVERTED_INDEX=true` only when
-faster full-text searches justify the cost. Moving observer to another follower
-is intentionally a fresh deployment; the old local directory is archived and
-not copied to the new node.
+OpenObserve is a Leader foundation service at `observer.aichorage.de` . It runs
+the official single-binary image in local disk mode with no Redis, PostgreSQL,
+NATS, or object-storage dependency. Durable data is stored at
+`/opt/platform/observer/data` on the Leader and retained for 30 days. The
+default profile uses `512m` memory, `0.50` CPU, one query/HTTP worker, a
+disabled in-memory cache, and inverted indexes disabled by default. The 8 GiB
+data size is a monitored operational target, not a hard quota; inspect it with
+`platformctl diagnose foundation`. Its SQLite metadata catalog is captured
+through an online SQLite backup before each Restic snapshot.
 
-The selected follower also runs a read-only Docker socket proxy and a small
-Vector shipper. Only containers carrying the platform ownership label are
-collected, and records are sent over the private Compose network to the local
-OpenObserve instance. Vector uses a disk queue capped at 8 GiB by default with
-`drop_newest` when full; `OBSERVER_LOG_BUFFER_MAX_BYTES` may lower the cap but
-cannot exceed 8 GiB. The queue is an outage buffer, not durable application
-data. It is excluded from Restic while OpenObserve's durable data remains in
-the backup. During a singleton move the shipper is stopped and the old buffer
-is discarded before any durable data is retained, so moving observer can lose
-logs that were waiting to upload. Docker log collection is best effort and has
-no historical checkpoint guarantee after a prolonged outage or restart. The
-shipper's private health endpoint checks process health but does not prove that
-every event has reached OpenObserve. Logs may contain request data or
-credentials; restrict OpenObserve access and avoid logging secrets.
+Every VPS runs a read-only Docker socket proxy and a small Vector collector.
+Only containers carrying `com.aichorage.platform=llm-hub-lite` are collected;
+containers may opt out with `com.aichorage.observer.ignore-logs=true`. Records
+are sent to `observer-ingest.<domain>` using a write-only OpenObserve ingestion
+token. The ingestion hostname must be DNS-only and resolve directly to the
+Leader; the public UI hostname may be proxied through Cloudflare. Each node's
+collector has a bounded 512 MiB disk buffer under
+`/opt/platform/observer/collector-buffer`; it is transient and excluded from
+Restic. `platformctl diagnose foundation` reports the Leader's durable data and
+the local collector buffer on every node. It warns at 8 GiB of durable data or
+80% of the configured buffer, but never deletes recent logs. Logs may contain
+request data or credentials, so restrict UI access and avoid logging secrets.
 
-Select its follower interactively before committing a policy change:
-
-```bash
-ops/configure-single-follower.sh observer
-git diff -- config/cluster/apps/observer.policy
-git add config/cluster/apps/observer.policy && git commit -m 'target observer follower' && git push
-```
-
-On the selected follower, provision the OpenObserve administrator once:
-
-```bash
-sudo /opt/platform/control/current/ops/configure-app-secrets.sh observer
-```
-
-Useful observer checks on its target follower and through the Leader are:
-
-```bash
-docker compose -p app-observer ps
-docker logs app-observer-observer-log-shipper-1
-docker compose -p app-observer exec -T observer-log-shipper wget -q -O - http://localhost:8686/health
-curl -fsS https://worker1-observer-origin.aichorage.de/healthz
-curl -fsS https://observer.aichorage.de/healthz
-```
+This replaces the earlier singleton-consumer Observer layout. A clean bootstrap
+creates the new Leader-owned data directory; it does not automatically move
+Observer data that was previously stored on a Follower. Preserve an old
+installation only through an explicit export/restore procedure. Otherwise, the
+old Follower-local data may be discarded after the new Leader deployment is
+verified. During an in-place release, reconciliation retires old
+`app-observer` containers but deliberately leaves their bind-mounted data and
+volumes untouched for that decision.
 
 OpenObserve's production image is distroless and does not contain an HTTP
 client. A tiny pinned `health-probe` sidecar performs the HTTP readiness check
@@ -199,6 +183,13 @@ against `/healthz` ; the same sidecar pattern is used by Aichorouter and CPAPI.
 `platformctl health` requires the application containers to be running and
 the declared `health-probe` container to be `healthy` . The Observer log proxy
 and Vector shipper retain their own private healthchecks.
+
+The non-secret Observer defaults are maintained in
+`ops/foundation/observer.env.example` and copied only when a host does not
+already have an override. `configure-observer-ingest` serializes token
+reconciliation, validates the organization/stream path, and keeps the root
+credential on the Leader; Followers receive only the write-only collector
+token.
 
 On the selected follower, provision its root-only secrets once:
 
@@ -253,8 +244,6 @@ The minimal LibreChat profile runs exactly three containers on each Follower:
 the API, admin panel, and Nginx client. The API is capped at 512 MiB and 384
 MiB of Node heap, with small Mongo connection pools and bounded Redis retry-delay and scan settings; the admin panel and client have 128 MiB and 32 MiB caps. Search, RAG, pgvector, Meilisearch, code execution, local process-backed MCP, schedules, and deployment hooks are disabled in the checked-in profile. Remote MCP and the normal agent/tool orchestration remain available through the operator YAML.
 Uploads use R2, and the Compose API does not join the public edge network.
-Foundation services also have explicit low-memory caps: Caddy 64 MiB, Woodpecker server 256 MiB, Woodpecker workers 128 MiB, Beszel Hub 128 MiB, and Beszel agent 64 MiB by default. These are configurable through the `*_MEMORY_LIMIT` , `*_CPUS` , and `*_PIDS_LIMIT` variables in `.env.prod` .
-
 On a 1 GB VPS, bootstrap enables a 1 GB `/swapfile` with `nofail` persistence
 and low swappiness when no swap is already active. Override
 `LOW_MEMORY_SWAP_ENABLED` , `LOW_MEMORY_SWAPFILE` , `LOW_MEMORY_SWAP_SIZE` , or
@@ -280,6 +269,7 @@ cp .env.dev.example .env.dev
     - Woodpecker server/controller
     - Woodpecker deployer
     - Beszel Hub and agent
+    - OpenObserve controller and log collector
 - Follower worker-1:
     - Caddy
     - Woodpecker agent
@@ -287,7 +277,6 @@ cp .env.dev.example .env.dev
     - LibreChat
     - Aichorouter (the default singleton target)
     - CPAPI (the default singleton target)
-    - OpenObserve (the default singleton target)
 - Follower worker-2:
     - Caddy
     - Woodpecker agent
@@ -297,12 +286,16 @@ cp .env.dev.example .env.dev
 SSH is used only for this one-time host bootstrap. Before starting, prepare the
 three VPS hosts, Cloudflare DNS, and the R2 Restic repositories. The Leader
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
-files are transferred to Followers before they start. Public domains
-`ci` , `ci-grpc` , `status` , `chat` , `chat-admin` , `aichorouter` , `cpapi` ,
-and `observer` point to
-the Leader. The
-DNS-only origins using the `worker1-` prefix point to Worker 1, including the
-`worker1-observer-origin` record, while the stable-ID `worker2-` origin records point to Worker 2. The `leader` stable ID is the public Leader and therefore does not need a private origin record for ingress. The Follower origin records must remain DNS-only. The Follower firewall only permits Docker HTTPS traffic from the Leader IP. After certificates work, the public records may be proxied through Cloudflare.
+files are transferred to Followers before they start. Public domains `ci`,
+`ci-grpc`, `status`, `chat`, `chat-admin`, `aichorouter`, `cpapi`, and
+`observer` point to the Leader. Add `observer-ingest` as a DNS-only record
+directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
+origins using the `worker1-` prefix point to Worker 1, while the stable-ID
+`worker2-` origin records point to Worker 2. The `leader` stable ID is the
+public Leader and therefore does not need a private origin record for ingress.
+The Follower origin records must remain DNS-only. The Follower firewall only
+permits Docker HTTPS traffic from the Leader IP. After certificates work, the
+public records may be proxied through Cloudflare.
 
 Initialize each remote Restic repository once, before bootstrap. Keep the R2
 credentials and password in protected local files. This checkout uses
@@ -458,12 +451,12 @@ different shared secrets independently on different nodes.
 When invoking a remote bootstrap with SSH, use `ssh -tt` so the confirmation
 and secret prompts receive a terminal. You may set `BOOTSTRAP_ASSUME_YES=1` to
 skip only the role confirmation; required secrets are still validated and must be supplied through the environment, bundle, or remaining prompts.
-On the Aichorouter, CPAPI, and OpenObserve target follower, the interactive bootstrap also
-prompts for `AICHOROUTER_SESSION_SECRET` , `AICHOROUTER_CRYPTO_SECRET` ,
-`CPAPI_API_KEY` , `CPAPI_MANAGEMENT_KEY` , `OBSERVER_ROOT_USER_EMAIL` , and
-`OBSERVER_ROOT_USER_PASSWORD` ; these singleton-local secrets are
-intentionally not copied from the Leader. The CPAPI management panel is enabled
-and protected by its management key.
+On the Aichorouter and CPAPI target follower, the interactive bootstrap prompts
+for their singleton-local secrets. On the Leader, it prompts for the
+OpenObserve root credentials and creates a named write-only ingestion token;
+only the ingestion username/token are copied in `shared-secrets.env` to
+Followers. The CPAPI management panel is enabled and protected by its
+management key.
 
 After bootstrapping the Leader, copy the root-only
 `/etc/llm-hub-lite/beszel-enrollment.env` bundle to each follower (or pass its
@@ -594,17 +587,15 @@ Its native container healthcheck verifies the persisted configuration and
 process liveness, while the small pinned `health-probe` sidecar verifies
 `/healthz` over the private network.
 
-OpenObserve is a separate singleton consumer at `observer.aichorage.de` .
-Its target follower is stored in the observer app policy, and its local disk
-data and administrator credentials are intentionally not copied during a move.
-The default local retention is 30 days, with no external database or object
-store dependency. Its data is included in the node's Restic snapshot, but
-moving the service to another follower starts with an empty data directory.
-The co-located Vector shipper collects only platform-labelled Docker logs,
-filters its own sidecars using an ownership label, and keeps an ephemeral 8 GiB
-disk buffer by default. That buffer is excluded from Restic and discarded during
-the move. Collection is best effort, and logs can contain sensitive request
-data.
+OpenObserve is a Leader-only foundation service at `observer.aichorage.de`.
+Its durable local disk data is included in the Leader's Restic snapshot and is
+retained for 30 days. Collectors run on every VPS, use the dedicated
+`observer-ingest` host and write-only ingestion token, and keep a bounded
+transient buffer excluded from Restic. Collection is best effort, and logs can
+contain sensitive request data. There is no singleton move workflow or private
+Observer origin record. Use `platformctl diagnose foundation` on each node to
+inspect durable-data and buffer utilization; the 8 GiB and 80% values are
+warning thresholds only.
 
 LibreChat accounts and conversations live in MongoDB Atlas, while shared cache
 and stream state lives in Upstash. Local Restic snapshots include LibreChat
@@ -636,9 +627,10 @@ cluster workflow.
 
 Use the workflow that matches the changed paths. A normal LibreChat or legacy
 New API source/configuration change is handled by the generated `deploy-*`
-chain. Aichorouter, CPAPI, and Observer changes are handled by that app's
-generated `singleton-stage-*` -> `singleton-switch-*` -> `singleton-stop-*`
-chain. Image digest changes are run through the generated manual
+chain. Aichorouter and CPAPI changes are handled by their generated
+`singleton-stage-*` -> `singleton-switch-*` -> `singleton-stop-*` chain.
+Observer changes are foundation changes and use the reviewed
+`foundation-upgrade-*` chain. Image digest changes are run through the generated manual
 `app-upgrade-worker-1` and `app-upgrade-worker-2` workflows, in order, for
 active-active consumer images. A singleton image change follows that
 singleton's stage/switch/stop chain. Do not start an app-upgrade for an
@@ -652,9 +644,13 @@ For a local runtime-only change, edit the target node's root-owned
 ssh root@<target-follower> 'platformctl recreate app:/opt/platform/control/current/apps/aichorouter && platformctl health'
 ```
 
-The same command applies to `cpapi` or `observer`. It is intentionally a
-local maintenance operation; put durable Compose/default changes in Git so
-the next release remains reproducible.
+The same command applies to `cpapi`. Observer runtime values live in
+`/opt/platform/foundation/env/observer.env`; use `platformctl recreate
+observer-controller` and `platformctl recreate observer-collector` after an
+environment-file or collector configuration edit. Use `platformctl restart`
+when only a process restart is needed. These are intentionally local
+maintenance operations; put durable Compose/default changes in Git so the next
+release remains reproducible.
 
 Push consumer application changes to `main` . Woodpecker validates the exact commit, creates a verified
 backup, updates the Leader controller bundle, reconciles every follower node,
@@ -701,6 +697,60 @@ offline or fails health checks, its deployment rolls back locally and the
 dependency chain stops before the next node. Retry the same Woodpecker build
 after recovery; no SSH fan-out is required.
 
+## Woodpecker troubleshooting
+
+Mutating workflows share the `llm-hub-lite-deployment` concurrency group. This
+is intentional: every deployment can update release pointers and generated
+Caddy configuration, so a normal deploy, singleton transition, cluster
+reconciliation, image upgrade, foundation upgrade, runner upgrade, or rollback
+must finish before another one starts. A queued build is not stuck; wait for
+the earlier mutating workflow or cancel the obsolete build and rerun the newest
+commit.
+
+The `platform-submit` step streams the deployment runner log into the
+Woodpecker step while it runs. The first useful line is the deployment metadata
+record (`node`, `role`, `mode`, commit SHA, workflow, pipeline, and build). A
+scope rejection then lists every changed path, which makes a mixed commit easy
+to correct. `.env.prod.example` and `.env.dev.example` are templates and may be
+committed with application changes; they never overwrite a host's live
+`/opt/apps/llm-hub-lite/shared/.env.prod`. Foundation files, runner code, and
+image manifests still require their reviewed workflows.
+
+When a pipeline fails, copy the complete failed step log, including the
+`--- host deployment diagnostics ---` block printed at the end. For a singleton
+failure, the block is limited to that app; for a normal or foundation failure,
+it covers the local foundation and active consumer projects. The diagnostics
+include the current/previous release pointers, maintenance marker, Compose
+state, container exit/OOM/restart counts, and recent healthcheck output. Do not
+paste `/etc/llm-hub-lite/*.env` files or any secret values.
+
+If the pipeline log is truncated, collect the same safe summary directly from
+the affected node:
+
+```bash
+ssh root@<leader> 'platformctl diagnose foundation'
+ssh root@<worker-1> 'platformctl diagnose consumers'
+ssh root@<worker-1> 'platformctl diagnose foundation'
+ssh root@<worker-1> 'platformctl diagnose app:aichorouter'
+ssh root@<worker-1> 'platformctl health'
+```
+
+For a transient runner error, also copy the latest host deployment log (it is
+root-only and contains no secret files):
+
+```bash
+ssh root@<node> 'tail -n 240 /opt/apps/llm-hub-lite/shared/logs/deploy.log'
+```
+
+OpenObserve collects platform-labelled Docker logs from every VPS. Woodpecker,
+Aichorouter, CPAPI, LibreChat, Caddy, and Beszel containers are collected unless
+they carry the opt-out label. The short-lived deployment runner is intentionally
+excluded because `platform-submit` already streams its complete log into the
+Woodpecker step. The dedicated collector credentials are write-only; the
+OpenObserve root password is never distributed to Followers. The pipeline log
+and `platformctl diagnose` output remain useful when the logging path itself is
+unavailable.
+
 Runtime secrets and external service values in `/etc/llm-hub-lite/` and
 `/opt/apps/llm-hub-lite/shared/.env.prod` are intentionally not synchronized by
 GitHub pushes. Change those values on each affected node through the approved
@@ -735,7 +785,8 @@ platformctl restart app:/opt/platform/control/current/apps/cpapi
 # apply changed Compose limits, environment, or a local runtime secret
 platformctl recreate app:/opt/platform/control/current/apps/aichorouter
 platformctl recreate app:/opt/platform/control/current/apps/cpapi
-platformctl recreate app:/opt/platform/control/current/apps/observer
+platformctl recreate observer-controller
+platformctl recreate observer-collector
 
 # useful for boot recovery, missing containers, or unhealthy projects
 platformctl recover

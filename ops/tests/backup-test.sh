@@ -4,7 +4,7 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/observer"
+mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter"
 printf 'test-password\n' >"$tmp/config/restic-password"
 printf 'remote-password\n' >"$tmp/config/restic-remote-password"
 cat >"$tmp/control/current/apps/aichorouter/manifest.env" <<'EOF'
@@ -14,12 +14,9 @@ EPHEMERAL_DATA_REL=log-buffer
 SQLITE_PATHS=aichorouter.db
 EOF
 printf 'AICHOROUTER_SESSION_SECRET=test\n' >"$tmp/config/aichorouter.env"
-cat >"$tmp/control/current/apps/observer/manifest.env" <<'EOF'
-RUNTIME_ENV_FILE=observer.env
-DATA_ROOT_REL=observer
-EPHEMERAL_DATA_REL=log-buffer
-EOF
-printf 'OBSERVER_ROOT_USER_PASSWORD=test\n' >"$tmp/config/observer.env"
+printf 'OBSERVER_DATA_ROOT=%s\n' "$tmp/platform/observer-custom" >"$tmp/platform/foundation/env/observer.env"
+mkdir -p "$tmp/platform/observer-custom/data/db"
+: >"$tmp/platform/observer-custom/data/db/metadata.sqlite"
 
 cat >"$tmp/bin/df" <<'EOF'
 #!/bin/sh
@@ -51,6 +48,14 @@ exit 0
 EOF
 cat >"$tmp/bin/sqlite3" <<'EOF'
 #!/bin/sh
+last=''
+for arg do last="$arg"; done
+case "$last" in
+  .backup\ *)
+    target="$(printf '%s\n' "$last" | sed -e "s/^\\.backup '//" -e "s/'\$//")"
+    : >"$target"
+    ;;
+esac
 printf 'ok\n'
 EOF
 cat >"$tmp/bin/flock" <<'EOF'
@@ -80,8 +85,10 @@ if grep -q -- '--skip-if-unchanged' "$tmp/restic.log"; then
 fi
 grep -q "$tmp/config/aichorouter.env" "$tmp/restic.log"
 grep -q -- "--exclude $tmp/app/shared/data/prod/aichorouter/log-buffer" "$tmp/restic.log"
-grep -q "$tmp/config/observer.env" "$tmp/restic.log"
-grep -q -- "--exclude $tmp/app/shared/data/prod/observer/log-buffer" "$tmp/restic.log"
+grep -q "$tmp/platform/observer-custom" "$tmp/restic.log"
+grep -q -- "--exclude $tmp/platform/observer-custom/collector-buffer" "$tmp/restic.log"
+grep -q -- "--exclude $tmp/platform/observer-custom/data/db/metadata.sqlite" "$tmp/restic.log"
+grep -q "$tmp/platform/observer-custom/data/db/metadata.sqlite" "$tmp/restic.log"
 
 if PRODUCTION_REQUIRE_REMOTE_BACKUP=true RESTIC_REMOTE_ENABLED=false \
 	"$repo_root/ops/backup-platform.sh" snapshot production-gate-test >/dev/null 2>&1; then

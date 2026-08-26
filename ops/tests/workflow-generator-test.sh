@@ -24,33 +24,27 @@ if grep -R -Eq '^[[:space:]]+role:' "$tmp/disabled"; then
 fi
 [[ -f "$tmp/disabled/deploy-worker-1.yml" && -f "$tmp/disabled/deploy-worker-2.yml" ]]
 [[ -f "$tmp/disabled/foundation-upgrade-worker-2.yml" && -f "$tmp/disabled/runner-upgrade-worker-2.yml" && -f "$tmp/disabled/rollback-leader.yml" ]]
-[[ -f "$tmp/disabled/singleton-stage-observer.yml" && -f "$tmp/disabled/singleton-switch-observer.yml" ]]
-[[ -f "$tmp/disabled/singleton-stop-observer-worker-1.yml" && -f "$tmp/disabled/singleton-stop-observer-worker-2.yml" ]]
+[[ ! -e "$tmp/disabled/singleton-stage-observer.yml" && ! -e "$tmp/disabled/singleton-switch-observer.yml" ]]
 grep -Fq $'depends_on:\n  - foundation-upgrade-leader' "$tmp/disabled/foundation-upgrade-worker-1.yml"
 grep -Fq $'depends_on:\n  - cluster-reconcile-leader' "$tmp/disabled/cluster-reconcile-worker-1.yml"
 grep -Fq '/var/run/docker.sock:/var/run/docker.sock' "$tmp/disabled/deploy-smoke.yml"
 grep -Fq '/run/lock/llm-hub-lite:/run/lock/llm-hub-lite' "$tmp/disabled/deploy-smoke.yml"
 grep -Fq '        - apps/librechat/**' "$tmp/disabled/deploy-leader.yml"
+grep -Fq '        - config/Caddyfile' "$tmp/disabled/deploy-leader.yml"
+grep -Fq '        - config/foundation-routes.d/**' "$tmp/disabled/deploy-leader.yml"
 if grep -Fq '        - apps/aichorouter/**' "$tmp/disabled/deploy-leader.yml"; then
 	printf 'singleton app source must not trigger normal deployment workflow\n' >&2
 	exit 1
 fi
 grep -Fq '        - config/routes.d/**' "$tmp/disabled/deploy-leader.yml"
 grep -Fq '        - config/cluster/apps/librechat.policy' "$tmp/disabled/cluster-reconcile-leader.yml"
-if grep -Fq '        - apps/observer/**' "$tmp/disabled/cluster-reconcile-leader.yml" || grep -Fq '        - config/cluster/apps/observer.policy' "$tmp/disabled/cluster-reconcile-leader.yml"; then
-	printf 'singleton application paths must not trigger cluster reconciliation\n' >&2
-	exit 1
-fi
+# Foundation upgrades are explicitly manual and intentionally have no path
+# filter; the workflow is used for reviewed control-plane changes.
 if grep -Fq '        - config/cluster/apps/librechat.policy' "$tmp/disabled/deploy-leader.yml"; then
 	printf 'non-singleton policy must not trigger normal deployment\n' >&2
 	exit 1
 fi
 grep -Fq '        - ops/images.apps.prod.env' "$tmp/disabled/singleton-stage-aichorouter.yml"
-grep -Fq '        - apps/observer/**' "$tmp/disabled/singleton-stage-observer.yml"
-if grep -Fq 'depends_on:' "$tmp/disabled/singleton-stage-observer.yml"; then
-	printf 'generated singleton stage has an unrelated dependency\n' >&2
-	exit 1
-fi
 if grep -Fq '        - config/Caddyfile' "$tmp/disabled/singleton-stage-aichorouter.yml" || grep -Fq '        - config/routes.d/**' "$tmp/disabled/singleton-stage-aichorouter.yml"; then
 	printf 'singleton workflows must not own shared Caddy configuration paths\n' >&2
 	exit 1
@@ -65,6 +59,14 @@ if grep -Fq 'singleton-stop-' "$tmp/disabled/deploy-smoke.yml"; then
 fi
 if grep -Fq '        - ops/**' "$tmp/disabled/deploy-leader.yml" || grep -Fq '        - compose/foundation/**' "$tmp/disabled/deploy-leader.yml"; then
 	printf 'automatic deploy workflow must not include control-plane paths\n' >&2
+	exit 1
+fi
+if grep -R -E 'group: llm-hub-lite-(production|cluster-reconcile|singleton-|app-upgrade|foundation-upgrade|runner-upgrade)' "$tmp/disabled" >/dev/null 2>&1; then
+	printf 'mutating workflows must use the shared deployment concurrency group\n' >&2
+	exit 1
+fi
+if ! grep -R -Fq 'group: llm-hub-lite-deployment' "$tmp/disabled"; then
+	printf 'generated workflows are missing the shared deployment concurrency group\n' >&2
 	exit 1
 fi
 
