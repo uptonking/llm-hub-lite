@@ -399,6 +399,16 @@ for host in "$LEADER" "$WORKER_1" "$WORKER_2"; do
                 /etc/llm-hub-lite/restic-remote-password'
 done
 
+# or only update bootstrap scripts
+for host in "$LEADER" "$WORKER_1" "$WORKER_2"; do
+
+  scp ops/bootstrap-vps.sh \
+    "root@$host:/root/llm-hub-lite-bootstrap.sh"
+
+  ssh "root@$host" \
+    'chmod 700 /root/llm-hub-lite-bootstrap.sh'
+done
+
 ssh -tt "root@$LEADER" \
   "NODE_ID=leader \
     LEADER_PUBLIC_IP=$LEADER \

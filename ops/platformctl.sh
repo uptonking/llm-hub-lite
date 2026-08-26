@@ -672,7 +672,6 @@ beszel_enrollment_pending() {
 	[[ "$1" == beszel-worker && (! -s "$(env_value BESZEL_KEY_FILE "$FOUNDATION_ENV_ROOT/beszel.env")" || ! -s "$(env_value BESZEL_TOKEN_FILE "$FOUNDATION_ENV_ROOT/beszel.env")") ]]
 }
 project_ids() {
-	[[ "$1" == app:* ]] && app_compose "${1#app:}" || foundation_compose "$1"
 	if beszel_enrollment_pending "$1"; then
 		"${compose_command[@]}" ps --all -q beszel-socket-proxy
 		return
@@ -683,8 +682,11 @@ project_is_healthy() {
 	local ids id state status health health_mode=process health_service health_ids health_id
 	project_enabled "$1" || return 0
 	if [[ "$1" == app:* ]]; then
+		app_compose "${1#app:}"
 		health_mode="$(descriptor_value "${1#app:}" HEALTH_MODE)"
 		health_service="$(descriptor_value "${1#app:}" HEALTH_SERVICE)"
+	else
+		foundation_compose "$1"
 	fi
 	ids="$(project_ids "$1")"
 	[[ -n "$ids" ]] || return 1

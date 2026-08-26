@@ -43,7 +43,18 @@ cat >"$tmp/bin/platform-compose" <<'EOF'
 printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
   *" ps --all -q observer-log-shipper"*) printf 'observer-log-shipper\n'; exit 0;;
-  *" ps --all -q health-probe"*) printf 'health-probe\n'; exit 0;;
+  *" ps --all -q health-probe"*)
+    case "$*" in
+      *"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-pigeon "*)
+        printf 'health-probe\n'
+        exit 0
+        ;;
+      *)
+        printf 'health-probe queried through wrong Compose project: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+    ;;
   *" ps --all -q"*) :;;
 esac
 case "$*" in
