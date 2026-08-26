@@ -197,7 +197,8 @@ image_required() {
 	WOODPECKER_AGENT_IMAGE) bootstrap_foundation_enabled woodpecker-worker || bootstrap_foundation_enabled woodpecker-deployer ;;
 	BESZEL_HUB_IMAGE) bootstrap_foundation_enabled beszel-controller ;;
 	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) bootstrap_foundation_enabled beszel-worker ;;
-	OBSERVER_IMAGE | OBSERVER_HEALTH_PROBE_IMAGE) bootstrap_foundation_enabled observer-controller ;;
+	OBSERVER_IMAGE) bootstrap_foundation_enabled observer-controller ;;
+	OBSERVER_HEALTH_PROBE_IMAGE) bootstrap_foundation_enabled observer-controller || bootstrap_foundation_enabled observer-collector ;;
 	OBSERVER_LOG_PROXY_IMAGE | OBSERVER_LOG_SHIPPER_IMAGE) bootstrap_foundation_enabled observer-collector ;;
 	NEW_API_IMAGE) ((newapi_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
 	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) ((librechat_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
@@ -1047,7 +1048,8 @@ for pair in \
 	"OBSERVER_LOG_PROXY_PIDS_LIMIT=$(observer_default_value OBSERVER_LOG_PROXY_PIDS_LIMIT 64)" \
 	"OBSERVER_LOG_SHIPPER_MEMORY_LIMIT=$(observer_default_value OBSERVER_LOG_SHIPPER_MEMORY_LIMIT 96m)" \
 	"OBSERVER_LOG_SHIPPER_CPUS=$(observer_default_value OBSERVER_LOG_SHIPPER_CPUS 0.10)" \
-	"OBSERVER_LOG_SHIPPER_PIDS_LIMIT=$(observer_default_value OBSERVER_LOG_SHIPPER_PIDS_LIMIT 128)"; do
+	"OBSERVER_LOG_SHIPPER_PIDS_LIMIT=$(observer_default_value OBSERVER_LOG_SHIPPER_PIDS_LIMIT 128)" \
+	"OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=$(observer_default_value OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS 300)"; do
 	ensure_key "$observer_env" "${pair%%=*}" "${pair#*=}"
 done
 # Credentials are deliberately written with set_key.  An earlier singleton

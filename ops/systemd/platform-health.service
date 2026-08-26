@@ -7,3 +7,4 @@ Requires=platform.target
 Type=oneshot
 TimeoutStartSec=420
 ExecStart=/usr/local/bin/platformctl health
+ExecStart=/usr/local/bin/platformctl observer-smoke

@@ -82,7 +82,8 @@ image_required() {
 	WOODPECKER_AGENT_IMAGE) foundation_enabled woodpecker-worker || foundation_enabled woodpecker-deployer ;;
 	BESZEL_HUB_IMAGE) foundation_enabled beszel-controller ;;
 	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) foundation_enabled beszel-worker ;;
-	OBSERVER_IMAGE | OBSERVER_HEALTH_PROBE_IMAGE) foundation_enabled observer-controller ;;
+	OBSERVER_IMAGE) foundation_enabled observer-controller ;;
+	OBSERVER_HEALTH_PROBE_IMAGE) foundation_enabled observer-controller || foundation_enabled observer-collector ;;
 	OBSERVER_LOG_PROXY_IMAGE | OBSERVER_LOG_SHIPPER_IMAGE) foundation_enabled observer-collector ;;
 	NEW_API_IMAGE) app_enabled_for_image newapi ;;
 	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) app_enabled_for_image librechat ;;

@@ -51,6 +51,9 @@ path_bytes() {
 	[[ "$bytes" =~ ^[0-9]+$ ]] || return 1
 	printf '%s\n' "$bytes"
 }
+redact_observer_output() {
+	sed -E 's/o2oi_[A-Za-z0-9]{32}/<redacted>/g; s/(Basic )[A-Za-z0-9+\/_=-]+/\1<redacted>/g; s/([Aa]uthorization:)[^,}]*/\1<redacted>/g'
+}
 policy_value() { env_value "$1" "$CLUSTER_POLICY_FILE"; }
 node_value() { env_value "$1" "$NODE_CONFIG_FILE"; }
 csv_has() {
@@ -517,7 +520,7 @@ validate_descriptor() {
 	fi
 }
 validate_observer_env() {
-	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent shipper_threads env_file
+	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent shipper_threads heartbeat_interval env_file
 	observer_ingest_user_valid() {
 		local value="$1"
 		[[ -n "$value" && "${#value}" -le 256 ]] || return 1
@@ -550,6 +553,9 @@ validate_observer_env() {
 		shipper_threads="$(env_value OBSERVER_LOG_SHIPPER_THREADS "$env_file")"
 		shipper_threads="${shipper_threads:-1}"
 		[[ "$shipper_threads" =~ ^[0-9]+$ ]] && ((shipper_threads >= 1 && shipper_threads <= 8)) || die 'Observer collector thread count must be between 1 and 8'
+		heartbeat_interval="$(env_value OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS "$env_file")"
+		heartbeat_interval="${heartbeat_interval:-300}"
+		[[ "$heartbeat_interval" =~ ^[0-9]+$ ]] && ((heartbeat_interval >= 60 && heartbeat_interval <= 900)) || die 'Observer heartbeat interval must be between 60 and 900 seconds'
 		ingest_user="$(env_value OBSERVER_INGEST_USER "$env_file")"
 		observer_ingest_user_valid "$ingest_user" || die 'Observer ingestion username must contain only letters, numbers, hyphens, or underscores'
 		ingest_token="$(env_value OBSERVER_INGEST_TOKEN "$env_file")"
@@ -919,7 +925,7 @@ diagnose() {
 		done < <("${compose_command[@]}" ps --all -q 2>/dev/null || true)
 	done < <(diagnose_projects "$scope")
 	if [[ "$scope" == foundation || "$scope" == all ]]; then
-		local observer_env observer_root observer_data observer_buffer observer_bytes buffer_bytes buffer_max durable_warn buffer_warn_percent utilization observer_shipper_id observer_recent
+		local observer_env observer_root observer_data observer_buffer observer_bytes buffer_bytes buffer_max durable_warn buffer_warn_percent utilization observer_shipper_id observer_controller_id observer_recent observer_controller_recent
 		observer_env="$(foundation_env observer-collector)"
 		if [[ -r "$observer_env" ]]; then
 			observer_root="$(env_value OBSERVER_DATA_ROOT "$observer_env")"
@@ -942,6 +948,15 @@ diagnose() {
 					printf '\n[observer-storage]\npath=%s state=missing warn_bytes=%s retention_days=%s\n' \
 						"$observer_data" "$durable_warn" "$(env_value OBSERVER_DATA_RETENTION_DAYS "$observer_env" | sed '/^$/s//30/')"
 				fi
+				foundation_compose observer-controller
+				observer_controller_id="$("${compose_command[@]}" ps --all -q observer-controller 2>/dev/null | head -n1 || true)"
+				if [[ -n "$observer_controller_id" ]]; then
+					observer_controller_recent="$(docker logs --tail 120 "$observer_controller_id" 2>&1 | grep -Ei 'error|warn|failed|flatten' | tail -n 20 | redact_observer_output || true)"
+					printf '\n[observer-controller-recent]\n'
+					[[ -n "$observer_controller_recent" ]] && printf '%s\n' "$observer_controller_recent" || printf 'state=no-recent-warnings-or-errors\n'
+				else
+					printf '\n[observer-controller-recent]\nstate=container-missing\n'
+				fi
 			fi
 			if foundation_active observer-collector; then
 				observer_buffer="$observer_root/collector-buffer"
@@ -959,7 +974,7 @@ diagnose() {
 				foundation_compose observer-collector
 				observer_shipper_id="$("${compose_command[@]}" ps --all -q observer-log-shipper 2>/dev/null | head -n1 || true)"
 				if [[ -n "$observer_shipper_id" ]]; then
-					observer_recent="$(docker logs --tail 80 "$observer_shipper_id" 2>&1 | grep -Ei 'error|warn|failed|retry|buffer' | tail -n 20 | sed -E 's/o2oi_[A-Za-z0-9]{32}/<redacted>/g; s/(Basic )[A-Za-z0-9+\/=_-]+/\1<redacted>/g; s/([Aa]uthorization:)[^,}]*/\1<redacted>/g' || true)"
+					observer_recent="$(docker logs --tail 80 "$observer_shipper_id" 2>&1 | grep -Ei 'error|warn|failed|retry|buffer' | tail -n 20 | redact_observer_output || true)"
 					printf '\n[observer-collector-recent]\n'
 					[[ -n "$observer_recent" ]] && printf '%s\n' "$observer_recent" || printf 'state=no-recent-warnings-or-errors\n'
 				else
@@ -1009,6 +1024,63 @@ smoke_project() {
 	expected="$(descriptor_value "$d" HEALTH_EXPECT)"
 	[[ -n "$u" ]] || return
 	curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "${u%/}$path" | { [[ -z "$expected" ]] || grep -q "$expected"; }
+}
+observer_smoke() {
+	local env_file organization stream root_user root_password api_url probe_image interval lookback now start_micros end_micros sql payload response attempt attempts delay expected_node missing_nodes
+	[[ "$(node_role)" == leader ]] || return 0
+	foundation_active observer-controller && foundation_active observer-collector || return 0
+	command -v jq >/dev/null 2>&1 || die 'jq is required for the Observer ingestion smoke check'
+	env_file="$(foundation_env observer-controller)"
+	organization="$(env_value OBSERVER_LOG_ORGANIZATION "$env_file")"
+	organization="${organization:-default}"
+	stream="$(env_value OBSERVER_LOG_STREAM "$env_file")"
+	stream="${stream:-docker}"
+	root_user="$(env_value OBSERVER_ROOT_USER_EMAIL "$env_file")"
+	root_password="$(env_value OBSERVER_ROOT_USER_PASSWORD "$env_file")"
+	api_url="$(env_value OBSERVER_API_URL "$env_file")"
+	api_url="${api_url:-http://observer-controller:5080}"
+	probe_image="$(env_value OBSERVER_HEALTH_PROBE_IMAGE "$FOUNDATION_IMAGE_ENV")"
+	interval="$(env_value OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS "$env_file")"
+	interval="${interval:-300}"
+	attempts="${OBSERVER_SMOKE_ATTEMPTS:-18}"
+	delay="${OBSERVER_SMOKE_RETRY_DELAY:-5}"
+	[[ "$attempts" =~ ^[0-9]+$ ]] && ((attempts >= 1 && attempts <= 60)) || die 'OBSERVER_SMOKE_ATTEMPTS must be between 1 and 60'
+	[[ "$delay" =~ ^[0-9]+$ ]] && ((delay <= 60)) || die 'OBSERVER_SMOKE_RETRY_DELAY must be between 0 and 60 seconds'
+	[[ -n "$root_user" && -n "$root_password" && -n "$probe_image" ]] || die 'Observer smoke-check credentials or probe image are missing'
+	lookback=$((interval * 3 + 120))
+	now="$(date +%s)"
+	start_micros=$(((now - lookback) * 1000000))
+	end_micros=$(((now + 60) * 1000000))
+	sql="SELECT node_id, MAX(_timestamp) AS latest FROM \"$stream\" WHERE component = 'foundation-observer-heartbeat' GROUP BY node_id"
+	payload="$(jq -nc --arg sql "$sql" --argjson start "$start_micros" --argjson end "$end_micros" '{query:{sql:$sql,start_time:$start,end_time:$end}}')"
+	for ((attempt = 1; attempt <= attempts; attempt++)); do
+		if response="$(docker run --rm --pull=never --network foundation-observer_private "$probe_image" \
+			-fsS --max-time 20 -u "$root_user:$root_password" -H 'Content-Type: application/json' \
+			--data "$payload" "${api_url%/}/api/${organization}/_search" 2>/dev/null)"; then
+			missing_nodes=''
+			while IFS= read -r expected_node; do
+				[[ -n "$expected_node" ]] || continue
+				if ! printf '%s' "$response" | jq -e --arg node "$expected_node" 'any(.hits[]?; .node_id == $node)' >/dev/null 2>&1; then
+					missing_nodes="${missing_nodes:+$missing_nodes,}$expected_node"
+				fi
+			done <<<"$(policy_value NODE_IDS | tr ',' '\n')"
+			if [[ -z "$missing_nodes" ]]; then
+				printf 'Observer ingestion smoke passed: organization=%s stream=%s nodes=%s\n' "$organization" "$stream" "$(policy_value NODE_IDS)"
+				return 0
+			fi
+		fi
+		((attempt == attempts)) || sleep "$delay"
+	done
+	printf 'platformctl: Observer has no recent collector heartbeat in organization=%s stream=%s nodes=%s; run platformctl diagnose foundation on the Leader and missing nodes\n' \
+		"$organization" "$stream" "${missing_nodes:-unknown}" >&2
+	return 1
+}
+smoke_all() {
+	local d
+	observer_smoke
+	while IFS= read -r d; do
+		app_route_active "$d" && smoke_project "$d"
+	done < <(descriptor_ids)
 }
 maintenance() { case "${1:-status}" in begin)
 	install -d -m700 "$(dirname "$MAINTENANCE_FILE")"
@@ -1263,7 +1335,13 @@ singleton-transition-fail)
 	[[ -n "${2:-}" ]] || die 'usage: platformctl singleton-transition-fail <app-id>'
 	singleton_transition_fail "$2"
 	;;
-smoke) [[ "${2:-}" == all ]] && while IFS= read -r d; do app_route_active "$d" && smoke_project "$d"; done < <(descriptor_ids) || {
-	[[ "${2:-}" == app:* ]] || die 'usage: platformctl smoke {all|app:<descriptor>}'
-	smoke_project "${2#app:}"
-} ;; diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|status|health|diagnose|recover|ensure-network|start|sync|restart|recreate|stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|maintenance|reload|backup|restore}' ;; esac
+smoke)
+	if [[ "${2:-}" == all ]]; then
+		smoke_all
+	else
+		[[ "${2:-}" == app:* ]] || die 'usage: platformctl smoke {all|app:<descriptor>}'
+		smoke_project "${2#app:}"
+	fi
+	;;
+observer-smoke) observer_smoke ;;
+diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|status|health|diagnose|recover|ensure-network|start|sync|restart|recreate|stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|maintenance|reload|backup|restore}' ;; esac

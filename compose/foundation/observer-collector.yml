@@ -72,6 +72,41 @@ services:
       timeout: 10s
       retries: 5
       start_period: 10s
+  observer-log-heartbeat:
+    image: ${OBSERVER_HEALTH_PROBE_IMAGE:?OBSERVER_HEALTH_PROBE_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    mem_limit: 16m
+    cpus: 0.02
+    pids_limit: 16
+    read_only: true
+    security_opt: ['no-new-privileges:true']
+    entrypoint: ["/bin/sh"]
+    command:
+      - -eu
+      - -c
+      - |
+        sleep 5
+        while :; do
+          printf 'observer-heartbeat node=%s\n' "$$NODE_ID"
+          sleep "$$OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS"
+        done
+    environment:
+      NODE_ID: ${NODE_ID:?NODE_ID must be set}
+      OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS: ${OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS:-300}
+    depends_on:
+      observer-log-shipper:
+        condition: service_healthy
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: observer
+      com.aichorage.component: foundation-observer-heartbeat
+    logging:
+      driver: local
+      options:
+        max-size: 1m
+        max-file: "2"
+    networks: [observer_private]
 networks:
   observer_private:
     name: foundation-observer_private

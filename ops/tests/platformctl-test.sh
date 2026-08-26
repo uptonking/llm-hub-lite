@@ -43,6 +43,7 @@ cat >"$tmp/bin/platform-compose" <<'EOF'
 printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
   *" ps --all -q observer-log-shipper"*) printf 'observer-log-shipper\n'; exit 0;;
+  *" ps --all -q observer-controller"*) printf 'observer-controller\n'; exit 0;;
   *" ps --all -q health-probe"*)
     case "$*" in
       *"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-pigeon "*)
@@ -69,6 +70,16 @@ EOF
 cat >"$tmp/bin/docker" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${DOCKER_CALL_LOG:?}"
+case "$*" in
+  *"/api/default/_search"*)
+    if [ "${OBSERVER_SMOKE_EMPTY:-0}" = 1 ]; then
+      printf '%s\n' '{"total":0,"hits":[]}'
+    else
+      printf '%s\n' '{"total":3,"hits":[{"node_id":"leader"},{"node_id":"worker-1"},{"node_id":"worker-2"}]}'
+    fi
+    exit 0
+    ;;
+esac
 case "$1 $2" in "network inspect") exit 0;; "inspect --format") printf 'running healthy\n';; "run --rm") exit 0;; esac
 case "$1 $2" in "logs --tail") printf 'WARN retry buffer token=o2oi_11111111111111111111111111111111 Authorization: Basic dGVzdDpzZWNyZXQ=\n';; esac
 case "$*" in
@@ -137,6 +148,16 @@ for threads in 0 9 invalid; do
 done
 sed 's/^OBSERVER_LOG_SHIPPER_THREADS=.*/OBSERVER_LOG_SHIPPER_THREADS=1/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
 mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+for heartbeat_interval in 0 59 901 invalid; do
+	sed "s/^OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=.*/OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=$heartbeat_interval/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+		printf 'invalid Observer heartbeat interval was accepted: %s\n' "$heartbeat_interval" >&2
+		exit 1
+	fi
+done
+sed 's/^OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=.*/OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=300/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 sed 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=0/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
 mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
@@ -184,12 +205,19 @@ fi
 leader_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 grep -Fq '[observer-storage]' <<<"$leader_diagnose"
 grep -Fq '[observer-buffer]' <<<"$leader_diagnose"
+grep -Fq '[observer-controller-recent]' <<<"$leader_diagnose"
 grep -Fq '[observer-collector-recent]' <<<"$leader_diagnose"
 grep -Fq '<redacted>' <<<"$leader_diagnose"
 grep -Fq 'warn_bytes=8589934592' <<<"$leader_diagnose"
 grep -Fq 'warn_percent=80' <<<"$leader_diagnose"
 if grep -Fq 'test-observer-password' <<<"$leader_diagnose" || grep -Fq 'o2oi_' <<<"$leader_diagnose"; then
 	printf 'Observer diagnostics exposed a credential\n' >&2
+	exit 1
+fi
+OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 bash "$repo_root/ops/platformctl.sh" observer-smoke >/dev/null
+if OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 \
+	bash "$repo_root/ops/platformctl.sh" observer-smoke >/dev/null 2>&1; then
+	printf 'Observer smoke check accepted a missing collector heartbeat\n' >&2
 	exit 1
 fi
 cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"

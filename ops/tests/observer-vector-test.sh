@@ -32,8 +32,9 @@ docker run --rm --pull never \
 	-v "$repo_root/compose/foundation/observer-vector.toml:/etc/vector/vector.toml:ro" \
 	"$image" validate --skip-healthchecks /etc/vector/vector.toml
 
-# Exercise the pinned encoder on the wire. OpenObserve's _json endpoint accepts
-# one JSON object or a JSON array, so a batched request must not be NDJSON.
+# Exercise the pinned encoder on the wire. Vector's JSON encoder already emits
+# a batch as an array. Adding another payload wrapper produces [[{...}]], which
+# OpenObserve accepts at the HTTP layer but rejects record by record.
 awk '
   BEGIN { skip_source=0; skip_buffer=0 }
   /^\[sources\.docker_logs\]$/ {
@@ -87,7 +88,7 @@ printf '%s\n' \
 docker wait "$receiver" >/dev/null
 grep -Fqi 'content-encoding: gzip' "$tmp/headers"
 docker run --rm --entrypoint gzip -v "$tmp:/capture:ro" "$image" -dc /capture/body.gz >"$tmp/body.json"
-[[ "$(head -c1 "$tmp/body.json")" == '[' && "$(tail -c1 "$tmp/body.json")" == ']' ]]
+jq -e 'type == "array" and length == 2 and all(.[]; type == "object")' "$tmp/body.json" >/dev/null
 grep -Fq '"message":"observer-wire-one"' "$tmp/body.json"
 grep -Fq '"message":"observer-wire-two"' "$tmp/body.json"
 grep -Fq '"node_id":"test-node"' "$tmp/body.json"

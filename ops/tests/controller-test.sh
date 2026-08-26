@@ -78,6 +78,9 @@ grep -q '^OBSERVER_DURABLE_WARN_BYTES=8589934592$' "$repo_root/ops/foundation/ob
 grep -q '^OBSERVER_LOG_BUFFER_WARN_PERCENT=80$' "$repo_root/ops/foundation/observer.env.example"
 grep -Fq 'observer-log-proxy:' "$repo_root/compose/foundation/observer-collector.yml"
 grep -Fq 'observer-log-shipper:' "$repo_root/compose/foundation/observer-collector.yml"
+grep -Fq 'observer-log-heartbeat:' "$repo_root/compose/foundation/observer-collector.yml"
+grep -Fq 'com.aichorage.component: foundation-observer-heartbeat' "$repo_root/compose/foundation/observer-collector.yml"
+grep -Fq 'max-size: 1m' "$repo_root/compose/foundation/observer-collector.yml"
 grep -Fq 'VECTOR_CONFIG: /etc/vector/vector.toml' "$repo_root/compose/foundation/observer-collector.yml"
 grep -Fq 'test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8686/health >/dev/null"]' "$repo_root/compose/foundation/observer-collector.yml"
 grep -Fq 'observer-health-probe:' "$repo_root/compose/foundation/observer-controller.yml"
@@ -106,13 +109,15 @@ grep -Fq 'path_regexp ^/api/[^/]+/[^/]+/_json$' "$repo_root/config/foundation-ro
 grep -Fq 'method POST' "$repo_root/config/foundation-routes.d/observer.caddy"
 grep -Fq 'max_size 10MB' "$repo_root/config/foundation-routes.d/observer.caddy"
 grep -Fq 'batch.max_bytes = 5000000' "$repo_root/compose/foundation/observer-vector.toml"
-grep -Fq 'framing.method = "character_delimited"' "$repo_root/compose/foundation/observer-vector.toml"
-grep -Fq 'payload_prefix = "["' "$repo_root/compose/foundation/observer-vector.toml"
-grep -Fq 'payload_suffix = "]"' "$repo_root/compose/foundation/observer-vector.toml"
+if grep -Eq '^(framing\.|payload_prefix|payload_suffix)' "$repo_root/compose/foundation/observer-vector.toml"; then
+	printf 'Observer Vector config must not wrap the JSON encoder batch in another array\n' >&2
+	exit 1
+fi
 grep -Fq '[sinks.openobserve.healthcheck]' "$repo_root/compose/foundation/observer-vector.toml"
 grep -Fq 'VECTOR_THREADS: ${OBSERVER_LOG_SHIPPER_THREADS:-1}' "$repo_root/compose/foundation/observer-collector.yml"
 grep -Fq '.application = .label."com.aichorage.application"' "$repo_root/compose/foundation/observer-vector.toml"
 grep -Fq '.component = .label."com.aichorage.component"' "$repo_root/compose/foundation/observer-vector.toml"
+grep -Fq 'ExecStart=/usr/local/bin/platformctl observer-smoke' "$repo_root/ops/systemd/platform-health.service"
 grep -Fq 'site="$(env_value OBSERVER_SITE)"' "$repo_root/ops/configure-observer-ingest.sh"
 grep -Fq 'api_base="$(env_value OBSERVER_API_URL)"' "$repo_root/ops/configure-observer-ingest.sh"
 grep -Fq 'flock -w "${OBSERVER_INGEST_LOCK_WAIT:-300}"' "$repo_root/ops/configure-observer-ingest.sh"
