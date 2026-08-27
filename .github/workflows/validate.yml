@@ -13,11 +13,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check shell syntax
-        run: bash -n stack.sh ops/*.sh ops/tests/*.sh
+        run: bash -n stack.sh ops/*.sh ops/tests/*.sh compose/foundation/observer-log-proxy-entrypoint.sh
       - name: Check generated Woodpecker workflows
         run: ops/generate-woodpecker-workflows.sh --check
       - name: Lint shell scripts
-        run: shellcheck stack.sh ops/*.sh ops/tests/*.sh
+        run: shellcheck stack.sh ops/*.sh ops/tests/*.sh compose/foundation/observer-log-proxy-entrypoint.sh
       - name: Check IP privacy
         run: ops/tests/ip-privacy-test.sh
       - name: Run deployment controller tests
@@ -28,6 +28,10 @@ jobs:
         run: ops/tests/deployment-rollback-test.sh
       - name: Run platform controller tests
         run: ops/tests/platformctl-test.sh
+      - name: Run Observer collector integration tests
+        run: |
+          ops/tests/observer-log-proxy-test.sh
+          ops/tests/observer-vector-test.sh
       - name: Run stack and backup tests
         run: |
           ops/tests/stack-test.sh

@@ -190,9 +190,11 @@ Every VPS runs a read-only Docker socket proxy and a small Vector collector.
 Only containers carrying `com.aichorage.platform=llm-hub-lite` are collected.
 Every enrolled service also declares `com.aichorage.application` and
 `com.aichorage.component`; those values become top-level `application` and
-`component` fields alongside `node_id`, container, image, and stream. Health
-probes, socket proxies, Observer itself, and other noisy or recursive sidecars
-opt out with `com.aichorage.observer.ignore-logs=true`. Records
+`component` fields alongside `node_id`, container, image, and stream. Compose
+workloads also expose normalized `compose_project` and `compose_service`
+fields. Health probes, socket proxies, Observer itself, and other noisy or
+recursive sidecars opt out with
+`com.aichorage.observer.ignore-logs=true`. Records
 are sent to `observer-ingest.<domain>` using a write-only OpenObserve ingestion
 token. The ingestion hostname must be DNS-only and resolve directly to the
 Leader; the public UI hostname may be proxied through Cloudflare. Each node's
@@ -200,18 +202,33 @@ collector has a bounded 512 MiB disk buffer under
 `/opt/platform/observer/collector-buffer`; it is transient and excluded from
 Restic. `platformctl diagnose foundation` reports the Leader's durable data,
 the local collector buffer on every node, and bounded, redacted samples of
-recent Vector delivery errors and OpenObserve ingestion errors. It warns at 8 GiB of durable data
-or 80% of the configured buffer, but never deletes recent logs. Logs may
+recent Vector delivery errors and OpenObserve ingestion errors. It warns at 8
+GiB of durable data or 80% of the configured buffer, but never deletes recent
+logs. Logs may
 contain request data or credentials, so restrict UI access and avoid logging
 secrets.
+
+The Docker API returns logs and events as long-lived HTTP responses. The pinned
+read-only socket proxy defaults to a ten-minute idle timeout, which would break
+Vector's stream on quiet nodes. The collector uses a reviewed wrapper that
+preserves the image's endpoint ACLs while setting both sides of the stream to
+`OBSERVER_LOG_PROXY_STREAM_TIMEOUT=24h`; Vector reconnects after that bounded
+interval. `platformctl validate` accepts values from one hour through seven
+days. Direct Docker socket access from Vector remains prohibited.
 
 Each collector also runs a 16 MiB, 0.02 CPU heartbeat container after Vector is
 healthy. It writes one platform-labelled line every five minutes and retains at
 most two 1 MiB local log files. This provides a stable end-to-end signal without
 depending on application traffic. On the Leader, `platformctl observer-smoke`
-queries OpenObserve for a recent heartbeat from every inventory node; the periodic health service
-and deployment smoke workflow run this check automatically. Container health
-alone is not considered proof of log delivery.
+queries OpenObserve for a recent heartbeat from every inventory node; the
+periodic health service and deployment smoke workflow run this check
+automatically. Container health
+alone is not considered proof of log delivery. The command prints every retry
+and the currently missing nodes or query error. It does not take the deployment
+lock, so a concurrent health timer cannot make an interactive diagnostic wait
+silently. Immediately after deploying only the Leader, missing Follower
+heartbeats are expected; deploy the identical foundation commit to both
+Followers and rerun the check.
 
 In the OpenObserve UI, select organization `default`, open Logs, select the
 `docker` stream, and use a time range covering at least the last 15 minutes.
@@ -509,7 +526,13 @@ rerunning both host bootstraps repeats host configuration, validates the remote
 backup, prefetches images, and reconciles the full node, so it is slower and has
 a larger restart scope than a normal application deployment. It is safe to use
 for recovery or a bootstrap-script fix, but do not use it for every Compose or
-application change.
+application change. A retry deliberately recreates every active foundation
+Compose project after installing its files. This ensures bind-mounted
+configuration such as Vector's `observer-vector.toml` cannot remain attached
+to an older replaced file, but it also causes a brief interruption to local
+foundation services. Run the same current bootstrap revision on the Leader,
+worker-1, and worker-2 before treating an all-node Observer smoke failure as an
+incident.
 
 Bootstrap is safe to retry after a partial failure. It merges missing image
 keys from the fetched repository into `/etc/llm-hub-lite/images.apps.env` and

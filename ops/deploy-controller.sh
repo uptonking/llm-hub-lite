@@ -375,7 +375,7 @@ validate_release() {
 	cp -a "$release/config/cluster/." "$control_validate/config/cluster/"
 	sync_node_config "$release" "$control_validate/node.env"
 	install -m 600 "$release/compose/foundation/caddy.yml" "$foundation_validate/caddy.yml"
-	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
+	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do
 		install -m 600 "$release/compose/foundation/$file" "$foundation_validate/$file"
 	done
 	if ! PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$control_validate" APPS_ROOT="$release/apps" RUNTIME_ROOT="$runtime" \
@@ -411,7 +411,7 @@ install_foundation_files() {
 	local release="$1"
 	install -d -m 700 "$FOUNDATION_ROOT/env"
 	install -m 600 "$release/compose/foundation/caddy.yml" "$FOUNDATION_ROOT/caddy.yml"
-	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
+	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do
 		install -m 600 "$release/compose/foundation/$file" "$FOUNDATION_ROOT/$file"
 	done
 }
@@ -468,6 +468,7 @@ reconcile() {
 		CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster/policy.env}" \
 		PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}" \
 		PLATFORM_RECONCILE_DISABLED_SINGLETONS="${PLATFORM_RECONCILE_DISABLED_SINGLETONS:-0}" \
+		PLATFORM_RECREATE_FOUNDATION="${DEPLOY_RECREATE_FOUNDATION:-0}" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
 		PLATFORM_LOCK_HELD=1 \
 		"$PLATFORMCTL_SCRIPT" sync "${DEPLOY_SYNC_SCOPE:-apps}"
@@ -553,7 +554,7 @@ apply() {
 	cp -f "$APP_IMAGE_ENV" "$tx/images.apps" 2>/dev/null || true
 	cp -f "$FOUNDATION_IMAGE_ENV" "$tx/images.foundation" 2>/dev/null || true
 	cp -f "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" "$tx/node.env" 2>/dev/null || true
-	for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do cp -f "$FOUNDATION_ROOT/$file" "$tx/$file" 2>/dev/null || true; done
+	for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do cp -f "$FOUNDATION_ROOT/$file" "$tx/$file" 2>/dev/null || true; done
 	[[ -d "$CONTROL_ROOT/descriptors" ]] && cp -a "$CONTROL_ROOT/descriptors" "$tx/descriptors"
 	if [[ -n "$old_current" ]]; then
 		atomic_link "$old_current" "$PREVIOUS"
@@ -591,7 +592,7 @@ apply() {
 	sync_scope=apps
 	[[ "$mode" == foundation ]] && sync_scope=foundation
 	[[ "$mode" == cluster-reconcile || "$mode" == rollback ]] && sync_scope=all
-	if ((singleton_prepare_failed == 0)) && prefetch_images "$mode" && DEPLOY_SYNC_SCOPE="$sync_scope" reconcile && smoke_apps && {
+	if ((singleton_prepare_failed == 0)) && prefetch_images "$mode" && DEPLOY_RECREATE_FOUNDATION="$foundation_changed" DEPLOY_SYNC_SCOPE="$sync_scope" reconcile && smoke_apps && {
 		[[ "$mode" != singleton-stage || -z "${SINGLETON_APP_ID:-}" ]] ||
 			SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-origin-smoke "$SINGLETON_APP_ID"
 	}; then
@@ -611,8 +612,12 @@ apply() {
 	if [[ -f "$tx/images.foundation" ]]; then install -m 600 "$tx/images.foundation" "$FOUNDATION_IMAGE_ENV"; fi
 	if [[ -f "$tx/node.env" ]]; then install -m 600 "$tx/node.env" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; else rm -f -- "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; fi
 	if ((foundation_changed)); then
-		for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
-			[[ -f "$tx/$file" ]] && install -m 600 "$tx/$file" "$FOUNDATION_ROOT/$file"
+		for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do
+			if [[ -f "$tx/$file" ]]; then
+				install -m 600 "$tx/$file" "$FOUNDATION_ROOT/$file"
+			else
+				rm -f -- "$FOUNDATION_ROOT/$file"
+			fi
 		done
 	fi
 	rm -rf -- "$CONTROL_ROOT/descriptors"
@@ -622,7 +627,7 @@ apply() {
 		DEPLOY_SKIP_SINGLETONS=0
 		PLATFORM_RECONCILE_DISABLED_SINGLETONS=0
 	fi
-	DEPLOY_SYNC_SCOPE=all reconcile || true
+	DEPLOY_RECREATE_FOUNDATION="$foundation_changed" DEPLOY_SYNC_SCOPE=all reconcile || true
 	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
 		SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-transition-fail "$SINGLETON_APP_ID" || true
 	fi

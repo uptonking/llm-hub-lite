@@ -17,9 +17,12 @@ services:
       ALLOW_LOGS: "1"
       POST: "0"
       LOG_LEVEL: warning
+      OBSERVER_LOG_PROXY_STREAM_TIMEOUT: ${OBSERVER_LOG_PROXY_STREAM_TIMEOUT:-24h}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./observer-log-proxy-entrypoint.sh:/observer-log-proxy-entrypoint.sh:ro
     tmpfs: [/run, /tmp]
+    entrypoint: ["/bin/sh", "/observer-log-proxy-entrypoint.sh"]
     labels:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: observer

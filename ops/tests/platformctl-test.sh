@@ -56,7 +56,18 @@ case "$*" in
         ;;
     esac
     ;;
-  *" ps --all -q"*) :;;
+  *" ps --all -q"*)
+    case "$*" in
+      *"/caddy.yml"*) printf 'caddy\n';;
+      *"/woodpecker-controller.yml"*) printf 'woodpecker-server\n';;
+      *"/woodpecker-deployer.yml"*) printf 'woodpecker-deployer\n';;
+      *"/woodpecker-worker.yml"*) printf 'woodpecker-agent\n';;
+      *"/beszel-controller.yml"*) printf 'beszel-hub\n';;
+      *"/beszel-worker.yml"*) printf 'beszel-socket-proxy\nbeszel-agent\n';;
+      *"/observer-controller.yml"*) printf 'observer-controller\nobserver-health-probe\n';;
+      *"/observer-collector.yml"*) printf 'observer-log-proxy\nobserver-log-shipper\nobserver-log-heartbeat\n';;
+    esac
+    ;;
 esac
 case "$*" in
   *app-librechat*) printf 'librechat-api\nlibrechat-admin-panel\nlibrechat-client\n';;
@@ -95,6 +106,7 @@ exit 0
 EOF
 cat >"$tmp/bin/flock" <<'EOF'
 #!/bin/sh
+[ "${FAIL_FLOCK:-0}" = 1 ] && exit 1
 exit 0
 EOF
 chmod +x "$tmp/bin"/*
@@ -113,6 +125,9 @@ foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUN
 	exit 1
 }
 bash "$repo_root/ops/platformctl.sh" validate
+: >"$tmp/compose.log"
+PLATFORM_RECREATE_FOUNDATION=1 bash "$repo_root/ops/platformctl.sh" sync foundation >/dev/null
+grep -Fq -- '--force-recreate --wait' "$tmp/compose.log"
 for retention in 1 365; do
 	sed "s/^OBSERVER_DATA_RETENTION_DAYS=.*/OBSERVER_DATA_RETENTION_DAYS=$retention/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
 	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
@@ -157,6 +172,16 @@ for heartbeat_interval in 0 59 901 invalid; do
 	fi
 done
 sed 's/^OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=.*/OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=300/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+for stream_timeout in 3599s 59m 169h 8d 0h h1 1000000s invalid; do
+	sed "s/^OBSERVER_LOG_PROXY_STREAM_TIMEOUT=.*/OBSERVER_LOG_PROXY_STREAM_TIMEOUT=$stream_timeout/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+		printf 'invalid Observer Docker stream timeout was accepted: %s\n' "$stream_timeout" >&2
+		exit 1
+	fi
+done
+sed 's/^OBSERVER_LOG_PROXY_STREAM_TIMEOUT=.*/OBSERVER_LOG_PROXY_STREAM_TIMEOUT=24h/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
 mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 sed 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=0/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
 mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
@@ -214,12 +239,14 @@ if grep -Fq 'test-observer-password' <<<"$leader_diagnose" || grep -Fq 'o2oi_' <
 	printf 'Observer diagnostics exposed a credential\n' >&2
 	exit 1
 fi
-OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 bash "$repo_root/ops/platformctl.sh" observer-smoke >/dev/null
-if OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 \
-	bash "$repo_root/ops/platformctl.sh" observer-smoke >/dev/null 2>&1; then
+FAIL_FLOCK=1 OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 bash "$repo_root/ops/platformctl.sh" observer-smoke >/dev/null
+if observer_smoke_failure="$(OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=2 OBSERVER_SMOKE_RETRY_DELAY=0 \
+	bash "$repo_root/ops/platformctl.sh" observer-smoke 2>&1)"; then
 	printf 'Observer smoke check accepted a missing collector heartbeat\n' >&2
 	exit 1
 fi
+grep -Fq 'attempt=1/2 reason=missing recent heartbeat nodes=leader,worker-1,worker-2 retry_in=0s' <<<"$observer_smoke_failure"
+grep -Fq 'reason=missing recent heartbeat nodes=leader,worker-1,worker-2' <<<"$observer_smoke_failure"
 cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
 worker_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 if grep -Fq '[observer-storage]' <<<"$worker_diagnose"; then

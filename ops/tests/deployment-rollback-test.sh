@@ -47,6 +47,9 @@ git -C "$work" push --quiet origin HEAD:main
 cat >"$tmp/bin/platformctl" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${PLATFORMCTL_CALL_LOG:?}"
+if [ "${PLATFORM_RECREATE_FOUNDATION:-0}" = 1 ]; then
+  printf '%s\n' "$*" >>"${FOUNDATION_RECREATE_CALL_LOG:?}"
+fi
 case "$1" in
   sync) [ "${FAIL_SYNC:-0}" = 1 ] && exit 1 ;;
   smoke) [ "${FAIL_SMOKE:-0}" = 1 ] && exit 1 ;;
@@ -117,6 +120,7 @@ EOF
 export PATH="$tmp/bin:$PATH" DOCKER_CALL_LOG="$tmp/docker.log" PLATFORM_COMPOSE_CALL_LOG="$tmp/platform-compose.log"
 export DEPLOY_CONFIG_FILE="$tmp/config.env"
 export PLATFORMCTL_CALL_LOG="$tmp/platformctl.log" BACKUP_CALL_LOG="$tmp/backup.log"
+export FOUNDATION_RECREATE_CALL_LOG="$tmp/foundation-recreate.log"
 export PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose"
 export GIT_CONFIG_COUNT=2
 export GIT_CONFIG_KEY_0="url.file://$remote.insteadOf"
@@ -285,5 +289,25 @@ if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha5" >"$tmp/deploy-clust
 	exit 1
 fi
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
+
+# Installing foundation files replaces bind-mounted host files. The reviewed
+# foundation path must explicitly recreate containers so they cannot retain
+# an old inode after the release switch.
+: >"$tmp/foundation-recreate.log"
+bash "$repo_root/ops/deploy-controller.sh" foundation-upgrade "$sha5" >/dev/null
+grep -qx 'sync foundation' "$tmp/foundation-recreate.log"
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha5" ]]
+
+# A failed upgrade must also remove an installed foundation file when it was
+# absent from the pre-upgrade installed state captured by the transaction.
+printf '#!/bin/sh\n' >"$work/compose/foundation/observer-log-proxy-entrypoint.sh"
+git -C "$work" add compose/foundation/observer-log-proxy-entrypoint.sh
+git -C "$work" -c commit.gpgsign=false commit -qm sixth
+sha6="$(git -C "$work" rev-parse HEAD)"
+git -C "$work" push --quiet origin HEAD:main
+rm -f -- "$platform_root/foundation/observer-log-proxy-entrypoint.sh"
+FAIL_SYNC=1 bash "$repo_root/ops/deploy-controller.sh" foundation-upgrade "$sha6" >/dev/null 2>&1 || true
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha5" ]]
+[[ ! -e "$platform_root/foundation/observer-log-proxy-entrypoint.sh" ]]
 
 printf 'deployment rollback tests passed\n'

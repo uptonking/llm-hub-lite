@@ -1046,6 +1046,7 @@ for pair in \
 	"OBSERVER_LOG_PROXY_MEMORY_LIMIT=$(observer_default_value OBSERVER_LOG_PROXY_MEMORY_LIMIT 32m)" \
 	"OBSERVER_LOG_PROXY_CPUS=$(observer_default_value OBSERVER_LOG_PROXY_CPUS 0.10)" \
 	"OBSERVER_LOG_PROXY_PIDS_LIMIT=$(observer_default_value OBSERVER_LOG_PROXY_PIDS_LIMIT 64)" \
+	"OBSERVER_LOG_PROXY_STREAM_TIMEOUT=$(observer_default_value OBSERVER_LOG_PROXY_STREAM_TIMEOUT 24h)" \
 	"OBSERVER_LOG_SHIPPER_MEMORY_LIMIT=$(observer_default_value OBSERVER_LOG_SHIPPER_MEMORY_LIMIT 96m)" \
 	"OBSERVER_LOG_SHIPPER_CPUS=$(observer_default_value OBSERVER_LOG_SHIPPER_CPUS 0.10)" \
 	"OBSERVER_LOG_SHIPPER_PIDS_LIMIT=$(observer_default_value OBSERVER_LOG_SHIPPER_PIDS_LIMIT 128)" \
@@ -1164,7 +1165,7 @@ for descriptor in "$release"/apps/*; do
 	install -m 600 "$descriptor/manifest.env" "$CONTROL_ROOT/descriptors/$descriptor_id/manifest.env"
 done
 install -o root -g root -m 600 "$SOURCE_ROOT/compose/foundation/caddy.yml" "$FOUNDATION_ROOT/caddy.yml"
-for foundation_file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml; do
+for foundation_file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do
 	install -o root -g root -m 600 "$SOURCE_ROOT/compose/foundation/$foundation_file" "$FOUNDATION_ROOT/$foundation_file"
 done
 
@@ -1229,7 +1230,10 @@ if [[ "$NODE_ROLE" == leader ]]; then
 	PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl start observer-controller
 	/usr/local/bin/configure-observer-ingest
 fi
-PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all
+# Foundation files are installed into stable host paths. Recreate their
+# containers so repeated recovery/bootstrap runs cannot retain an old
+# bind-mounted inode (notably Vector's observer-vector.toml).
+PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl recover --quiet
 
 systemctl enable platform.target platform-firewall.service platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer >/dev/null

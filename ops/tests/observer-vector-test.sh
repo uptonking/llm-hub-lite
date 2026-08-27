@@ -74,8 +74,8 @@ docker network create "$network" >/dev/null
 docker run -d --name "$receiver" --network "$network" --network-alias observer-vector-receiver \
 	--entrypoint nc -v "$tmp:/capture" "$image" -l -p 8080 -e /capture/receiver.sh >/dev/null
 printf '%s\n' \
-	'{"message":"observer-wire-one","container_id":"one","container_name":"one","image":"test","stream":"stdout","label":{"com.aichorage.platform":"llm-hub-lite","com.aichorage.application":"wire-test","com.aichorage.component":"emitter"}}' \
-	'{"message":"observer-wire-two","container_id":"two","container_name":"two","image":"test","stream":"stdout","label":{"com.aichorage.platform":"llm-hub-lite","com.aichorage.application":"wire-test","com.aichorage.component":"emitter"}}' |
+	'{"message":"observer-wire-one","container_id":"one","container_name":"one","image":"test","stream":"stdout","label":{"com.aichorage.platform":"llm-hub-lite","com.aichorage.application":"wire-test","com.aichorage.component":"emitter","com.docker.compose.project":"wire-project","com.docker.compose.service":"wire-service"}}' \
+	'{"message":"observer-wire-two","container_id":"two","container_name":"two","image":"test","stream":"stdout","label":{"com.aichorage.platform":"llm-hub-lite","com.aichorage.application":"wire-test","com.aichorage.component":"emitter","com.docker.compose.project":"wire-project","com.docker.compose.service":"wire-service"}}' |
 	docker run --rm -i --network "$network" \
 		-e NODE_ID=test-node \
 		-e OBSERVER_INGEST_URL=http://observer-vector-receiver:8080 \
@@ -94,5 +94,7 @@ grep -Fq '"message":"observer-wire-two"' "$tmp/body.json"
 grep -Fq '"node_id":"test-node"' "$tmp/body.json"
 grep -Fq '"application":"wire-test"' "$tmp/body.json"
 grep -Fq '"component":"emitter"' "$tmp/body.json"
+grep -Fq '"compose_project":"wire-project"' "$tmp/body.json"
+grep -Fq '"compose_service":"wire-service"' "$tmp/body.json"
 
 printf 'Observer Vector configuration test passed\n'

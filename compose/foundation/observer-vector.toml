@@ -22,6 +22,8 @@ source = '''
 .node_id = get_env_var!("NODE_ID")
 .application = .label."com.aichorage.application"
 .component = .label."com.aichorage.component"
+.compose_project = .label."com.docker.compose.project"
+.compose_service = .label."com.docker.compose.service"
 '''
 
 [sinks.openobserve]

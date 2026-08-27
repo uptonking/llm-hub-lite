@@ -520,7 +520,7 @@ validate_descriptor() {
 	fi
 }
 validate_observer_env() {
-	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent shipper_threads heartbeat_interval env_file
+	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent shipper_threads heartbeat_interval stream_timeout stream_timeout_value stream_timeout_unit stream_timeout_seconds env_file
 	observer_ingest_user_valid() {
 		local value="$1"
 		[[ -n "$value" && "${#value}" -le 256 ]] || return 1
@@ -556,6 +556,13 @@ validate_observer_env() {
 		heartbeat_interval="$(env_value OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS "$env_file")"
 		heartbeat_interval="${heartbeat_interval:-300}"
 		[[ "$heartbeat_interval" =~ ^[0-9]+$ ]] && ((heartbeat_interval >= 60 && heartbeat_interval <= 900)) || die 'Observer heartbeat interval must be between 60 and 900 seconds'
+		stream_timeout="$(env_value OBSERVER_LOG_PROXY_STREAM_TIMEOUT "$env_file")"
+		stream_timeout="${stream_timeout:-24h}"
+		[[ "$stream_timeout" =~ ^([1-9][0-9]{0,5})(s|m|h|d)$ ]] || die 'Observer Docker stream timeout must be a positive integer followed by s, m, h, or d'
+		stream_timeout_value="${BASH_REMATCH[1]}"
+		stream_timeout_unit="${BASH_REMATCH[2]}"
+		case "$stream_timeout_unit" in s) stream_timeout_seconds="$stream_timeout_value" ;; m) stream_timeout_seconds=$((stream_timeout_value * 60)) ;; h) stream_timeout_seconds=$((stream_timeout_value * 3600)) ;; d) stream_timeout_seconds=$((stream_timeout_value * 86400)) ;; esac
+		((stream_timeout_seconds >= 3600 && stream_timeout_seconds <= 604800)) || die 'Observer Docker stream timeout must be between 1 hour and 7 days'
 		ingest_user="$(env_value OBSERVER_INGEST_USER "$env_file")"
 		observer_ingest_user_valid "$ingest_user" || die 'Observer ingestion username must contain only letters, numbers, hyphens, or underscores'
 		ingest_token="$(env_value OBSERVER_INGEST_TOKEN "$env_file")"
@@ -723,13 +730,16 @@ project_is_healthy() {
 		fi
 	done <<<"$ids"
 }
+inspect_container_state() {
+	docker inspect --format 'container={{.Name}} status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} health={{with (index .State "Health")}}{{.Status}}{{else}}none{{end}}{{with (index .State "Health")}}{{range .Log}}{{printf "\n  health exit=%v output=%q" .ExitCode .Output}}{{end}}{{end}}' "$1"
+}
 report_compose_failure() {
 	local id
 	printf 'platformctl: Compose project state after failed health wait:\n' >&2
 	"${compose_command[@]}" ps --all >&2 || true
 	while IFS= read -r id; do
 		[[ -n "$id" ]] || continue
-		docker inspect --format 'container={{.Name}} status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{{range .State.Health.Log}}{{printf "\n  health exit=%d output=%q" .ExitCode .Output}}{{end}}' "$id" >&2 || true
+		inspect_container_state "$id" >&2 || true
 	done < <("${compose_command[@]}" ps --all -q 2>/dev/null || true)
 }
 compose_up_wait() {
@@ -860,9 +870,17 @@ recover() {
 sync() {
 	local scope="${1:-all}" p
 	[[ "$scope" == apps || "$scope" == foundation || "$scope" == all ]] || die 'sync scope must be apps, foundation, or all'
+	[[ "${PLATFORM_RECREATE_FOUNDATION:-0}" == 0 || "${PLATFORM_RECREATE_FOUNDATION:-0}" == 1 ]] || die 'PLATFORM_RECREATE_FOUNDATION must be 0 or 1'
 	VALIDATE_STAGE_ONLY=1 validate
 	if [[ "$scope" == foundation || "$scope" == all ]]; then
-		while IFS= read -r p; do start_project "$p"; done < <(projects_foundation)
+		while IFS= read -r p; do
+			if [[ "${PLATFORM_RECREATE_FOUNDATION:-0}" == 1 ]]; then
+				printf 'Recreating foundation project to apply installed configuration: %s\n' "$p"
+				recreate_project "$p"
+			else
+				start_project "$p"
+			fi
+		done < <(projects_foundation)
 		health_scope foundation || die 'foundation synchronization failed'
 	fi
 	if [[ "$scope" == apps || "$scope" == all ]]; then
@@ -921,7 +939,7 @@ diagnose() {
 		"${compose_command[@]}" ps --all 2>&1 | sed -n '1,80p' || true
 		while IFS= read -r id; do
 			[[ -n "$id" ]] || continue
-			docker inspect --format 'container={{.Name}} status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{{range .State.Health.Log}}{{printf "\n  health exit=%d output=%q" .ExitCode .Output}}{{end}}' "$id" 2>&1 | sed -n '1,24p' || true
+			inspect_container_state "$id" 2>&1 | sed -n '1,24p' || true
 		done < <("${compose_command[@]}" ps --all -q 2>/dev/null || true)
 	done < <(diagnose_projects "$scope")
 	if [[ "$scope" == foundation || "$scope" == all ]]; then
@@ -1026,7 +1044,7 @@ smoke_project() {
 	curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "${u%/}$path" | { [[ -z "$expected" ]] || grep -q "$expected"; }
 }
 observer_smoke() {
-	local env_file organization stream root_user root_password api_url probe_image interval lookback now start_micros end_micros sql payload response attempt attempts delay expected_node missing_nodes
+	local env_file organization stream root_user root_password api_url probe_image interval lookback now start_micros end_micros sql payload response attempt attempts delay expected_node missing_nodes query_error query_detail expected_nodes
 	[[ "$(node_role)" == leader ]] || return 0
 	foundation_active observer-controller && foundation_active observer-collector || return 0
 	command -v jq >/dev/null 2>&1 || die 'jq is required for the Observer ingestion smoke check'
@@ -1053,26 +1071,41 @@ observer_smoke() {
 	end_micros=$(((now + 60) * 1000000))
 	sql="SELECT node_id, MAX(_timestamp) AS latest FROM \"$stream\" WHERE component = 'foundation-observer-heartbeat' GROUP BY node_id"
 	payload="$(jq -nc --arg sql "$sql" --argjson start "$start_micros" --argjson end "$end_micros" '{query:{sql:$sql,start_time:$start,end_time:$end}}')"
+	expected_nodes="$(policy_value NODE_IDS)"
+	printf 'Observer ingestion smoke: organization=%s stream=%s expected_nodes=%s attempts=%s\n' \
+		"$organization" "$stream" "$expected_nodes" "$attempts"
 	for ((attempt = 1; attempt <= attempts; attempt++)); do
+		missing_nodes=''
+		query_error=''
 		if response="$(docker run --rm --pull=never --network foundation-observer_private "$probe_image" \
 			-fsS --max-time 20 -u "$root_user:$root_password" -H 'Content-Type: application/json' \
-			--data "$payload" "${api_url%/}/api/${organization}/_search" 2>/dev/null)"; then
-			missing_nodes=''
-			while IFS= read -r expected_node; do
-				[[ -n "$expected_node" ]] || continue
-				if ! printf '%s' "$response" | jq -e --arg node "$expected_node" 'any(.hits[]?; .node_id == $node)' >/dev/null 2>&1; then
-					missing_nodes="${missing_nodes:+$missing_nodes,}$expected_node"
+			--data "$payload" "${api_url%/}/api/${organization}/_search" 2>&1)"; then
+			if ! printf '%s' "$response" | jq -e 'type == "object" and (.hits | type == "array")' >/dev/null 2>&1; then
+				query_error='OpenObserve returned an invalid search response'
+			else
+				while IFS= read -r expected_node; do
+					[[ -n "$expected_node" ]] || continue
+					if ! printf '%s' "$response" | jq -e --arg node "$expected_node" 'any(.hits[]?; .node_id == $node)' >/dev/null 2>&1; then
+						missing_nodes="${missing_nodes:+$missing_nodes,}$expected_node"
+					fi
+				done <<<"$(printf '%s' "$expected_nodes" | tr ',' '\n')"
+				if [[ -z "$missing_nodes" ]]; then
+					printf 'Observer ingestion smoke passed: organization=%s stream=%s nodes=%s\n' "$organization" "$stream" "$expected_nodes"
+					return 0
 				fi
-			done <<<"$(policy_value NODE_IDS | tr ',' '\n')"
-			if [[ -z "$missing_nodes" ]]; then
-				printf 'Observer ingestion smoke passed: organization=%s stream=%s nodes=%s\n' "$organization" "$stream" "$(policy_value NODE_IDS)"
-				return 0
+				query_error="missing recent heartbeat nodes=$missing_nodes"
 			fi
+		else
+			query_detail="$(printf '%s' "$response" | tail -n 1 | tr '\r\n' ' ' | cut -c1-240)"
+			query_error="OpenObserve query failed${query_detail:+: $query_detail}"
 		fi
-		((attempt == attempts)) || sleep "$delay"
+		if ((attempt < attempts)); then
+			printf 'Observer ingestion smoke waiting: attempt=%s/%s reason=%s retry_in=%ss\n' "$attempt" "$attempts" "$query_error" "$delay" >&2
+			sleep "$delay"
+		fi
 	done
-	printf 'platformctl: Observer has no recent collector heartbeat in organization=%s stream=%s nodes=%s; run platformctl diagnose foundation on the Leader and missing nodes\n' \
-		"$organization" "$stream" "${missing_nodes:-unknown}" >&2
+	printf 'platformctl: Observer ingestion smoke failed: organization=%s stream=%s reason=%s; run platformctl diagnose foundation on the Leader and affected nodes\n' \
+		"$organization" "$stream" "${query_error:-unknown}" >&2
 	return 1
 }
 smoke_all() {
@@ -1305,7 +1338,7 @@ singleton_stop() {
 	fi
 }
 op="${1:-status}"
-case "$op" in status | health | validate | diagnose) ;; *) acquire_lock ;; esac
+case "$op" in status | health | validate | diagnose | observer-smoke) ;; *) acquire_lock ;; esac
 case "$op" in validate) [[ "${2:-}" == --check ]] && VALIDATE_CHECK=1 validate || validate ;; status) [[ "${2:-}" == --json ]] && printf '{"node":"%s","role":"%s"}\n' "$(node_id)" "$(node_role)" || {
 	printf 'node=%s role=%s\n' "$(node_id)" "$(node_role)"
 	health
