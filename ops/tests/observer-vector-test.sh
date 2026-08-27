@@ -29,6 +29,7 @@ docker run --rm --pull never \
 	-e OBSERVER_LOG_ORGANIZATION=default \
 	-e OBSERVER_LOG_STREAM=docker \
 	-e OBSERVER_LOG_BUFFER_MAX_BYTES=536870912 \
+	-e OBSERVER_LOG_BUFFER_WHEN_FULL=block \
 	-v "$repo_root/compose/foundation/observer-vector.toml:/etc/vector/vector.toml:ro" \
 	"$image" validate --skip-healthchecks /etc/vector/vector.toml
 

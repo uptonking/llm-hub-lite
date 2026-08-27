@@ -50,7 +50,7 @@ enabled = false
 [sinks.openobserve.buffer]
 type = "disk"
 max_size = ${OBSERVER_LOG_BUFFER_MAX_BYTES}
-when_full = "drop_newest"
+when_full = "${OBSERVER_LOG_BUFFER_WHEN_FULL}"
 
 [api]
 enabled = true

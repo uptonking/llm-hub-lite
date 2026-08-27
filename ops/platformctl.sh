@@ -20,6 +20,19 @@ CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster
 LOCK_FILE="${PLATFORM_LOCK_FILE:-/run/lock/llm-hub-lite/platform.lock}"
 MAINTENANCE_FILE="${PLATFORM_MAINTENANCE_FILE:-$CONFIG_ROOT/maintenance}"
 COMPOSE_WAIT_TIMEOUT="${COMPOSE_WAIT_TIMEOUT:-180}"
+PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="${PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION:-0}"
+# Keep production polling conservative while allowing local test harnesses to
+# disable the extra wait after an initial health check. A zero interval means
+# "check once and return"; it never creates a busy loop.
+PLATFORM_WAIT_INTERVAL_SECONDS="${PLATFORM_WAIT_INTERVAL_SECONDS:-3}"
+# Descriptor discovery is used by many validation and reconciliation helpers,
+# including from process substitutions. Cache it in a private per-invocation
+# directory so those child shells share one manifest walk without sharing
+# mutable shell state.
+DESCRIPTOR_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/llm-hub-lite-descriptors.XXXXXX")"
+DESCRIPTOR_CACHE_FILE="$DESCRIPTOR_CACHE_DIR/descriptors"
+DESCRIPTOR_CACHE_LOADED=0
+DESCRIPTOR_CACHE_CONTENT=''
 # A pushed release can invoke this newer script through an older installed
 # controller. Preserve the controller's explicit singleton-skip intent.
 PLATFORM_SKIP_SINGLETONS="${PLATFORM_SKIP_SINGLETONS:-${DEPLOY_SKIP_SINGLETONS:-0}}"
@@ -31,13 +44,24 @@ cleanup_candidate() {
 	if [[ -n "${RUNTIME_CONFIG_CANDIDATE:-}" && -d "$RUNTIME_CONFIG_CANDIDATE" ]]; then
 		rm -rf -- "$RUNTIME_CONFIG_CANDIDATE"
 	fi
+	rm -rf -- "$DESCRIPTOR_CACHE_DIR"
 }
 trap cleanup_candidate EXIT
+[[ "$PLATFORM_WAIT_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || die 'PLATFORM_WAIT_INTERVAL_SECONDS must be a non-negative integer'
+[[ "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 0 || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION must be 0 or 1'
 need_file() { [[ -f "$1" ]] || die "missing file: $1"; }
 env_value() {
-	local k="$1" f="${2:-$APP_ENV}"
+	local k="$1" f="${2:-$APP_ENV}" line value=''
 	[[ -f "$f" ]] || return 0
-	sed -n "s/^${k}=//p" "$f" | tail -n1
+	# Keep this lookup in-process. Validation and route rendering read the same
+	# small env files many times; spawning sed/tail for every lookup makes local
+	# macOS runs needlessly slow. The last matching assignment wins, matching the
+	# previous sed | tail implementation.
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		[[ "$line" == "$k="* ]] || continue
+		value="${line#*=}"
+	done <"$f"
+	printf '%s\n' "$value"
 }
 path_bytes() {
 	local path="$1" bytes
@@ -157,15 +181,42 @@ foundation_env() {
 	*) die "unknown foundation environment: $1" ;;
 	esac
 }
+# Some foundation projects expose a small sidecar health contract because the
+# primary image does not provide a portable healthcheck command. Requiring the
+# sidecar to be running and healthy prevents an Observer project from appearing
+# ready while its local API or Vector shipper is still unavailable.
+foundation_health_service() {
+	case "$1" in
+	observer-controller) printf 'observer-health-probe\n' ;;
+	observer-collector) printf 'observer-log-shipper\n' ;;
+	*) return 0 ;;
+	esac
+}
 foundation_compose() { compose_command=("${compose_bin[@]}" --env-file "$APP_ENV" --env-file "$(foundation_env "$1")" --env-file "$FOUNDATION_IMAGE_ENV" --env-file "$NODE_CONFIG_FILE" -f "$FOUNDATION_ROOT/$(foundation_file "$1")"); }
-descriptor_ids() { find -L "$APPS_ROOT" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; 2>/dev/null | sort; }
+descriptor_ids() {
+	if ((DESCRIPTOR_CACHE_LOADED == 0)); then
+		if [[ ! -f "$DESCRIPTOR_CACHE_FILE" ]]; then
+			# A failed discovery must not leave a partial cache that later calls trust.
+			local tmp_cache="${DESCRIPTOR_CACHE_FILE}.tmp"
+			if ! find -L "$APPS_ROOT" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; 2>/dev/null | sort >"$tmp_cache"; then
+				rm -f -- "$tmp_cache"
+				return 1
+			fi
+			mv -f -- "$tmp_cache" "$DESCRIPTOR_CACHE_FILE"
+		fi
+		DESCRIPTOR_CACHE_CONTENT="$(<"$DESCRIPTOR_CACHE_FILE")"
+		DESCRIPTOR_CACHE_LOADED=1
+	fi
+	[[ -n "$DESCRIPTOR_CACHE_CONTENT" ]] && printf '%s\n' "$DESCRIPTOR_CACHE_CONTENT"
+}
 descriptor_value() {
 	local value
-	value="$(sed -n "s/^$2=//p" "$1/manifest.env" | tail -n1)"
+	value="$(env_value "$2" "$1/manifest.env")"
 	# Manifest values are env-style text; allow a single-quoted value to carry
 	# JSON fragments such as HEALTH_EXPECT without leaking the delimiters into
 	# HTTP smoke comparisons.
-	value="$(printf '%s\n' "$value" | sed -e "s/^'//" -e "s/'$//")"
+	if [[ "$value" == \'* ]]; then value="${value#\'}"; fi
+	if [[ "$value" == *\' ]]; then value="${value%\'}"; fi
 	printf '%s\n' "$value"
 }
 descriptor_secret_min_length() {
@@ -283,14 +334,30 @@ effective_value() {
 	echo "$v"
 }
 render_template() {
-	local f="$1" k v e descriptor="${2:-}" previous_descriptor="${CURRENT_ROUTE_DESCRIPTOR:-}"
+	local f="$1" k v e descriptor="${2:-}" previous_descriptor="${CURRENT_ROUTE_DESCRIPTOR:-}" script tmp
 	CURRENT_ROUTE_DESCRIPTOR="$descriptor"
+	# Build one sed program per file instead of spawning sed once per
+	# placeholder. Values are escaped for the delimiter, replacement markers,
+	# and backslashes; this preserves the existing route rendering semantics.
+	script="${f}.sed.$$"
+	tmp="${f}.tmp.$$"
+	: >"$script"
 	while IFS= read -r k; do
 		v="$(effective_value "$k")"
 		e="$(printf '%s' "$v" | sed 's/[&|\\]/\\&/g')"
-		sed "s|{\$${k}}|${e}|g" "$f" >"$f.tmp"
-		mv "$f.tmp" "$f"
+		printf 's|{\\$%s}|%s|g\n' "$k" "$e" >>"$script"
 	done < <(grep -oE '\{\$[A-Z0-9_]+\}' "$f" | sed 's/[^A-Z0-9_]//g' | sort -u)
+	if [[ -s "$script" ]]; then
+		if ! sed -f "$script" "$f" >"$tmp"; then
+			rm -f -- "$script" "$tmp"
+			CURRENT_ROUTE_DESCRIPTOR="$previous_descriptor"
+			return 1
+		fi
+		mv -f -- "$tmp" "$f"
+	else
+		rm -f -- "$tmp"
+	fi
+	rm -f -- "$script"
 	CURRENT_ROUTE_DESCRIPTOR="$previous_descriptor"
 }
 render_routes() {
@@ -298,6 +365,10 @@ render_routes() {
 	install -d -m700 "$RUNTIME_ROOT"
 	rm -rf "$s"
 	install -d -m700 "$s/routes.d"
+	# Register the staging directory before any copy/render can fail so the EXIT
+	# trap removes partial configurations instead of accumulating them across
+	# repeated validations or interrupted reconciliations.
+	RUNTIME_CONFIG_CANDIDATE="$s"
 	cp -a "$CONTROL_ROOT/current/config/." "$s/"
 	while IFS= read -r f; do render_template "$f"; done < <(find "$s" -type f -name '*.caddy' -print)
 	while IFS= read -r d; do
@@ -319,7 +390,6 @@ render_routes() {
 	foundation_active woodpecker-controller || rm -f "$s/foundation-routes.d/woodpecker.caddy" "$s/foundation-routes.d/woodpecker-grpc.caddy"
 	foundation_active beszel-controller || rm -f "$s/foundation-routes.d/beszel.caddy"
 	foundation_active observer-controller || rm -f "$s/foundation-routes.d/observer.caddy"
-	RUNTIME_CONFIG_CANDIDATE="$s"
 }
 commit_routes() {
 	local c="${RUNTIME_CONFIG_CANDIDATE:-}" d="$RUNTIME_ROOT/config" f r
@@ -520,7 +590,7 @@ validate_descriptor() {
 	fi
 }
 validate_observer_env() {
-	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent shipper_threads heartbeat_interval stream_timeout stream_timeout_value stream_timeout_unit stream_timeout_seconds env_file
+	local buffer retention ingest_url ingest_site ingest_url_base ingest_user ingest_token organization stream observer_site observer_api_url observer_data_root root_user root_password durable_warn buffer_warn_percent shipper_threads heartbeat_interval buffer_when_full stream_timeout stream_timeout_value stream_timeout_unit stream_timeout_seconds env_file
 	observer_ingest_user_valid() {
 		local value="$1"
 		[[ -n "$value" && "${#value}" -le 256 ]] || return 1
@@ -544,6 +614,12 @@ validate_observer_env() {
 		[[ -n "$buffer" ]] || buffer=536870912
 		[[ "$buffer" =~ ^[0-9]+$ ]] || die 'Observer collector buffer size must be an integer number of bytes'
 		((buffer >= 268435488 && buffer <= 8589934592)) || die 'Observer collector buffer size must be between 268435488 bytes (Vector disk-buffer minimum) and 8 GiB'
+		buffer_when_full="$(env_value OBSERVER_LOG_BUFFER_WHEN_FULL "$env_file")"
+		buffer_when_full="${buffer_when_full:-block}"
+		case "$buffer_when_full" in
+		block | drop_newest) ;;
+		*) die 'Observer collector buffer policy must be block or drop_newest' ;;
+		esac
 		durable_warn="$(env_value OBSERVER_DURABLE_WARN_BYTES "$env_file")"
 		durable_warn="${durable_warn:-8589934592}"
 		[[ "$durable_warn" =~ ^[0-9]+$ ]] && ((durable_warn > 0)) || die 'Observer durable-data warning threshold must be a positive integer number of bytes'
@@ -649,17 +725,19 @@ validate() {
 		aliases="${aliases:+$aliases,}$alias"
 	done < <(descriptor_ids)
 	render_routes
-	[[ "${VALIDATE_CHECK:-0}" == 1 ]] || ensure_network
-	while IFS= read -r n; do
-		foundation_active "$n" || continue
-		foundation_compose "$n"
-		"${compose_command[@]}" config --quiet
-	done < <(projects_foundation)
-	while IFS= read -r d; do
-		app_compose "${d#app:}"
-		"${compose_command[@]}" config --quiet
-	done < <(projects_apps)
-	docker run --rm --pull=never --env-file "$APP_ENV" --env-file "$NODE_CONFIG_FILE" -v "${RUNTIME_CONFIG_CANDIDATE:-$RUNTIME_ROOT/config}:/etc/caddy:ro" "$(env_value CADDY_IMAGE "$FOUNDATION_IMAGE_ENV")" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+	if [[ "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 0 ]]; then
+		[[ "${VALIDATE_CHECK:-0}" == 1 ]] || ensure_network
+		while IFS= read -r n; do
+			foundation_active "$n" || continue
+			foundation_compose "$n"
+			"${compose_command[@]}" config --quiet
+		done < <(projects_foundation)
+		while IFS= read -r d; do
+			app_compose "${d#app:}"
+			"${compose_command[@]}" config --quiet
+		done < <(projects_apps)
+		docker run --rm --pull=never --env-file "$APP_ENV" --env-file "$NODE_CONFIG_FILE" -v "${RUNTIME_CONFIG_CANDIDATE:-$RUNTIME_ROOT/config}:/etc/caddy:ro" "$(env_value CADDY_IMAGE "$FOUNDATION_IMAGE_ENV")" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+	fi
 	[[ "${VALIDATE_CHECK:-0}" == 1 ]] && {
 		cleanup_candidate
 		unset RUNTIME_CONFIG_CANDIDATE
@@ -692,7 +770,7 @@ project_ids() {
 	"${compose_command[@]}" ps --all -q
 }
 project_is_healthy() {
-	local ids id state status health health_mode=process health_service health_ids health_id
+	local ids id state health_mode=process health_service health_ids health_id
 	project_enabled "$1" || return 0
 	if [[ "$1" == app:* ]]; then
 		app_compose "${1#app:}"
@@ -700,10 +778,11 @@ project_is_healthy() {
 		health_service="$(descriptor_value "${1#app:}" HEALTH_SERVICE)"
 	else
 		foundation_compose "$1"
+		health_service="$(foundation_health_service "$1")"
 	fi
 	ids="$(project_ids "$1")"
 	[[ -n "$ids" ]] || return 1
-	if [[ "$health_mode" == healthcheck && -n "$health_service" ]]; then
+	if [[ -n "$health_service" ]]; then
 		health_ids="$("${compose_command[@]}" ps --all -q "$health_service")"
 		[[ -n "$health_ids" ]] || return 1
 		while IFS= read -r health_id; do
@@ -711,14 +790,6 @@ project_is_healthy() {
 			state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$health_id")"
 			[[ "$state" == 'running healthy' ]] || return 1
 		done <<<"$health_ids"
-		while IFS= read -r id; do
-			[[ -n "$id" ]] || continue
-			state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
-			status="${state%% *}"
-			health="${state#* }"
-			[[ "$status" == running && "$health" != unhealthy ]] || return 1
-		done <<<"$ids"
-		return 0
 	fi
 	while IFS= read -r id; do
 		[[ -n "$id" ]] || continue
@@ -843,11 +914,12 @@ health() {
 	return "$failed"
 }
 wait_project() {
-	local p="$1" elapsed=0
+	local p="$1" elapsed=0 interval="$PLATFORM_WAIT_INTERVAL_SECONDS"
 	while ((elapsed < COMPOSE_WAIT_TIMEOUT)); do
 		project_is_healthy "$p" && return
-		sleep 3
-		elapsed=$((elapsed + 3))
+		((interval > 0)) || return 1
+		sleep "$interval"
+		elapsed=$((elapsed + interval))
 	done
 	return 1
 }
@@ -998,6 +1070,8 @@ diagnose() {
 				else
 					printf '\n[observer-collector-recent]\nstate=container-missing\n'
 				fi
+				printf '\n'
+				observer_collector_status || true
 			fi
 		fi
 	fi
@@ -1044,7 +1118,7 @@ smoke_project() {
 	curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "${u%/}$path" | { [[ -z "$expected" ]] || grep -q "$expected"; }
 }
 observer_smoke() {
-	local env_file organization stream root_user root_password api_url probe_image interval lookback now start_micros end_micros sql payload response attempt attempts delay expected_node missing_nodes query_error query_detail expected_nodes
+	local env_file organization stream root_user root_password api_url probe_image interval lookback now start_micros end_micros sql payload response attempt attempts delay expected_node missing_nodes query_error query_detail expected_nodes smoke_timeout request_timeout deadline remaining request_seconds retry_delay
 	[[ "$(node_role)" == leader ]] || return 0
 	foundation_active observer-controller && foundation_active observer-collector || return 0
 	command -v jq >/dev/null 2>&1 || die 'jq is required for the Observer ingestion smoke check'
@@ -1060,25 +1134,41 @@ observer_smoke() {
 	probe_image="$(env_value OBSERVER_HEALTH_PROBE_IMAGE "$FOUNDATION_IMAGE_ENV")"
 	interval="$(env_value OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS "$env_file")"
 	interval="${interval:-300}"
-	attempts="${OBSERVER_SMOKE_ATTEMPTS:-18}"
+	# Keep the periodic health timer bounded. Operators can increase these values
+	# for a slow or freshly restored Observer, but every request and the complete
+	# retry loop still have an explicit upper bound.
+	attempts="${OBSERVER_SMOKE_ATTEMPTS:-6}"
 	delay="${OBSERVER_SMOKE_RETRY_DELAY:-5}"
+	smoke_timeout="${OBSERVER_SMOKE_TIMEOUT_SECONDS:-120}"
+	request_timeout="${OBSERVER_SMOKE_REQUEST_TIMEOUT_SECONDS:-10}"
 	[[ "$attempts" =~ ^[0-9]+$ ]] && ((attempts >= 1 && attempts <= 60)) || die 'OBSERVER_SMOKE_ATTEMPTS must be between 1 and 60'
 	[[ "$delay" =~ ^[0-9]+$ ]] && ((delay <= 60)) || die 'OBSERVER_SMOKE_RETRY_DELAY must be between 0 and 60 seconds'
+	[[ "$smoke_timeout" =~ ^[0-9]+$ ]] && ((smoke_timeout >= 1 && smoke_timeout <= 3600)) || die 'OBSERVER_SMOKE_TIMEOUT_SECONDS must be between 1 and 3600 seconds'
+	[[ "$request_timeout" =~ ^[0-9]+$ ]] && ((request_timeout >= 1 && request_timeout <= 120)) || die 'OBSERVER_SMOKE_REQUEST_TIMEOUT_SECONDS must be between 1 and 120 seconds'
 	[[ -n "$root_user" && -n "$root_password" && -n "$probe_image" ]] || die 'Observer smoke-check credentials or probe image are missing'
 	lookback=$((interval * 3 + 120))
 	now="$(date +%s)"
+	deadline=$((now + smoke_timeout))
 	start_micros=$(((now - lookback) * 1000000))
 	end_micros=$(((now + 60) * 1000000))
 	sql="SELECT node_id, MAX(_timestamp) AS latest FROM \"$stream\" WHERE component = 'foundation-observer-heartbeat' GROUP BY node_id"
 	payload="$(jq -nc --arg sql "$sql" --argjson start "$start_micros" --argjson end "$end_micros" '{query:{sql:$sql,start_time:$start,end_time:$end}}')"
 	expected_nodes="$(policy_value NODE_IDS)"
-	printf 'Observer ingestion smoke: organization=%s stream=%s expected_nodes=%s attempts=%s\n' \
-		"$organization" "$stream" "$expected_nodes" "$attempts"
+	printf 'Observer ingestion smoke: organization=%s stream=%s expected_nodes=%s attempts=%s timeout=%ss\n' \
+		"$organization" "$stream" "$expected_nodes" "$attempts" "$smoke_timeout"
 	for ((attempt = 1; attempt <= attempts; attempt++)); do
+		now="$(date +%s)"
+		remaining=$((deadline - now))
+		if ((remaining <= 0)); then
+			query_error='overall timeout elapsed'
+			break
+		fi
+		request_seconds="$request_timeout"
+		if ((request_seconds > remaining)); then request_seconds="$remaining"; fi
 		missing_nodes=''
 		query_error=''
 		if response="$(docker run --rm --pull=never --network foundation-observer_private "$probe_image" \
-			-fsS --max-time 20 -u "$root_user:$root_password" -H 'Content-Type: application/json' \
+			-fsS --max-time "$request_seconds" -u "$root_user:$root_password" -H 'Content-Type: application/json' \
 			--data "$payload" "${api_url%/}/api/${organization}/_search" 2>&1)"; then
 			if ! printf '%s' "$response" | jq -e 'type == "object" and (.hits | type == "array")' >/dev/null 2>&1; then
 				query_error='OpenObserve returned an invalid search response'
@@ -1100,13 +1190,92 @@ observer_smoke() {
 			query_error="OpenObserve query failed${query_detail:+: $query_detail}"
 		fi
 		if ((attempt < attempts)); then
-			printf 'Observer ingestion smoke waiting: attempt=%s/%s reason=%s retry_in=%ss\n' "$attempt" "$attempts" "$query_error" "$delay" >&2
-			sleep "$delay"
+			now="$(date +%s)"
+			remaining=$((deadline - now))
+			if ((remaining <= 0)); then
+				query_error='overall timeout elapsed'
+				break
+			fi
+			retry_delay="$delay"
+			if ((retry_delay > remaining)); then retry_delay="$remaining"; fi
+			printf 'Observer ingestion smoke waiting: attempt=%s/%s reason=%s retry_in=%ss\n' "$attempt" "$attempts" "$query_error" "$retry_delay" >&2
+			if ((retry_delay > 0)); then sleep "$retry_delay"; fi
 		fi
 	done
 	printf 'platformctl: Observer ingestion smoke failed: organization=%s stream=%s reason=%s; run platformctl diagnose foundation on the Leader and affected nodes\n' \
 		"$organization" "$stream" "${query_error:-unknown}" >&2
 	return 1
+}
+observer_collector_status() {
+	local env_file probe_image query payload response proxy_response observer_root observer_buffer buffer_bytes buffer_max utilization
+	local source_received source_sent transform_received transform_sent metadata_received metadata_sent sink_received sink_sent sink_bytes pending state metrics failed=0
+	printf '[observer-collector-status]\nnode_id=%s\n' "$(node_id)"
+	foundation_active observer-collector || {
+		printf 'state=disabled\n'
+		return 0
+	}
+	env_file="$(foundation_env observer-collector)"
+	probe_image="$(env_value OBSERVER_HEALTH_PROBE_IMAGE "$FOUNDATION_IMAGE_ENV")"
+	if [[ -z "$probe_image" ]]; then
+		printf 'state=unavailable\nreason=missing_probe_image\n'
+		return 1
+	fi
+	if proxy_response="$(docker run --rm --pull=never --network foundation-observer_private "$probe_image" \
+		-fsS --max-time 10 http://observer-log-proxy:2375/_ping 2>&1)" && [[ "$proxy_response" == OK* ]]; then
+		printf 'socket_proxy=healthy\n'
+	else
+		printf 'socket_proxy=unavailable\n'
+		failed=1
+	fi
+	query='{components(first:50){nodes{componentId componentType ... on Source {metrics {receivedEventsTotal {receivedEventsTotal} sentEventsTotal {sentEventsTotal}}} ... on Transform {metrics {receivedEventsTotal {receivedEventsTotal} sentEventsTotal {sentEventsTotal}}} ... on Sink {metrics {receivedEventsTotal {receivedEventsTotal} sentEventsTotal {sentEventsTotal} sentBytesTotal {sentBytesTotal}}}}}}'
+	payload="$(jq -nc --arg query "$query" '{query:$query}')"
+	if ! response="$(docker run --rm --pull=never --network foundation-observer_private "$probe_image" \
+		-fsS --max-time 10 -H 'Content-Type: application/json' --data "$payload" \
+		http://observer-log-shipper:8686/graphql 2>&1)"; then
+		printf 'state=unavailable\nreason=vector_api_unreachable detail=%s\n' "$(printf '%s' "$response" | tail -n1 | tr '\r\n' ' ' | cut -c1-200)"
+		return 1
+	fi
+	if ! printf '%s' "$response" | jq -e '(.data.components.nodes | type == "array") and ((.errors // []) | length == 0)' >/dev/null 2>&1; then
+		printf 'state=unavailable\nreason=vector_api_invalid_response\n'
+		return 1
+	fi
+	# Read the stable component IDs from the committed Vector topology. Null or
+	# absent metrics are rendered as zero so a fresh collector has a useful state.
+	# Extract all counters in one jq process. This command is used by diagnose;
+	# one parser keeps routine health checks cheap on small VPS hosts.
+	metrics="$(printf '%s' "$response" | jq -r '
+		def metric($id; $name): (([.data.components.nodes[] | select(.componentId == $id) | .metrics[$name][$name] // 0][0]) // 0) | floor;
+		[metric("docker_logs"; "receivedEventsTotal"), metric("docker_logs"; "sentEventsTotal"),
+		 metric("exclude_observer_sidecars"; "receivedEventsTotal"), metric("exclude_observer_sidecars"; "sentEventsTotal"),
+		 metric("add_metadata"; "receivedEventsTotal"), metric("add_metadata"; "sentEventsTotal"),
+		 metric("openobserve"; "receivedEventsTotal"), metric("openobserve"; "sentEventsTotal"), metric("openobserve"; "sentBytesTotal")] | @tsv')"
+	IFS=$'\t' read -r source_received source_sent transform_received transform_sent metadata_received metadata_sent sink_received sink_sent sink_bytes <<<"$metrics"
+	pending="$(awk -v received="$sink_received" -v sent="$sink_sent" 'BEGIN { pending = received - sent; if (pending < 0) pending = 0; printf "%d", pending }')"
+	observer_root="$(env_value OBSERVER_DATA_ROOT "$env_file")"
+	observer_root="${observer_root:-$PLATFORM_ROOT/observer}"
+	observer_buffer="$observer_root/collector-buffer"
+	buffer_max="$(env_value OBSERVER_LOG_BUFFER_MAX_BYTES "$env_file")"
+	buffer_max="${buffer_max:-536870912}"
+	if buffer_bytes="$(path_bytes "$observer_buffer")"; then
+		utilization="$(awk -v bytes="$buffer_bytes" -v maximum="$buffer_max" 'BEGIN { if (maximum > 0) printf "%.1f", (bytes * 100) / maximum; else print "0.0" }')"
+	else
+		buffer_bytes=0
+		utilization=0.0
+	fi
+	if ((pending > 0)); then
+		state=backlog
+	elif ((buffer_bytes > 0)); then
+		state=buffered
+	elif ((sink_sent > 0)); then
+		state=drained
+	else
+		state=idle
+	fi
+	printf 'state=%s\nsource_received=%s source_sent=%s\nfilter_received=%s filter_sent=%s\nmetadata_received=%s metadata_sent=%s\nsink_received=%s sink_sent=%s sink_bytes_sent=%s pending_events=%s\nbuffer_bytes=%s buffer_max_bytes=%s buffer_utilization_percent=%s buffer_when_full=%s\n' \
+		"$state" "$source_received" "$source_sent" "$transform_received" "$transform_sent" \
+		"$metadata_received" "$metadata_sent" "$sink_received" "$sink_sent" "$sink_bytes" "$pending" \
+		"$buffer_bytes" "$buffer_max" "$utilization" "$(env_value OBSERVER_LOG_BUFFER_WHEN_FULL "$env_file" | sed '/^$/s//block/')"
+	return "$failed"
 }
 smoke_all() {
 	local d
@@ -1338,7 +1507,7 @@ singleton_stop() {
 	fi
 }
 op="${1:-status}"
-case "$op" in status | health | validate | diagnose | observer-smoke) ;; *) acquire_lock ;; esac
+case "$op" in status | health | validate | validate-observer | diagnose | observer-smoke | observer-collector-status) ;; *) acquire_lock ;; esac
 case "$op" in validate) [[ "${2:-}" == --check ]] && VALIDATE_CHECK=1 validate || validate ;; status) [[ "${2:-}" == --json ]] && printf '{"node":"%s","role":"%s"}\n' "$(node_id)" "$(node_role)" || {
 	printf 'node=%s role=%s\n' "$(node_id)" "$(node_role)"
 	health
@@ -1376,5 +1545,7 @@ smoke)
 		smoke_project "${2#app:}"
 	fi
 	;;
+validate-observer) validate_observer_env ;;
 observer-smoke) observer_smoke ;;
-diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|status|health|diagnose|recover|ensure-network|start|sync|restart|recreate|stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|maintenance|reload|backup|restore}' ;; esac
+observer-collector-status) observer_collector_status ;;
+diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|validate-observer|status|health|diagnose|recover|ensure-network|start|sync|restart|recreate|stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|observer-collector-status|maintenance|reload|backup|restore}' ;; esac

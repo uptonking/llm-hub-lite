@@ -55,6 +55,7 @@ services:
       OBSERVER_LOG_ORGANIZATION: ${OBSERVER_LOG_ORGANIZATION:-default}
       OBSERVER_LOG_STREAM: ${OBSERVER_LOG_STREAM:-docker}
       OBSERVER_LOG_BUFFER_MAX_BYTES: ${OBSERVER_LOG_BUFFER_MAX_BYTES:-536870912}
+      OBSERVER_LOG_BUFFER_WHEN_FULL: ${OBSERVER_LOG_BUFFER_WHEN_FULL:-block}
     volumes:
       - ./observer-vector.toml:/etc/vector/vector.toml:ro
       - ${OBSERVER_DATA_ROOT:-/opt/platform/observer}/collector-buffer:/var/lib/vector

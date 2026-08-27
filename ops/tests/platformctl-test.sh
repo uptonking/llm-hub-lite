@@ -2,7 +2,21 @@
 set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+cleanup() { rm -rf -- "$tmp"; }
+interrupted() {
+	trap - EXIT HUP INT TERM
+	pkill -TERM -P $$ 2>/dev/null || true
+	cleanup
+	exit 130
+}
+trap cleanup EXIT
+trap interrupted HUP INT TERM
+# Validation is fully mocked in this test. Do not spend three seconds between
+# health polls when exercising the same command repeatedly.
+export PLATFORM_WAIT_INTERVAL_SECONDS=0
+# Compose and Caddy are covered by the initial validation and sync checks;
+# route/policy matrix cases only need the local validator and renderer.
+export PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1
 mkdir -p "$tmp/control/releases/test" "$tmp/foundation/env" "$tmp/app/shared" "$tmp/config" "$tmp/bin" "$tmp/locks"
 cp -a "$repo_root/apps" "$repo_root/config" "$tmp/control/releases/test/"
 ln -s "$tmp/control/releases/test" "$tmp/control/current"
@@ -90,6 +104,23 @@ case "$*" in
     fi
     exit 0
     ;;
+  *"observer-log-shipper:8686/graphql"*)
+    printf '%s\n' '{"data":{"components":{"nodes":[{"componentId":"docker_logs","componentType":"docker_logs","metrics":{"receivedEventsTotal":{"receivedEventsTotal":12},"sentEventsTotal":{"sentEventsTotal":12}}},{"componentId":"exclude_observer_sidecars","componentType":"filter","metrics":{"receivedEventsTotal":{"receivedEventsTotal":12},"sentEventsTotal":{"sentEventsTotal":10}}},{"componentId":"add_metadata","componentType":"remap","metrics":{"receivedEventsTotal":{"receivedEventsTotal":10},"sentEventsTotal":{"sentEventsTotal":10}}},{"componentId":"openobserve","componentType":"http","metrics":{"receivedEventsTotal":{"receivedEventsTotal":10},"sentEventsTotal":{"sentEventsTotal":8},"sentBytesTotal":{"sentBytesTotal":2048}}}]}}}'
+    exit 0
+    ;;
+  *"observer-log-proxy:2375/_ping"*)
+    [ "${OBSERVER_PROXY_UNAVAILABLE:-0}" = 1 ] && exit 1
+    printf 'OK\n'
+    exit 0
+    ;;
+esac
+case "$*" in
+  *"inspect --format"*observer-health-probe*)
+    [ "${OBSERVER_CONTROLLER_UNHEALTHY:-0}" = 1 ] && printf 'running unhealthy\n' && exit 0
+    ;;
+  *"inspect --format"*observer-log-shipper*)
+    [ "${OBSERVER_COLLECTOR_UNHEALTHY:-0}" = 1 ] && printf 'running unhealthy\n' && exit 0
+    ;;
 esac
 case "$1 $2" in "network inspect") exit 0;; "inspect --format") printf 'running healthy\n';; "run --rm") exit 0;; esac
 case "$1 $2" in "logs --tail") printf 'WARN retry buffer token=o2oi_11111111111111111111111111111111 Authorization: Basic dGVzdDpzZWNyZXQ=\n';; esac
@@ -109,9 +140,16 @@ cat >"$tmp/bin/flock" <<'EOF'
 [ "${FAIL_FLOCK:-0}" = 1 ] && exit 1
 exit 0
 EOF
+cat >"$tmp/bin/curl" <<'EOF'
+#!/bin/sh
+# Smoke tests should not contact real domains or exercise production retry
+# backoff. Observer's in-container curl remains covered by the docker stub.
+printf '%s\n' "$*" >>"${CURL_CALL_LOG:?}"
+printf 'OK\n'
+EOF
 chmod +x "$tmp/bin"/*
 export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
-export COMPOSE_CALL_LOG="$tmp/compose.log" DOCKER_CALL_LOG="$tmp/docker.log"
+export COMPOSE_CALL_LOG="$tmp/compose.log" DOCKER_CALL_LOG="$tmp/docker.log" CURL_CALL_LOG="$tmp/curl.log"
 foundation_env_function="$(sed -n '/^foundation_env() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
 foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUNDATION_ENV_ROOT=/foundation bash -c '
 	eval "$FOUNDATION_ENV_FUNCTION"
@@ -124,90 +162,69 @@ foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUN
 	printf 'foundation service resolved to an incorrect env file: %q\n' "$foundation_env_result" >&2
 	exit 1
 }
-bash "$repo_root/ops/platformctl.sh" validate
+PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=0 bash "$repo_root/ops/platformctl.sh" validate
 : >"$tmp/compose.log"
 PLATFORM_RECREATE_FOUNDATION=1 bash "$repo_root/ops/platformctl.sh" sync foundation >/dev/null
 grep -Fq -- '--force-recreate --wait' "$tmp/compose.log"
-for retention in 1 365; do
-	sed "s/^OBSERVER_DATA_RETENTION_DAYS=.*/OBSERVER_DATA_RETENTION_DAYS=$retention/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
+
+observer_validation() {
+	bash "$repo_root/ops/platformctl.sh" validate-observer "$@"
+}
+set_observer_value() {
+	local key="$1" value="$2"
+	sed "s#^${key}=.*#${key}=${value}#" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
 	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-	bash "$repo_root/ops/platformctl.sh" validate
+}
+expect_observer_invalid() {
+	local key="$1" value="$2" message="$3"
+	set_observer_value "$key" "$value"
+	if observer_validation >/dev/null 2>&1; then
+		printf '%s\n' "$message" >&2
+		exit 1
+	fi
+}
+
+for retention in 1 365; do
+	set_observer_value OBSERVER_DATA_RETENTION_DAYS "$retention"
+	observer_validation
 done
 for retention in 0 -1 invalid 366; do
-	sed "s/^OBSERVER_DATA_RETENTION_DAYS=.*/OBSERVER_DATA_RETENTION_DAYS=$retention/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-		printf 'invalid Observer retention was accepted: %s\n' "$retention" >&2
-		exit 1
-	fi
+	expect_observer_invalid OBSERVER_DATA_RETENTION_DAYS "$retention" "invalid Observer retention was accepted: $retention"
 done
-sed 's/^OBSERVER_DATA_RETENTION_DAYS=.*/OBSERVER_DATA_RETENTION_DAYS=30/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+set_observer_value OBSERVER_DATA_RETENTION_DAYS 30
 for buffer in 1 268435487 8589934593 invalid; do
-	sed "s/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=$buffer/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-		printf 'invalid Observer buffer size was accepted: %s\n' "$buffer" >&2
-		exit 1
-	fi
+	expect_observer_invalid OBSERVER_LOG_BUFFER_MAX_BYTES "$buffer" "invalid Observer buffer size was accepted: $buffer"
 done
-sed 's/^OBSERVER_LOG_BUFFER_MAX_BYTES=.*/OBSERVER_LOG_BUFFER_MAX_BYTES=536870912/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+set_observer_value OBSERVER_LOG_BUFFER_MAX_BYTES 536870912
 for threads in 0 9 invalid; do
-	sed "s/^OBSERVER_LOG_SHIPPER_THREADS=.*/OBSERVER_LOG_SHIPPER_THREADS=$threads/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-		printf 'invalid Observer collector thread count was accepted: %s\n' "$threads" >&2
-		exit 1
-	fi
+	expect_observer_invalid OBSERVER_LOG_SHIPPER_THREADS "$threads" "invalid Observer collector thread count was accepted: $threads"
 done
-sed 's/^OBSERVER_LOG_SHIPPER_THREADS=.*/OBSERVER_LOG_SHIPPER_THREADS=1/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+set_observer_value OBSERVER_LOG_SHIPPER_THREADS 1
+for buffer_policy in invalid drop_oldest; do
+	expect_observer_invalid OBSERVER_LOG_BUFFER_WHEN_FULL "$buffer_policy" "invalid Observer buffer policy was accepted: $buffer_policy"
+done
+set_observer_value OBSERVER_LOG_BUFFER_WHEN_FULL block
+for buffer_policy in block drop_newest; do
+	set_observer_value OBSERVER_LOG_BUFFER_WHEN_FULL "$buffer_policy"
+	observer_validation
+done
+set_observer_value OBSERVER_LOG_BUFFER_WHEN_FULL block
 for heartbeat_interval in 0 59 901 invalid; do
-	sed "s/^OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=.*/OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=$heartbeat_interval/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-		printf 'invalid Observer heartbeat interval was accepted: %s\n' "$heartbeat_interval" >&2
-		exit 1
-	fi
+	expect_observer_invalid OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS "$heartbeat_interval" "invalid Observer heartbeat interval was accepted: $heartbeat_interval"
 done
-sed 's/^OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=.*/OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=300/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+set_observer_value OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS 300
 for stream_timeout in 3599s 59m 169h 8d 0h h1 1000000s invalid; do
-	sed "s/^OBSERVER_LOG_PROXY_STREAM_TIMEOUT=.*/OBSERVER_LOG_PROXY_STREAM_TIMEOUT=$stream_timeout/" "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-	mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-	if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-		printf 'invalid Observer Docker stream timeout was accepted: %s\n' "$stream_timeout" >&2
-		exit 1
-	fi
+	expect_observer_invalid OBSERVER_LOG_PROXY_STREAM_TIMEOUT "$stream_timeout" "invalid Observer Docker stream timeout was accepted: $stream_timeout"
 done
-sed 's/^OBSERVER_LOG_PROXY_STREAM_TIMEOUT=.*/OBSERVER_LOG_PROXY_STREAM_TIMEOUT=24h/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-sed 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=0/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-	printf 'zero Observer durable warning threshold was accepted\n' >&2
-	exit 1
-fi
-sed 's/^OBSERVER_DURABLE_WARN_BYTES=.*/OBSERVER_DURABLE_WARN_BYTES=8589934592/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-sed 's/^OBSERVER_LOG_BUFFER_WARN_PERCENT=.*/OBSERVER_LOG_BUFFER_WARN_PERCENT=101/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-	printf 'Observer buffer warning percentage above 100 was accepted\n' >&2
-	exit 1
-fi
-sed 's/^OBSERVER_LOG_BUFFER_WARN_PERCENT=.*/OBSERVER_LOG_BUFFER_WARN_PERCENT=80/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-sed 's/^OBSERVER_INGEST_TOKEN=.*/OBSERVER_INGEST_TOKEN=bootstrap-pending/' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
-PLATFORM_ALLOW_OBSERVER_BOOTSTRAP=1 bash "$repo_root/ops/platformctl.sh" validate
-if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
-	printf 'Observer bootstrap-pending token was accepted outside the bootstrap phase\n' >&2
-	exit 1
-fi
-sed 's#^OBSERVER_INGEST_TOKEN=.*#OBSERVER_INGEST_TOKEN=o2oi_00000000000000000000000000000000#' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
-mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
+set_observer_value OBSERVER_LOG_PROXY_STREAM_TIMEOUT 24h
+expect_observer_invalid OBSERVER_DURABLE_WARN_BYTES 0 'zero Observer durable warning threshold was accepted'
+set_observer_value OBSERVER_DURABLE_WARN_BYTES 8589934592
+expect_observer_invalid OBSERVER_LOG_BUFFER_WARN_PERCENT 101 'Observer buffer warning percentage above 100 was accepted'
+set_observer_value OBSERVER_LOG_BUFFER_WARN_PERCENT 80
+set_observer_value OBSERVER_INGEST_TOKEN bootstrap-pending
+PLATFORM_ALLOW_OBSERVER_BOOTSTRAP=1 observer_validation
+expect_observer_invalid OBSERVER_INGEST_TOKEN bootstrap-pending 'Observer bootstrap-pending token was accepted outside the bootstrap phase'
+set_observer_value OBSERVER_INGEST_TOKEN o2oi_00000000000000000000000000000000
 sed 's#^OBSERVER_SITE=.*#OBSERVER_SITE=https://stale-app.example.invalid#; s#^OBSERVER_INGEST_SITE=.*#OBSERVER_INGEST_SITE=https://stale-ingest.example.invalid#' "$tmp/app/shared/.env.prod" >"$tmp/app/shared/.env.prod.tmp"
 mv "$tmp/app/shared/.env.prod.tmp" "$tmp/app/shared/.env.prod"
 sed 's#^OBSERVER_SITE=.*#OBSERVER_SITE=https://foundation.example.invalid#; s#^OBSERVER_INGEST_SITE=.*#OBSERVER_INGEST_SITE=https://foundation-ingest.example.invalid#; s#^OBSERVER_INGEST_URL=.*#OBSERVER_INGEST_URL=https://foundation-ingest.example.invalid#' "$tmp/foundation/env/observer.env" >"$tmp/foundation/env/observer.env.tmp"
@@ -235,11 +252,24 @@ grep -Fq '[observer-collector-recent]' <<<"$leader_diagnose"
 grep -Fq '<redacted>' <<<"$leader_diagnose"
 grep -Fq 'warn_bytes=8589934592' <<<"$leader_diagnose"
 grep -Fq 'warn_percent=80' <<<"$leader_diagnose"
+grep -Fq '[observer-collector-status]' <<<"$leader_diagnose"
+grep -Fq 'state=backlog' <<<"$leader_diagnose"
+grep -Fq 'pending_events=2' <<<"$leader_diagnose"
+collector_status="$(bash "$repo_root/ops/platformctl.sh" observer-collector-status 2>&1)"
+grep -Fq 'source_received=12 source_sent=12' <<<"$collector_status"
+grep -Fq 'sink_received=10 sink_sent=8' <<<"$collector_status"
+grep -Fq 'buffer_when_full=block' <<<"$collector_status"
+if OBSERVER_PROXY_UNAVAILABLE=1 bash "$repo_root/ops/platformctl.sh" observer-collector-status >/dev/null 2>&1; then
+	printf 'Observer collector status accepted an unavailable socket proxy\n' >&2
+	exit 1
+fi
 if grep -Fq 'test-observer-password' <<<"$leader_diagnose" || grep -Fq 'o2oi_' <<<"$leader_diagnose"; then
 	printf 'Observer diagnostics exposed a credential\n' >&2
 	exit 1
 fi
-FAIL_FLOCK=1 OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 bash "$repo_root/ops/platformctl.sh" observer-smoke >/dev/null
+smoke_success="$(FAIL_FLOCK=1 OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 bash "$repo_root/ops/platformctl.sh" observer-smoke 2>&1)"
+grep -Fq 'attempts=1 timeout=120s' <<<"$smoke_success"
+grep -Fq -- '--max-time 10' "$tmp/docker.log"
 if observer_smoke_failure="$(OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=2 OBSERVER_SMOKE_RETRY_DELAY=0 \
 	bash "$repo_root/ops/platformctl.sh" observer-smoke 2>&1)"; then
 	printf 'Observer smoke check accepted a missing collector heartbeat\n' >&2
@@ -247,6 +277,14 @@ if observer_smoke_failure="$(OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=2 OB
 fi
 grep -Fq 'attempt=1/2 reason=missing recent heartbeat nodes=leader,worker-1,worker-2 retry_in=0s' <<<"$observer_smoke_failure"
 grep -Fq 'reason=missing recent heartbeat nodes=leader,worker-1,worker-2' <<<"$observer_smoke_failure"
+if OBSERVER_CONTROLLER_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" health >/dev/null 2>&1; then
+	printf 'Observer controller health sidecar failure was accepted\n' >&2
+	exit 1
+fi
+if OBSERVER_COLLECTOR_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" health >/dev/null 2>&1; then
+	printf 'Observer collector health sidecar failure was accepted\n' >&2
+	exit 1
+fi
 cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
 worker_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 if grep -Fq '[observer-storage]' <<<"$worker_diagnose"; then

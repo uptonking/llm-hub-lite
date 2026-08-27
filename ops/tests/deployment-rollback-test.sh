@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
+work=""
 
 debug_on_failure() {
 	local status="$?" file
@@ -20,8 +21,8 @@ debug_on_failure() {
 		printf '\n[release directories]\n' >&2
 		find "$tmp/platform/control/releases" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort >&2 || true
 		printf '\n[worktree git state]\n' >&2
-		git -C "$work" status --short 2>&1 || true
-		git -C "$work" log --oneline -5 2>&1 || true
+		[[ -n "$work" ]] && git -C "$work" status --short 2>&1 || true
+		[[ -n "$work" ]] && git -C "$work" log --oneline -5 2>&1 || true
 		printf '\n[mirror refs]\n' >&2
 		git -C "$tmp/platform/control/mirror.git" show-ref 2>&1 || true
 		printf '%s\n' '--- end deployment rollback test diagnostics ---' >&2
@@ -30,6 +31,20 @@ debug_on_failure() {
 	exit "$status"
 }
 trap debug_on_failure EXIT
+interrupted() {
+	# A controller normally runs synchronously, but an interrupt can arrive
+	# while its process substitution (or tee logger) is still attached. Stop
+	# direct children before the EXIT trap removes the transaction tree.
+	trap - EXIT HUP INT TERM
+	pkill -TERM -P $$ 2>/dev/null || true
+	rm -rf -- "$tmp"
+	exit 130
+}
+trap interrupted HUP INT TERM
+# All network, Compose, and backup operations are mocked below. Preserve the
+# production retry counts while removing artificial backoff from this test.
+export DEPLOY_FETCH_RETRY_DELAY_SECONDS=0 DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS=0
+export DEPLOY_LOG_TEE=0
 
 remote="$tmp/remote.git"
 work="$tmp/work"

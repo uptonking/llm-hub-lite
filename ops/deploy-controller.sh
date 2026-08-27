@@ -35,12 +35,25 @@ source "$config_file"
 : "${GIT_KNOWN_HOSTS_FILE:=$CONFIG_ROOT/known_hosts}"
 : "${GITHUB_TOKEN_FILE:=$CONFIG_ROOT/github-token}"
 : "${SINGLETON_STATE_ROOT:=$CONFIG_ROOT/singleton-state}"
+# Production defaults retain the existing retry backoff. Tests and operators
+# may set these to zero to avoid waiting after a mocked/transient failure.
+: "${DEPLOY_FETCH_RETRY_DELAY_SECONDS:=5}"
+: "${DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS:=5}"
 
 env_value() {
-	local key="$1" file="${2:-$APP_ENV}"
+	local key="$1" file="${2:-$APP_ENV}" line value=''
 	[[ -f "$file" ]] || return 0
-	sed -n "s/^${key}=//p" "$file" | tail -n1
+	# Keep lookups in-process. Deployment paths read the same small env files
+	# repeatedly; spawning sed and tail for every lookup adds measurable CPU and
+	# latency on small VPS hosts and in the rollback test harness.
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		[[ "$line" == "$key="* ]] || continue
+		value="${line#*=}"
+	done <"$file"
+	printf '%s\n' "$value"
 }
+[[ "$DEPLOY_FETCH_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]] || die 'DEPLOY_FETCH_RETRY_DELAY_SECONDS must be a non-negative integer'
+[[ "$DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS" =~ ^[0-9]+$ ]] || die 'DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS must be a non-negative integer'
 policy_value() { env_value "$1" "$CONTROL_ROOT/current/config/cluster/policy.env"; }
 node_value() { env_value "$1" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; }
 csv_contains() {
@@ -160,7 +173,13 @@ sync_node_config() {
 }
 
 mkdir -p "$APP_ROOT/shared/logs" "$RELEASES" "$(dirname "$PLATFORM_LOCK_FILE")"
-exec > >(tee -a "$DEPLOY_LOG") 2>&1
+# The normal controller keeps an append-only deployment log. Test harnesses
+# can set DEPLOY_LOG=/dev/null (or DEPLOY_LOG_TEE=0) to avoid creating a
+# process-substitution tee for every mocked deployment; this also makes
+# interruption cleanup deterministic.
+if [[ "$DEPLOY_LOG" != /dev/null && "${DEPLOY_LOG_TEE:-1}" != 0 ]]; then
+	exec > >(tee -a "$DEPLOY_LOG") 2>&1
+fi
 
 ensure_mirror() {
 	if [[ ! -d "$SOURCE_MIRROR" ]]; then git init --bare "$SOURCE_MIRROR" >/dev/null; fi
@@ -172,11 +191,12 @@ ensure_mirror() {
 }
 
 fetch_main() {
-	local attempt
+	local attempt delay
 	for attempt in 1 2 3 4 5; do
 		if git -C "$SOURCE_MIRROR" fetch --prune origin "+refs/heads/$MAIN_BRANCH:refs/remotes/origin/$MAIN_BRANCH"; then return 0; fi
 		log "git fetch retry $attempt"
-		sleep 5
+		delay="$DEPLOY_FETCH_RETRY_DELAY_SECONDS"
+		if ((delay > 0)); then sleep "$delay"; fi
 	done
 	return 1
 }
@@ -390,14 +410,15 @@ validate_release() {
 }
 
 pull_image() {
-	local image="$1" attempt
+	local image="$1" attempt delay
 	for attempt in 1 2 3 4 5; do
 		if docker pull "$image" >/dev/null; then
 			return 0
 		fi
 		((attempt < 5)) || die "unable to pull image after $attempt attempts: $image"
-		log "image pull failed; retrying in $((attempt * 5)) seconds (attempt $attempt/5): $image"
-		sleep "$((attempt * 5))"
+		delay=$((attempt * DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS))
+		log "image pull failed; retrying in ${delay} seconds (attempt $attempt/5): $image"
+		if ((delay > 0)); then sleep "$delay"; fi
 	done
 }
 

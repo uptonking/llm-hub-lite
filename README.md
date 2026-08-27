@@ -200,13 +200,16 @@ token. The ingestion hostname must be DNS-only and resolve directly to the
 Leader; the public UI hostname may be proxied through Cloudflare. Each node's
 collector has a bounded 512 MiB disk buffer under
 `/opt/platform/observer/collector-buffer`; it is transient and excluded from
-Restic. `platformctl diagnose foundation` reports the Leader's durable data,
+Restic. The default `OBSERVER_LOG_BUFFER_WHEN_FULL=block` applies backpressure
+instead of discarding new records when the buffer fills. Set it to
+`drop_newest` only when keeping collectors attached to Docker is more important
+than retaining every record during an extended ingestion outage.
+`platformctl diagnose foundation` reports the Leader's durable data,
 the local collector buffer on every node, and bounded, redacted samples of
 recent Vector delivery errors and OpenObserve ingestion errors. It warns at 8
 GiB of durable data or 80% of the configured buffer, but never deletes recent
-logs. Logs may
-contain request data or credentials, so restrict UI access and avoid logging
-secrets.
+logs. Logs may contain request data or credentials, so restrict UI access and
+avoid logging secrets.
 
 The Docker API returns logs and events as long-lived HTTP responses. The pinned
 read-only socket proxy defaults to a ten-minute idle timeout, which would break
@@ -222,13 +225,24 @@ most two 1 MiB local log files. This provides a stable end-to-end signal without
 depending on application traffic. On the Leader, `platformctl observer-smoke`
 queries OpenObserve for a recent heartbeat from every inventory node; the
 periodic health service and deployment smoke workflow run this check
-automatically. Container health
-alone is not considered proof of log delivery. The command prints every retry
+automatically. Container health alone is not considered proof of log delivery.
+The command prints every retry
 and the currently missing nodes or query error. It does not take the deployment
 lock, so a concurrent health timer cannot make an interactive diagnostic wait
 silently. Immediately after deploying only the Leader, missing Follower
 heartbeats are expected; deploy the identical foundation commit to both
 Followers and rerun the check.
+
+Foundation health also checks the Observer sidecar contracts: the controller's
+`observer-health-probe` must be healthy, and each collector's
+`observer-log-shipper` must be healthy. A running container by itself is not
+reported as ready when either contract is unavailable.
+
+The smoke check is bounded by default: six attempts, a ten-second request
+timeout, and a 120-second overall deadline. Override
+`OBSERVER_SMOKE_ATTEMPTS`, `OBSERVER_SMOKE_RETRY_DELAY`,
+`OBSERVER_SMOKE_REQUEST_TIMEOUT_SECONDS`, or `OBSERVER_SMOKE_TIMEOUT_SECONDS`
+for a deliberately slower recovery check; all values are validated and capped.
 
 In the OpenObserve UI, select organization `default`, open Logs, select the
 `docker` stream, and use a time range covering at least the last 15 minutes.
