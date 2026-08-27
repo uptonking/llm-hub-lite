@@ -23,6 +23,13 @@ for validator_name in valid_input_value valid_secret_value; do
 	'
 done
 
+# Planned-target provisioning is intentionally explicit: it lets an operator
+# prepare a future follower without changing committed placement policy.
+grep -Fq -- '--target-node <node-id>' "$repo_root/ops/configure-app-secrets.sh"
+grep -Fq 'planned target must be a follower' "$repo_root/ops/configure-app-secrets.sh"
+grep -Fq 'planned target is absent from NODE_IDS' "$repo_root/ops/configure-app-secrets.sh"
+grep -Fq 'cluster policy was not changed' "$repo_root/ops/configure-app-secrets.sh"
+
 if [[ "$EUID" -ne 0 ]]; then
 	printf 'secret validation unit tests passed; integration test skipped because root is required by configure-app-secrets.sh\n'
 	exit 0
@@ -49,6 +56,62 @@ CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
 	"$repo_root/ops/configure-app-secrets.sh" aichorouter >/dev/null
 grep -qx 'AICHOROUTER_SESSION_SECRET=valid-session' "$tmp/config/aichorouter.env"
 grep -qx 'AICHOROUTER_CRYPTO_SECRET=valid-crypto' "$tmp/config/aichorouter.env"
+
+cursorapi_target="$(sed -n 's/^CURSORAPI_TARGET_NODE_ID=//p' "$repo_root/config/cluster/apps/cursorapi.policy" | tail -n1)"
+printf 'NODE_ID=%s\n' "$cursorapi_target" >"$tmp/node.env"
+if output="$(CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	CURSORAPI_CURSOR_API_KEY=too-short CURSORAPI_BRIDGE_API_KEY=also-too-short \
+	"$repo_root/ops/configure-app-secrets.sh" cursorapi 2>&1)"; then
+	printf 'weak Cursorapi secrets were accepted\n' >&2
+	exit 1
+fi
+grep -Fq 'must contain at least 16 characters' <<<"$output"
+
+CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	CURSORAPI_CURSOR_API_KEY=cursor-key-123456 CURSORAPI_BRIDGE_API_KEY=0123456789abcdef0123456789abcdef \
+	"$repo_root/ops/configure-app-secrets.sh" cursorapi >/dev/null
+grep -qx 'CURSORAPI_CURSOR_API_KEY=cursor-key-123456' "$tmp/config/cursorapi.env"
+grep -qx 'CURSORAPI_BRIDGE_API_KEY=0123456789abcdef0123456789abcdef' "$tmp/config/cursorapi.env"
+
+printf 'NODE_ID=worker-2\n' >"$tmp/node.env"
+if output="$(CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	CURSORAPI_CURSOR_API_KEY=cursor-key-123456 CURSORAPI_BRIDGE_API_KEY=0123456789abcdef0123456789abcdef \
+	"$repo_root/ops/configure-app-secrets.sh" cursorapi 2>&1)"; then
+	printf 'future target accepted provisioning without --target-node\n' >&2
+	exit 1
+fi
+grep -Fq 'is not the configured target' <<<"$output"
+
+output="$(CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	CURSORAPI_CURSOR_API_KEY=cursor-key-654321 CURSORAPI_BRIDGE_API_KEY=fedcba9876543210fedcba9876543210 \
+	"$repo_root/ops/configure-app-secrets.sh" cursorapi --target-node worker-2)"
+grep -Fq 'cluster policy was not changed' <<<"$output"
+grep -qx 'CURSORAPI_TARGET_NODE_ID=worker-1' "$repo_root/config/cluster/apps/cursorapi.policy"
+grep -qx 'CURSORAPI_CURSOR_API_KEY=cursor-key-654321' "$tmp/config/cursorapi.env"
+
+printf 'NODE_ID=leader\n' >"$tmp/node.env"
+if output="$(CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	"$repo_root/ops/configure-app-secrets.sh" cursorapi --target-node leader 2>&1)"; then
+	printf 'Leader accepted planned singleton secrets\n' >&2
+	exit 1
+fi
+grep -Fq 'planned target must be a follower' <<<"$output"
+
+printf 'NODE_ID=unknown-worker\n' >"$tmp/node.env"
+if output="$(CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	"$repo_root/ops/configure-app-secrets.sh" cursorapi --target-node unknown-worker 2>&1)"; then
+	printf 'unknown planned target accepted singleton secrets\n' >&2
+	exit 1
+fi
+grep -Fq 'planned target is absent from NODE_IDS' <<<"$output"
+
+printf 'NODE_ID=worker-1\n' >"$tmp/node.env"
+if output="$(CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/node.env" \
+	"$repo_root/ops/configure-app-secrets.sh" cursorapi --target-node worker-2 2>&1)"; then
+	printf 'planned target provisioning accepted a local-node mismatch\n' >&2
+	exit 1
+fi
+grep -Fq 'is not the requested planned target' <<<"$output"
 
 pigeon_target="$(sed -n 's/^PIGEON_TARGET_NODE_ID=//p' "$repo_root/config/cluster/apps/pigeon.policy" | tail -n1)"
 printf 'NODE_ID=%s\n' "$pigeon_target" >"$tmp/node.env"

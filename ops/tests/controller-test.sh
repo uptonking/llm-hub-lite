@@ -47,6 +47,11 @@ grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/aichorouter/manifest.env"
+grep -q '^APP_ID=cursorapi$' "$repo_root/apps/cursorapi/manifest.env"
+grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/cursorapi/manifest.env"
+grep -q '^SECRET_MIN_LENGTHS=CURSORAPI_CURSOR_API_KEY:16,CURSORAPI_BRIDGE_API_KEY:32$' "$repo_root/apps/cursorapi/manifest.env"
+grep -q '^STATE_MODE=ephemeral$' "$repo_root/apps/cursorapi/manifest.env"
+grep -q '^MOVE_MODE=fresh$' "$repo_root/apps/cursorapi/manifest.env"
 grep -q '^APP_ID=pigeon$' "$repo_root/apps/pigeon/manifest.env"
 grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/pigeon/manifest.env"
 grep -q '^SECRET_MIN_LENGTHS=PIGEON_SECRET_KEY:32,PIGEON_LOGIN_PASSWORD:12$' "$repo_root/apps/pigeon/manifest.env"
@@ -55,8 +60,25 @@ grep -q '^PIGEON_TARGET_NODE_ID=worker-2$' "$repo_root/config/cluster/apps/pigeo
 grep -q '^FOUNDATION_LEADER=.*observer-controller' "$repo_root/config/cluster/policy.env"
 grep -q '^FOUNDATION_FOLLOWER=.*observer-collector' "$repo_root/config/cluster/policy.env"
 grep -q '^AICHOROUTER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/aichorouter.policy"
+grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cursorapi.policy"
+grep -q '^CURSORAPI_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/cursorapi.policy"
 grep -q '^AICHOROUTER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^CPAPI_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^CURSORAPI_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^CURSORAPI_SOURCE_COMMIT=[0-9a-f]\{40\}$' "$repo_root/images/cursorapi/release.env"
+grep -q '^CURSOR_AGENT_LINUX_AMD64_SHA256=[0-9a-f]\{64\}$' "$repo_root/images/cursorapi/release.env"
+grep -Fq 'npm test -- --maxWorkers=2' "$repo_root/images/cursorapi/Dockerfile"
+if grep -Fq -- '--passWithNoTests' "$repo_root/images/cursorapi/Dockerfile"; then
+	printf 'Cursorapi release build must execute the upstream tests\n' >&2
+	exit 1
+fi
+grep -Fq 'git -C "$source_dir" archive "$CURSORAPI_SOURCE_COMMIT"' "$repo_root/ops/publish-cursorapi-image.sh"
+grep -Fq 'rm -f "$build_context/.dockerignore"' "$repo_root/ops/publish-cursorapi-image.sh"
+grep -Fq 'GHCR package manifest is not anonymously readable' "$repo_root/ops/publish-cursorapi-image.sh"
+if grep -Fq 'api.github.com/user/packages' "$repo_root/ops/publish-cursorapi-image.sh"; then
+	printf 'Cursorapi publisher must not mutate GHCR package visibility\n' >&2
+	exit 1
+fi
 grep -q '^PIGEON_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^HEALTH_PROBE_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^OBSERVER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.foundation.prod.env"
@@ -170,6 +192,31 @@ if grep -Eq 'ports:' "$repo_root/apps/cpapi/compose.yml"; then
 	printf 'CPAPI must not publish a host port\n' >&2
 	exit 1
 fi
+grep -Fq 'CURSOR_API_KEY: ${CURSORAPI_CURSOR_API_KEY:?CURSORAPI_CURSOR_API_KEY must be set}' "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq 'CURSOR_BRIDGE_API_KEY: ${CURSORAPI_BRIDGE_API_KEY:?CURSORAPI_BRIDGE_API_KEY must be set}' "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq 'mem_limit: ${CURSORAPI_MEMORY_LIMIT:-512m}' "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq 'cpus: ${CURSORAPI_CPUS:-0.50}' "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq 'pids_limit: ${CURSORAPI_PIDS_LIMIT:-128}' "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq 'read_only: true' "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq 'cap_drop: [ALL]' "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq "security_opt: ['no-new-privileges:true']" "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq "fetch('http://127.0.0.1:8765/healthz')" "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq 'curl -fsS http://cursorapi:8765/healthz' "$repo_root/apps/cursorapi/compose.yml"
+grep -Fq 'com.aichorage.observer.ignore-logs: "true"' "$repo_root/apps/cursorapi/compose.yml"
+grep -q '^HEALTH_URL=/healthz$' "$repo_root/apps/cursorapi/manifest.env"
+grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/cursorapi/manifest.env"
+grep -Fq '@cursorapi_api path /v1/* /healthz' "$repo_root/apps/cursorapi/route.leader.caddy"
+grep -Fq 'health_uri /healthz' "$repo_root/apps/cursorapi/route.leader.caddy"
+grep -Fq '@cursorapi_origin path /v1/* /healthz' "$repo_root/apps/cursorapi/route.follower.caddy"
+grep -Fq 'reverse_proxy cursorapi:8765' "$repo_root/apps/cursorapi/route.follower.caddy"
+if grep -Eiq 'ports:|/var/run/docker.sock|postgres|redis' "$repo_root/apps/cursorapi/compose.yml"; then
+	printf 'Cursorapi must not publish ports or depend on databases or the Docker socket\n' >&2
+	exit 1
+fi
+if grep -Eq '^[[:space:]]+volumes:' "$repo_root/apps/cursorapi/compose.yml"; then
+	printf 'Cursorapi must remain ephemeral and must not mount persistent volumes\n' >&2
+	exit 1
+fi
 grep -Fq 'DATABASE_PATH: /data/outlook_accounts.db' "$repo_root/apps/pigeon/compose.yml"
 grep -Fq 'DOCKER_UPDATE_ENABLED: "false"' "$repo_root/apps/pigeon/compose.yml"
 grep -Fq 'test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/login >/dev/null"]' "$repo_root/apps/pigeon/compose.yml"
@@ -249,8 +296,8 @@ grep -Fq 'cluster app policy requires its dedicated reconciliation workflow' "$r
 grep -Fq 'unsupported cluster configuration path in application deployment' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'application image manifest changes require the app-upgrade or singleton workflow' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'ops/*.sh | ops/deploy-runner/** | ops/tests/**' "$repo_root/ops/deploy-controller.sh"
-grep -Fq '.woodpecker/singleton-stage-$app.yml' "$repo_root/ops/deploy-controller.sh"
-grep -Fq '.woodpecker/singleton-stop-$app-*.yml' "$repo_root/ops/deploy-controller.sh"
+grep -Fq '.woodpecker/singleton-stage-"$app".yml' "$repo_root/ops/deploy-controller.sh"
+grep -Fq '.woodpecker/singleton-stop-"$app"-*.yml' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-state' "$repo_root/ops/backup-platform.sh"

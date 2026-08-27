@@ -26,6 +26,8 @@ fi
 [[ -f "$tmp/disabled/foundation-upgrade-worker-2.yml" && -f "$tmp/disabled/runner-upgrade-worker-2.yml" && -f "$tmp/disabled/rollback-leader.yml" ]]
 [[ -f "$tmp/disabled/singleton-stage-aichorouter.yml" && -f "$tmp/disabled/singleton-switch-aichorouter.yml" ]]
 [[ -f "$tmp/disabled/singleton-stage-cpapi.yml" && -f "$tmp/disabled/singleton-switch-cpapi.yml" ]]
+[[ -f "$tmp/disabled/singleton-stage-cursorapi.yml" && -f "$tmp/disabled/singleton-switch-cursorapi.yml" ]]
+[[ -f "$tmp/disabled/singleton-stop-cursorapi-worker-1.yml" && -f "$tmp/disabled/singleton-stop-cursorapi-worker-2.yml" ]]
 [[ ! -e "$tmp/disabled/singleton-stage-pigeon.yml" && ! -e "$tmp/disabled/singleton-switch-pigeon.yml" ]]
 [[ ! -e "$tmp/disabled/singleton-stop-pigeon-worker-1.yml" && ! -e "$tmp/disabled/singleton-stop-pigeon-worker-2.yml" ]]
 [[ ! -e "$tmp/disabled/singleton-stage-observer.yml" && ! -e "$tmp/disabled/singleton-switch-observer.yml" ]]

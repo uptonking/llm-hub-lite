@@ -39,6 +39,10 @@ cat >"$tmp/config/aichorouter.env" <<'EOF'
 AICHOROUTER_SESSION_SECRET=test-session-secret
 AICHOROUTER_CRYPTO_SECRET=test-crypto-secret
 EOF
+cat >"$tmp/config/cursorapi.env" <<'EOF'
+CURSORAPI_CURSOR_API_KEY=test-cursor-account-key
+CURSORAPI_BRIDGE_API_KEY=test-cursor-bridge-key-0123456789abcdef
+EOF
 cat >"$tmp/config/pigeon.env" <<'EOF'
 PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef
 PIGEON_LOGIN_PASSWORD=test-pigeon-password
@@ -50,6 +54,7 @@ NODE_CPAPI_ORIGIN_HOST=worker2-cpapi.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
+NODE_CURSORAPI_ORIGIN_HOST=worker2-cursorapi.example.invalid
 NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
@@ -60,7 +65,7 @@ case "$*" in
   *" ps --all -q observer-controller"*) printf 'observer-controller\n'; exit 0;;
   *" ps --all -q health-probe"*)
     case "$*" in
-      *"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-pigeon "*)
+      *"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*)
         printf 'health-probe\n'
         exit 0
         ;;
@@ -88,6 +93,7 @@ case "$*" in
   *app-newapi*) printf 'newapi\n';;
   *app-cpapi*) printf 'cpapi\nhealth-probe\n';;
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
+  *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
 esac
 exit 0
@@ -145,7 +151,21 @@ cat >"$tmp/bin/curl" <<'EOF'
 # Smoke tests should not contact real domains or exercise production retry
 # backoff. Observer's in-container curl remains covered by the docker stub.
 printf '%s\n' "$*" >>"${CURL_CALL_LOG:?}"
-printf 'OK\n'
+url=''
+for argument in "$@"; do url="$argument"; done
+if [ -n "${CURL_FAIL_URL:-}" ] && [ "$url" = "$CURL_FAIL_URL" ]; then
+  exit 22
+fi
+if [ -n "${CURL_BAD_BODY_URL:-}" ] && [ "$url" = "$CURL_BAD_BODY_URL" ]; then
+  printf 'unexpected body\n'
+  exit 0
+fi
+case "$url" in
+  *cpapi*/healthz) printf '{"status":"ok"}\n';;
+  *cursorapi*/healthz) printf 'ok\n';;
+  *aichorouter*/api/status) printf '{"success":true}\n';;
+  *) printf 'OK\n';;
+esac
 EOF
 chmod +x "$tmp/bin"/*
 export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
@@ -168,7 +188,7 @@ PLATFORM_RECREATE_FOUNDATION=1 bash "$repo_root/ops/platformctl.sh" sync foundat
 grep -Fq -- '--force-recreate --wait' "$tmp/compose.log"
 
 observer_validation() {
-	bash "$repo_root/ops/platformctl.sh" validate-observer "$@"
+	bash "$repo_root/ops/platformctl.sh" validate-observer
 }
 set_observer_value() {
 	local key="$1" value="$2"
@@ -391,6 +411,90 @@ if grep -Fq 'header_up Host {http.request.host}' "$tmp/app/shared/runtime/config
 	printf 'leader route overrides the origin Host header\n' >&2
 	exit 1
 fi
+
+# A singleton target switch is a route transaction. Keep the old route and the
+# previous-target marker until both the new origin and public path return the
+# manifest's expected health body.
+cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.original"
+cp "$tmp/app/shared/runtime/config/routes.d/librechat.caddy" "$tmp/librechat-route.before-switch"
+sed 's/^CPAPI_TARGET_NODE_ID=.*/CPAPI_TARGET_NODE_ID=worker-2/' "$tmp/cpapi-policy.original" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
+mkdir -p "$tmp/config/singleton-state"
+printf 'worker-1\n' >"$tmp/config/singleton-state/cpapi.previous-target"
+if CURL_BAD_BODY_URL=http://cpapi.localhost/healthz \
+	bash "$repo_root/ops/platformctl.sh" singleton-switch cpapi >"$tmp/switch-failure.log" 2>&1; then
+	printf 'singleton switch accepted an invalid public health body\n' >&2
+	exit 1
+fi
+grep -Fq 'response did not match HEALTH_EXPECT' "$tmp/switch-failure.log"
+grep -Fq 'restored previous Leader route for singleton cpapi' "$tmp/switch-failure.log"
+grep -Fq 'reverse_proxy https://worker1-cpapi-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
+cmp -s "$tmp/librechat-route.before-switch" "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+[[ -f "$tmp/config/singleton-state/cpapi.previous-target" ]]
+grep -qx 'PHASE=failed' "$tmp/config/singleton-state/cpapi.transition.env"
+[[ ! -e "$tmp/config/singleton-state/cpapi.route-backup.caddy" ]]
+[[ ! -e "$tmp/config/singleton-state/cpapi.route-was-missing" ]]
+
+# Reboot recovery must honor the incomplete transition marker instead of
+# silently regenerating the unverified worker-2 route from committed policy.
+bash "$repo_root/ops/platformctl.sh" recover >/dev/null
+grep -Fq 'reverse_proxy https://worker1-cpapi-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
+[[ -f "$tmp/config/singleton-state/cpapi.previous-target" ]]
+
+bash "$repo_root/ops/platformctl.sh" singleton-switch cpapi
+grep -Fq 'reverse_proxy https://worker2-cpapi-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
+cmp -s "$tmp/librechat-route.before-switch" "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+[[ ! -e "$tmp/config/singleton-state/cpapi.previous-target" ]]
+grep -qx 'PHASE=switched' "$tmp/config/singleton-state/cpapi.transition.env"
+
+cp "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy" "$tmp/config/singleton-state/cpapi.route-backup.caddy"
+if output="$(bash "$repo_root/ops/platformctl.sh" singleton-switch cpapi 2>&1)"; then
+	printf 'singleton switch ignored unresolved rollback state\n' >&2
+	exit 1
+fi
+grep -Fq 'unresolved singleton route rollback exists' <<<"$output"
+rm -f "$tmp/config/singleton-state/cpapi.route-backup.caddy"
+
+# On a first deployment there may be no old route. A failed public smoke must
+# remove the candidate rather than leave an unverified endpoint published.
+rm -f "$tmp/app/shared/runtime/config/routes.d/cursorapi.caddy" \
+	"$tmp/config/singleton-state/cursorapi.route-backup.caddy" \
+	"$tmp/config/singleton-state/cursorapi.route-was-missing" \
+	"$tmp/config/singleton-state/cursorapi.transition.env"
+if CURL_FAIL_URL=http://cursorapi.localhost/healthz \
+	bash "$repo_root/ops/platformctl.sh" singleton-switch cursorapi >/dev/null 2>&1; then
+	printf 'first singleton deployment accepted a failed public smoke\n' >&2
+	exit 1
+fi
+[[ ! -e "$tmp/app/shared/runtime/config/routes.d/cursorapi.caddy" ]]
+grep -qx 'PHASE=failed' "$tmp/config/singleton-state/cursorapi.transition.env"
+[[ ! -e "$tmp/config/singleton-state/cursorapi.route-backup.caddy" ]]
+[[ ! -e "$tmp/config/singleton-state/cursorapi.route-was-missing" ]]
+
+# Restore committed placement, then prove follower reconciliation preserves the
+# active-active LibreChat project while selecting singletons only on their one
+# configured follower.
+cp "$tmp/cpapi-policy.original" "$tmp/control/current/config/cluster/apps/cpapi.policy"
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+: >"$tmp/compose.log"
+bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
+for project in app-librechat app-aichorouter app-cpapi app-cursorapi; do
+	grep -Fq "$project" "$tmp/compose.log"
+done
+cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
+: >"$tmp/compose.log"
+bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
+grep -Fq 'app-librechat' "$tmp/compose.log"
+for project in app-aichorouter app-cpapi app-cursorapi; do
+	if grep -Fq "$project" "$tmp/compose.log"; then
+		printf 'worker-2 reconciled worker-1 singleton project: %s\n' "$project" >&2
+		exit 1
+	fi
+done
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+bash "$repo_root/ops/platformctl.sh" validate
+grep -Fq 'worker1-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+grep -Fq 'worker2-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+
 bash "$repo_root/ops/platformctl.sh" status --json | jq -e '.node == "leader" and .role == "leader"' >/dev/null
 sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
 mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
@@ -418,13 +522,13 @@ bash "$repo_root/ops/platformctl.sh" smoke "app:$tmp/control/current/apps/librec
 # therefore replace its staged Caddy route with the Follower template.
 cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
 bash "$repo_root/ops/platformctl.sh" validate
-cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.original"
-sed 's/^CPAPI_TARGET_NODE_ID=.*/CPAPI_TARGET_NODE_ID=worker-2/' "$tmp/cpapi-policy.original" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
+cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.skip-test"
+sed 's/^CPAPI_TARGET_NODE_ID=.*/CPAPI_TARGET_NODE_ID=worker-2/' "$tmp/cpapi-policy.skip-test" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
 mkdir -p "$tmp/config/singleton-state"
 printf 'worker-1\n' >"$tmp/config/singleton-state/cpapi.previous-target"
 PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'reverse_proxy https://worker1-cpapi-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
-cp "$tmp/cpapi-policy.original" "$tmp/control/current/config/cluster/apps/cpapi.policy"
+cp "$tmp/cpapi-policy.skip-test" "$tmp/control/current/config/cluster/apps/cpapi.policy"
 policy_backup="$tmp/policy.original"
 cp "$tmp/control/current/config/cluster/policy.env" "$policy_backup"
 {

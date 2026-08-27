@@ -21,6 +21,7 @@ LOCK_FILE="${PLATFORM_LOCK_FILE:-/run/lock/llm-hub-lite/platform.lock}"
 MAINTENANCE_FILE="${PLATFORM_MAINTENANCE_FILE:-$CONFIG_ROOT/maintenance}"
 COMPOSE_WAIT_TIMEOUT="${COMPOSE_WAIT_TIMEOUT:-180}"
 PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="${PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION:-0}"
+PLATFORM_FORCE_SINGLETON_ROUTE="${PLATFORM_FORCE_SINGLETON_ROUTE:-0}"
 # Keep production polling conservative while allowing local test harnesses to
 # disable the extra wait after an initial health check. A zero interval means
 # "check once and return"; it never creates a busy loop.
@@ -49,6 +50,7 @@ cleanup_candidate() {
 trap cleanup_candidate EXIT
 [[ "$PLATFORM_WAIT_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || die 'PLATFORM_WAIT_INTERVAL_SECONDS must be a non-negative integer'
 [[ "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 0 || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION must be 0 or 1'
+[[ "$PLATFORM_FORCE_SINGLETON_ROUTE" == 0 || "$PLATFORM_FORCE_SINGLETON_ROUTE" == 1 ]] || die 'PLATFORM_FORCE_SINGLETON_ROUTE must be 0 or 1'
 need_file() { [[ -f "$1" ]] || die "missing file: $1"; }
 env_value() {
 	local k="$1" f="${2:-$APP_ENV}" line value=''
@@ -310,7 +312,10 @@ effective_value() {
 				case "$mode" in
 				singleton)
 					target="$(app_target_node "$d")"
-					if [[ "${PLATFORM_SKIP_SINGLETONS:-0}" == 1 && "$(node_role)" == leader ]]; then
+					# A recorded previous target means a health-gated move has not
+					# completed. Preserve it across normal deploys and reboot recovery;
+					# only singleton-switch may render the candidate target.
+					if [[ "$PLATFORM_FORCE_SINGLETON_ROUTE" != 1 && "$(node_role)" == leader ]]; then
 						state_file="$(singleton_state_file "$d")"
 						previous_target="$(sed -n '1p' "$state_file" 2>/dev/null || true)"
 						[[ -z "$previous_target" ]] || target="$previous_target"
@@ -882,7 +887,7 @@ stop_inactive() {
 	# not discoverable through all_projects. Retire only the old containers;
 	# leave its data in place for explicit operator cleanup after verification.
 	local id ownership project
-	project=app-observer
+	project='app-observer'
 	if ! ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null)"; then
 		printf 'platformctl: unable to list retired Observer containers\n' >&2
 		return 1
@@ -925,7 +930,9 @@ wait_project() {
 }
 reload_caddy() {
 	foundation_compose caddy
-	"${compose_command[@]}" exec caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+	if ! "${compose_command[@]}" exec caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
+		return 1
+	fi
 	"${compose_command[@]}" exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 }
 recover() {
@@ -1311,6 +1318,8 @@ singleton_descriptor() {
 }
 singleton_state_file() { printf '%s/%s.previous-target\n' "$SINGLETON_STATE_ROOT" "$(basename "$1")"; }
 singleton_transition_file() { printf '%s/%s.transition.env\n' "$SINGLETON_STATE_ROOT" "$(basename "$1")"; }
+singleton_route_backup_file() { printf '%s/%s.route-backup.caddy\n' "$SINGLETON_STATE_ROOT" "$(basename "$1")"; }
+singleton_route_missing_file() { printf '%s/%s.route-was-missing\n' "$SINGLETON_STATE_ROOT" "$(basename "$1")"; }
 transition_value() {
 	local key="$1" file="$2"
 	[[ -r "$file" ]] || return 0
@@ -1439,8 +1448,31 @@ singleton_transition_fail() {
 	transition_set "$journal" FAILED_UTC "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 	printf 'singleton transition marked failed; retained journal at %s\n' "$journal" >&2
 }
+singleton_restore_route() {
+	local d="$1" route="$2" backup="$3" missing="$4" tmp
+	if [[ -f "$backup" ]]; then
+		install -d -m 700 "$(dirname "$route")"
+		tmp="$(mktemp "$route.rollback.XXXXXX")"
+		if ! cp "$backup" "$tmp" || ! chmod 600 "$tmp" || ! mv -f -- "$tmp" "$route"; then
+			rm -f -- "$tmp"
+			printf 'platformctl: unable to restore the previous singleton route from %s\n' "$backup" >&2
+			return 1
+		fi
+	elif [[ -f "$missing" ]]; then
+		rm -f -- "$route"
+	else
+		printf 'platformctl: singleton route rollback state is incomplete for %s\n' "$(basename "$d")" >&2
+		return 1
+	fi
+	if ! reload_caddy; then
+		printf 'platformctl: previous singleton route was restored on disk, but Caddy reload failed; rollback state remains in %s\n' "$SINGLETON_STATE_ROOT" >&2
+		return 1
+	fi
+	rm -f -- "$backup" "$missing"
+	printf 'restored previous Leader route for singleton %s\n' "$(basename "$d")" >&2
+}
 singleton_switch() {
-	local d="$1" target origin_key origin public_key public_url enabled public_host domain journal release previous state_file
+	local d="$1" target origin_key origin public_key public_url enabled public_host domain journal release previous state_file health expected response route backup missing backup_tmp switch_failed=0
 	[[ "$(node_role)" == leader ]] || die 'singleton switch must run on the Leader'
 	d="$(singleton_descriptor "$d")"
 	target="$(app_target_node "$d")"
@@ -1454,9 +1486,43 @@ singleton_switch() {
 $(singleton_route_keys "$d")
 EOF
 	origin="$(env_value "$origin_key" "$CONTROL_ROOT/current/config/cluster/nodes/$target.env")"
-	[[ -n "$origin" ]] || die "missing singleton origin for $target"
-	curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin$(descriptor_value "$d" HEALTH_URL)" >/dev/null || die "singleton origin is unhealthy: $origin"
-	PLATFORM_SKIP_SINGLETONS=0 sync apps
+	health="$(descriptor_value "$d" HEALTH_URL)"
+	expected="$(descriptor_value "$d" HEALTH_EXPECT)"
+	[[ -n "$origin" && -n "$health" ]] || die "singleton switch is missing origin or health path: $(basename "$d")"
+	response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
+	[[ -z "$expected" || "$response" == *"$expected"* ]] || die "singleton origin response did not match HEALTH_EXPECT: $(basename "$d")"
+
+	install -d -m 700 "$SINGLETON_STATE_ROOT"
+	route="$RUNTIME_ROOT/config/routes.d/$(basename "$d").caddy"
+	backup="$(singleton_route_backup_file "$d")"
+	missing="$(singleton_route_missing_file "$d")"
+	[[ ! -e "$backup" && ! -e "$missing" ]] || die "unresolved singleton route rollback exists for $(basename "$d") in $SINGLETON_STATE_ROOT"
+	if [[ -f "$route" ]]; then
+		backup_tmp="$(mktemp "$backup.XXXXXX")"
+		if ! cp "$route" "$backup_tmp" || ! chmod 600 "$backup_tmp" || ! mv -f -- "$backup_tmp" "$backup"; then
+			rm -f -- "$backup_tmp"
+			die "unable to snapshot the existing singleton route: $route"
+		fi
+	else
+		: >"$missing"
+		chmod 600 "$missing"
+	fi
+
+	journal="$(singleton_transition_file "$d")"
+	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
+	state_file="$(singleton_state_file "$d")"
+	previous="$(cat "$state_file" 2>/dev/null || true)"
+	if [[ "$(transition_value NEW_TARGET "$journal")" != "$target" || "$(transition_value RELEASE_SHA "$journal")" != "$release" ]]; then
+		transition_begin "$journal" "$(basename "$d")" "$previous" "$target" "$release" ""
+	fi
+	transition_set "$journal" PHASE switching
+	# Run synchronization through a child platformctl process. Validation uses
+	# explicit fatal exits, so a function call in an `if` condition could exit this
+	# transaction before its rollback handler gets control.
+	if ! PLATFORM_LOCK_HELD=1 PLATFORM_SKIP_SINGLETONS=0 PLATFORM_FORCE_SINGLETON_ROUTE=1 "$0" sync apps; then
+		transition_set "$journal" PHASE route-publish-failed
+		switch_failed=1
+	fi
 	public_url="$(app_value "$d" "$public_key")"
 	if [[ -z "$public_url" ]]; then
 		public_host="$(descriptor_value "$d" PUBLIC_HOST)"
@@ -1465,13 +1531,27 @@ EOF
 			if [[ "$domain" == localhost ]]; then public_url="http://${public_host}.localhost"; else public_url="https://${public_host}.${domain}"; fi
 		fi
 	fi
-	[[ -z "$public_url" ]] || curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "${public_url%/}$(descriptor_value "$d" HEALTH_URL)" >/dev/null || die 'singleton public smoke failed'
-	journal="$(singleton_transition_file "$d")"
-	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
-	install -d -m 700 "$SINGLETON_STATE_ROOT"
-	state_file="$(singleton_state_file "$d")"
-	previous="$(cat "$state_file" 2>/dev/null || true)"
-	if [[ ! -f "$journal" ]]; then transition_begin "$journal" "$(basename "$d")" "$previous" "$target" "$release" ""; fi
+	if ((switch_failed == 0)) && [[ -n "$public_url" ]]; then
+		if ! response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "${public_url%/}${health}" 2>/dev/null)"; then
+			printf 'platformctl: singleton public smoke failed: %s\n' "${public_url%/}${health}" >&2
+			transition_set "$journal" PHASE public-smoke-failed
+			switch_failed=1
+		elif [[ -n "$expected" && "$response" != *"$expected"* ]]; then
+			printf 'platformctl: singleton public response did not match HEALTH_EXPECT: %s\n' "$(basename "$d")" >&2
+			transition_set "$journal" PHASE public-smoke-failed
+			switch_failed=1
+		fi
+	fi
+	if ((switch_failed != 0)); then
+		if ! singleton_restore_route "$d" "$route" "$backup" "$missing"; then
+			transition_set "$journal" PHASE route-rollback-failed
+		else
+			transition_set "$journal" PHASE failed
+		fi
+		transition_set "$journal" FAILED_UTC "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+		return 1
+	fi
+	rm -f -- "$backup" "$missing"
 	transition_set "$journal" RELEASE_SHA "$release"
 	transition_set "$journal" PHASE switched
 	transition_set "$journal" SWITCHED_UTC "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"

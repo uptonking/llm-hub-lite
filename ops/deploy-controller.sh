@@ -152,7 +152,7 @@ atomic_link() {
 	mv -- "$tmp" "$link"
 }
 sync_node_config() {
-	local release="$1" destination="$2" runtime_source id source tmp key value
+	local release="$1" destination="$2" runtime_source id source tmp value
 	runtime_source="${3:-${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}}"
 	id="$(env_value NODE_ID "$runtime_source")"
 	[[ "$id" =~ ^[a-z][a-z0-9-]*$ ]] || die 'runtime node ID is invalid'
@@ -164,10 +164,8 @@ sync_node_config() {
 	# node.env is committed inventory plus this one private, host-local field.
 	# Do not preserve arbitrary keys: that would let stale inventory or secrets
 	# become an undocumented second source of truth.
-	for key in LEADER_PUBLIC_IP; do
-		value="$(env_value "$key" "$runtime_source")"
-		[[ -n "$value" ]] && printf '%s=%s\n' "$key" "$value" >>"$tmp"
-	done
+	value="$(env_value LEADER_PUBLIC_IP "$runtime_source")"
+	[[ -n "$value" ]] && printf 'LEADER_PUBLIC_IP=%s\n' "$value" >>"$tmp"
 	chmod 600 "$tmp"
 	mv -f -- "$tmp" "$destination"
 }
@@ -312,8 +310,8 @@ verify_singleton_scope() {
 	[[ -n "$old_release" ]] || return 0
 	while IFS= read -r path; do
 		case "$path" in
-		apps/$app/** | config/cluster/apps/$app.policy | ops/images.apps.prod.env | .env.prod.example | .env.dev.example | \
-			.woodpecker/singleton-stage-$app.yml | .woodpecker/singleton-switch-$app.yml | .woodpecker/singleton-stop-$app-*.yml) ;;
+		apps/"$app"/** | config/cluster/apps/"$app".policy | ops/images.apps.prod.env | .env.prod.example | .env.dev.example | \
+			.woodpecker/singleton-stage-"$app".yml | .woodpecker/singleton-switch-"$app".yml | .woodpecker/singleton-stop-"$app"-*.yml) ;;
 		*)
 			log "singleton scope rejected: app=$app mode=$mode path=$path"
 			die "singleton workflow for $app cannot apply unrelated path: $path"

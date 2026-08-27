@@ -1,0 +1,12 @@
+{$NODE_CURSORAPI_ORIGIN_HOST} {
+  import common_proxy
+  @cursorapi_origin path /v1/* /healthz
+  handle @cursorapi_origin {
+    reverse_proxy cursorapi:8765 {
+      flush_interval -1
+    }
+  }
+  handle {
+    respond "not found" 404
+  }
+}

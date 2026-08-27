@@ -42,6 +42,10 @@ jobs:
           ops/tests/firewall-test.sh
           ops/tests/platform-submit-test.sh
           ops/tests/git-auth-test.sh
+          ops/tests/observer-ingest-test.sh
+          ops/tests/restore-test.sh
+          ops/tests/secret-validation-test.sh
+          ops/tests/cursorapi-release-test.sh
       - name: Validate Compose model
         run: |
           docker compose --env-file .env.prod.example --env-file ops/images.foundation.prod.env -f compose/foundation/caddy.yml config --quiet
@@ -49,12 +53,16 @@ jobs:
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker-deployer.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel-controller.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel-worker.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/observer.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/observer-controller.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/leader.env --env-file ops/foundation/observer.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/observer-collector.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/foundation/woodpecker.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/woodpecker-worker.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/foundation/beszel.env.example --env-file ops/images.foundation.prod.env -f compose/foundation/beszel-worker.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/images.apps.prod.env -f apps/newapi/compose.yml config --quiet
           docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/aichorouter/compose.yml config --quiet
           docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cpapi/compose.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cursorapi/compose.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/images.apps.prod.env -f apps/librechat/compose.yml config --quiet
+          PIGEON_SECRET_KEY=validation-secret-key-which-is-long PIGEON_LOGIN_PASSWORD=validation-password docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/pigeon/compose.yml config --quiet
       - name: Validate Caddyfile
         run: |
           for node in leader worker-1 worker-2; do

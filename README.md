@@ -83,8 +83,9 @@ and preserves the journal/archive for an idempotent retry; do not delete the
 journal until the target has been verified or deliberately rolled back.
 
 Legacy New API remains as a dormant manifest and is disabled by the committed
-policy. CPAPI is an enabled singleton consumer at `cpapi.aichorage.de` and is
-unrelated to the legacy New API. Pigeon (OutlookEmail) remains packaged for a
+policy. CPAPI and Cursor API Proxy are enabled singleton consumers at
+`cpapi.aichorage.de` and `cursorapi.aichorage.de`; both are unrelated to the
+legacy New API. Pigeon (OutlookEmail) remains packaged for a
 future opt-in but is disabled by committed policy and has no default workflow,
 route, container, or secret prompt. OpenObserve
 is an enabled Leader foundation service at `observer.aichorage.de`. LibreChat is
@@ -110,6 +111,52 @@ memory-capped and has no host-published port; all public traffic enters through
 the Leader's Caddy route. SQLite is intentionally local and is not replicated,
 so a target move is intentionally a fresh local deployment. Previous local
 state is retained in an archive directory until manually removed.
+
+Cursorapi packages `cursor-api-proxy` and a checksum-pinned Cursor Agent into
+the repository-owned `ghcr.io/uptonking/cursor-api-proxy` image because the
+upstream project does not publish a deployable image. It is an ephemeral
+singleton on `worker-1` by default, with no database, persistent volume, host
+port, or Docker socket. Its read-only non-root container is capped at `512m`
+memory, `0.50` CPU, and 128 processes. Moving it to another follower is a fresh
+deployment; no local application data is copied.
+
+`CURSORAPI_CURSOR_API_KEY` maps to upstream `CURSOR_API_KEY` and must be entered
+manually from the Cursor account credential. `CURSORAPI_BRIDGE_API_KEY` protects
+all public `/v1/*` requests and should be generated with `openssl rand -hex 32`.
+The public route exposes only `/v1/*` and the unauthenticated `/healthz`; the
+upstream dashboard and `/api/*` control endpoints remain private. Clients use
+`https://cursorapi.aichorage.de/v1` as their base URL and
+`CURSORAPI_BRIDGE_API_KEY` as the API key.
+
+Cursorapi images are never built by GitHub Actions, Woodpecker, bootstrap, or
+the normal deployment controller. To publish a reviewed upstream revision
+manually, update the pinned source commit, Cursor Agent version, download
+checksum, and a new unique tag in `images/cursorapi/release.env`, authenticate
+Docker to GHCR, then run from the operator workstation:
+
+```bash
+ops/publish-cursorapi-image.sh /path/to/cursor-api-proxy
+```
+
+The publisher refuses to replace an existing release tag, exports the exact Git
+commit into a clean temporary context, runs type checking and all upstream
+tests with at most two workers, builds only `linux/amd64`, pushes SBOM and
+provenance metadata, and verifies anonymous pull access. Commit the printed
+immutable `tag@sha256:digest` in `ops/images.apps.prod.env`. That digest change,
+not the image build, enters the normal singleton deployment workflow on push.
+A new GHCR package must be made public once in its package settings; later
+publications verify that state but never try to change package visibility
+through an API.
+
+When introducing Cursorapi to an already-running cluster, push the reviewed
+commit, run the manual `foundation-upgrade-leader` chain for that exact commit,
+and wait for both follower foundation upgrades. Provision the two Cursorapi
+secrets on its selected follower, then retry the generated
+`singleton-stage-cursorapi` pipeline for the same commit. Its dependent switch
+and stop workflows publish the route only after origin health succeeds. The
+first automatic singleton attempt may fail before the foundation chain because
+the installed controller does not yet know the new app; this is a fail-closed
+ordering guard, not a reason to rerun bootstrap.
 
 Pigeon is the dormant single-node OutlookEmail package for
 `pigeon.aichorage.de`.
@@ -269,7 +316,8 @@ volumes untouched for that decision.
 
 OpenObserve's production image is distroless and does not contain an HTTP
 client. A tiny pinned `health-probe` sidecar performs the HTTP readiness check
-against `/healthz` ; the same sidecar pattern is used by Aichorouter and CPAPI.
+against `/healthz` ; the same sidecar pattern is used by Aichorouter, CPAPI,
+and Cursorapi.
 `platformctl health` requires the application containers to be running and
 the declared `health-probe` container to be `healthy` . Pigeon follows the same
 project-level contract, using its unauthenticated `/login` page because the
@@ -289,6 +337,7 @@ secrets once:
 ```bash
 sudo /opt/platform/control/current/ops/configure-app-secrets.sh aichorouter
 sudo /opt/platform/control/current/ops/configure-app-secrets.sh cpapi
+sudo /opt/platform/control/current/ops/configure-app-secrets.sh cursorapi
 ```
 
 CPAPI exposes an unauthenticated `/healthz` endpoint that returns `{"status":"ok"}` .
@@ -301,6 +350,8 @@ project state with:
 docker compose -p app-cpapi ps
 curl -fsS https://worker1-cpapi-origin.aichorage.de/healthz
 curl -fsS https://cpapi.aichorage.de/healthz
+curl -fsS https://worker1-cursorapi-origin.aichorage.de/healthz
+curl -fsS https://cursorapi.aichorage.de/healthz
 ```
 
 The helper reads `SECRET_KEYS` , `RUNTIME_ENV_FILE` , and `POLICY_FILE` from the
@@ -312,6 +363,34 @@ remove only old containers. After verifying the new deployment, manual cleanup
 is deliberately explicit: stop the old project first, inspect the retained
 directory, then remove that exact directory and the old runtime file under
 `/etc/llm-hub-lite` when it is no longer needed.
+
+For an enabled singleton target move, provision the future follower before
+committing the policy change. The explicit target option validates that the
+node is a known Follower and writes credentials locally without modifying
+cluster policy. For example, to move Cursorapi to `worker-2`:
+
+```bash
+ssh root@<worker-2-host-or-ip> \
+  '/usr/local/bin/configure-app-secrets cursorapi --target-node worker-2'
+
+ops/configure-single-follower.sh cursorapi
+ops/generate-woodpecker-workflows.sh
+ops/generate-woodpecker-workflows.sh --check
+git diff -- config/cluster/apps/cursorapi.policy .woodpecker/
+git add config/cluster/apps/cursorapi.policy .woodpecker/
+git commit -m 'move cursorapi to worker-2'
+git push origin main
+```
+
+Wait for `singleton-stage-cursorapi`, `singleton-switch-cursorapi`, and both
+stop workflows in that order, then verify the selected origin and public
+`/healthz`. The switch snapshots the installed Leader route and checks the
+manifest's expected health response at both endpoints. If publication or the
+public smoke fails, it atomically restores the old route, reloads Caddy, keeps
+the previous-target marker, and returns failure, so Woodpecker does not stop
+the old target. A failed rollback reload leaves a `*.route-backup.caddy` or
+`*.route-was-missing` file under `/etc/llm-hub-lite/singleton-state`; resolve
+and verify the Caddy route before removing that artifact and retrying.
 
 The generated Woodpecker singleton workflow stages the new image/configuration
 on that follower, verifies its origin health, switches the Leader route, then
@@ -370,6 +449,7 @@ cp .env.dev.example .env.dev
     - LibreChat
     - Aichorouter (the default singleton target)
     - CPAPI (the default singleton target)
+    - Cursorapi (the default singleton target)
 - Follower worker-2:
     - Caddy
     - Woodpecker agent
@@ -381,14 +461,17 @@ SSH is used only for this one-time host bootstrap. Before starting, prepare the
 three VPS hosts, Cloudflare DNS, and the R2 Restic repositories. The Leader
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
 files are transferred to Followers before they start. Public domains `ci`,
-`ci-grpc`, `status`, `chat`, `chat-admin`, `aichorouter`, `cpapi`, and
-`observer` point to the Leader. Add `observer-ingest` as a DNS-only record
+`ci-grpc`, `status`, `chat`, `chat-admin`, `aichorouter`, `cpapi`, `cursorapi`,
+and `observer` point to the Leader. Add `observer-ingest` as a DNS-only record
 directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
 origins using the `worker1-` prefix point to Worker 1, while the stable-ID
 `worker2-` origin records point to Worker 2. Pigeon origin records are not
 required while it is disabled; create the selected Follower's DNS-only origin
 before opting it in. The `leader` stable ID is the public Leader and therefore
 does not need a private origin record for ingress.
+The default Cursorapi placement specifically requires the DNS-only
+`worker1-cursorapi-origin.<domain>` record to resolve to Worker 1; the public
+`cursorapi.<domain>` record resolves to the Leader and may be Cloudflare-proxied.
 The Follower origin records must remain DNS-only. The Follower firewall only
 permits Docker HTTPS traffic from the Leader IP. After certificates work, the
 public records may be proxied through Cloudflare.
@@ -563,9 +646,11 @@ different shared secrets independently on different nodes.
 When invoking a remote bootstrap with SSH, use `ssh -tt` so the confirmation
 and secret prompts receive a terminal. You may set `BOOTSTRAP_ASSUME_YES=1` to
 skip only the role confirmation; required secrets are still validated and must be supplied through the environment, bundle, or remaining prompts.
-On the Aichorouter and CPAPI target Followers, the interactive bootstrap
-prompts for their singleton-local secrets. Disabled applications such as
-Pigeon do not prompt for secrets. On the Leader, bootstrap prompts for the
+On the Aichorouter, CPAPI, and Cursorapi target Followers, the interactive
+bootstrap prompts for their singleton-local secrets. For Cursorapi, provide
+the existing Cursor credential as `CURSORAPI_CURSOR_API_KEY` and generate
+`CURSORAPI_BRIDGE_API_KEY` with `openssl rand -hex 32`. Disabled applications
+such as Pigeon do not prompt for secrets. On the Leader, bootstrap prompts for the
 OpenObserve root credentials and creates a named write-only ingestion token;
 only the ingestion username/token are copied in `shared-secrets.env` to
 Followers. The CPAPI management panel is enabled and protected by its
@@ -594,6 +679,7 @@ ssh root@<worker-2-host-or-ip> platformctl health
 curl -fsS https://ci.<domain>/
 curl -fsS https://status.<domain>/api/health
 curl -fsS https://chat.<domain>/health
+curl -fsS https://cursorapi.<domain>/healthz
 ```
 
 Then enable the repository in Woodpecker and confirm that the generated
@@ -700,6 +786,16 @@ Its native container healthcheck verifies the persisted configuration and
 process liveness, while the small pinned `health-probe` sidecar verifies
 `/healthz` over the private network.
 
+Cursorapi is a separate ephemeral singleton at `cursorapi.aichorage.de`. Its
+target is stored in `config/cluster/apps/cursorapi.policy` and defaults to
+`worker-1`. The repository-built image bundles a checksum-pinned Cursor Agent;
+the runtime has no host port, database, persistent volume, or Docker socket.
+Its native and sidecar healthchecks both verify the unauthenticated `/healthz`
+endpoint. The Leader exposes `/healthz` for deployment smoke checks and
+authenticated `/v1/*` API traffic, while dashboard and control paths remain
+unpublished. A target change intentionally starts a fresh container and
+discards its ephemeral home/session state.
+
 OpenObserve is a Leader-only foundation service at `observer.aichorage.de`.
 Its durable local disk data is included in the Leader's Restic snapshot and is
 retained for 30 days. Collectors run on every VPS, use the dedicated
@@ -740,7 +836,7 @@ cluster workflow.
 
 Use the workflow that matches the changed paths. A normal LibreChat or legacy
 New API source/configuration change is handled by the generated `deploy-*`
-chain. Aichorouter and CPAPI changes are handled by their generated
+chain. Aichorouter, CPAPI, and Cursorapi changes are handled by their generated
 `singleton-stage-*` -> `singleton-switch-*` -> `singleton-stop-*` chain.
 Disabled singleton applications have no generated workflows.
 When a singleton is disabled, its policy path moves into the automatic
@@ -766,8 +862,8 @@ For a local runtime-only change, edit the target node's root-owned
 ssh root@<target-follower> 'platformctl recreate app:/opt/platform/control/current/apps/aichorouter && platformctl health'
 ```
 
-The same command applies to `cpapi` by replacing the application name in the
-path. Observer runtime values live in
+The same command applies to `cpapi` or `cursorapi` by replacing the application
+name in the path. Observer runtime values live in
 `/opt/platform/foundation/env/observer.env`; use `platformctl recreate
 observer-controller` and `platformctl recreate observer-collector` after an
 environment-file or collector configuration edit. Use `platformctl restart`
@@ -889,8 +985,8 @@ ssh root@<node> 'tail -n 240 /opt/apps/llm-hub-lite/shared/logs/deploy.log'
 ```
 
 OpenObserve collects platform-labelled Docker logs from every VPS. Woodpecker,
-Aichorouter, CPAPI, LibreChat, Caddy, and Beszel containers are collected unless
-they carry the opt-out label. Pigeon is enrolled when it is enabled. The
+Aichorouter, CPAPI, Cursorapi, LibreChat, Caddy, and Beszel containers are
+collected unless they carry the opt-out label. Pigeon is enrolled when it is enabled. The
 short-lived deployment runner is intentionally
 excluded because `platform-submit` already streams its complete log into the
 Woodpecker step. The dedicated collector credentials are write-only; the
@@ -930,10 +1026,12 @@ platformctl restart all
 platformctl restart caddy
 platformctl restart app:/opt/platform/control/current/apps/librechat
 platformctl restart app:/opt/platform/control/current/apps/cpapi
+platformctl restart app:/opt/platform/control/current/apps/cursorapi
 
 # apply changed Compose limits, environment, or a local runtime secret
 platformctl recreate app:/opt/platform/control/current/apps/aichorouter
 platformctl recreate app:/opt/platform/control/current/apps/cpapi
+platformctl recreate app:/opt/platform/control/current/apps/cursorapi
 platformctl recreate observer-controller
 platformctl recreate observer-collector
 

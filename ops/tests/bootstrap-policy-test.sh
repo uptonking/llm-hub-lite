@@ -71,7 +71,7 @@ image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bas
 	printf "FOUNDATION_FOLLOWER=beszel-worker,woodpecker-worker,observer-collector\\nFOUNDATION_LEADER=observer-controller,observer-collector\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
 	policy_file="$tmp_policy" NODE_ROLE=follower NODE_ID=worker-1
 	newapi_enabled=0 librechat_enabled=1
-	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
+	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE CURSORAPI_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
 		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
 	done
 ')"
@@ -82,6 +82,7 @@ grep -Fqx 'LIBRECHAT_API_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$image_selection"
 grep -Fqx 'CPAPI_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'AICHOROUTER_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'CURSORAPI_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'OBSERVER_IMAGE=skipped' <<<"$image_selection"
 grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$image_selection"
@@ -93,7 +94,7 @@ leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_ro
 	printf "FOUNDATION_LEADER=caddy,woodpecker-controller,woodpecker-deployer,beszel-controller,beszel-worker,observer-controller,observer-collector\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
 	policy_file="$tmp_policy" NODE_ROLE=leader NODE_ID=leader
 	newapi_enabled=1 librechat_enabled=1
-	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
+	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE CURSORAPI_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
 		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
 	done
 ')"
@@ -102,6 +103,7 @@ grep -Fqx 'LIBRECHAT_API_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'CPAPI_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'AICHOROUTER_IMAGE=skipped' <<<"$leader_image_selection"
+grep -Fqx 'CURSORAPI_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'OBSERVER_IMAGE=required' <<<"$leader_image_selection"
 grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=required' <<<"$leader_image_selection"
 grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$leader_image_selection"
@@ -152,6 +154,7 @@ cat >"$summary_env" <<'EOF'
 LIBRECHAT_SITE=https://chat.example.test
 AICHOROUTER_SITE=https://aichorouter.example.test
 CPAPI_SITE=https://cpapi.example.test
+CURSORAPI_SITE=https://cursorapi.example.test
 OBSERVER_SITE=https://observer.example.test
 EOF
 summary_helpers='app_enabled() { local app="$1" rel; rel="$(sed -n '\''s/^POLICY_FILE=//p'\'' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"; [[ "$(sed -n '\''s/^ENABLED=//p'\'' "$SOURCE_ROOT/config/$rel" | tail -n1)" != false ]]; }
@@ -177,7 +180,7 @@ follower_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summa
 	print_bootstrap_summary
 ')"
 grep -Fq 'Foundation: Caddy, Beszel Agent, Woodpecker Agent, Observer Collector' <<<"$follower_summary"
-grep -Fq 'Consumers: Aichorouter, CPAPI, LibreChat' <<<"$follower_summary"
+grep -Fq 'Consumers: Aichorouter, CPAPI, Cursor API Proxy, LibreChat' <<<"$follower_summary"
 grep -Fq 'LibreChat origin: https://worker-chat-origin.example.test' <<<"$follower_summary"
 grep -Fq 'Daily deployments are workflow-driven' <<<"$follower_summary"
 wrapper_declaration="$(sed -n '/^for script in /p' "$bootstrap")"

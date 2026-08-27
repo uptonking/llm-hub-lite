@@ -1,0 +1,77 @@
+name: app-cursorapi
+services:
+  cursorapi:
+    image: ${CURSORAPI_IMAGE:?CURSORAPI_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: ${CURSORAPI_MEMORY_LIMIT:-512m}
+    cpus: ${CURSORAPI_CPUS:-0.50}
+    pids_limit: ${CURSORAPI_PIDS_LIMIT:-128}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+      - /home/node:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: cursorapi
+      com.aichorage.component: app-cursorapi
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      CURSOR_API_KEY: ${CURSORAPI_CURSOR_API_KEY:?CURSORAPI_CURSOR_API_KEY must be set}
+      CURSOR_BRIDGE_API_KEY: ${CURSORAPI_BRIDGE_API_KEY:?CURSORAPI_BRIDGE_API_KEY must be set}
+      CURSOR_BRIDGE_HOST: 0.0.0.0
+      CURSOR_BRIDGE_PORT: "8765"
+      CURSOR_BRIDGE_MODE: ${CURSORAPI_MODE:-ask}
+      CURSOR_BRIDGE_TIMEOUT_MS: ${CURSORAPI_TIMEOUT_MS:-300000}
+      CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: ${CURSORAPI_CHAT_ONLY_WORKSPACE:-true}
+      CURSOR_BRIDGE_USE_ACP: ${CURSORAPI_USE_ACP:-false}
+      CURSOR_BRIDGE_VERBOSE: ${CURSORAPI_VERBOSE:-false}
+      CURSOR_BRIDGE_MAX_MODE: ${CURSORAPI_MAX_MODE:-false}
+      CURSOR_BRIDGE_MULTI_PORT: ${CURSORAPI_MULTI_PORT:-false}
+      CURSOR_BRIDGE_FORCE: "false"
+      CURSOR_BRIDGE_APPROVE_MCPS: "false"
+      CURSOR_BRIDGE_STRICT_MODEL: "true"
+      CURSOR_BRIDGE_SESSIONS_LOG: /home/node/sessions.log
+    networks: [cursorapi_private, platform_edge]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8765/healthz').then(async r=>{if(!r.ok||await r.text()!=='ok\\n')process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+  health-probe:
+    image: ${HEALTH_PROBE_IMAGE:?HEALTH_PROBE_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: 16m
+    cpus: 0.05
+    pids_limit: 32
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    entrypoint: ["/bin/sh"]
+    command: ["-eu", "-c", "while :; do sleep 3600; done"]
+    tmpfs: [/tmp]
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: cursorapi
+      com.aichorage.component: app-cursorapi
+      com.aichorage.observer.ignore-logs: "true"
+    depends_on:
+      cursorapi:
+        condition: service_started
+    networks: [cursorapi_private]
+    healthcheck:
+      test: ["CMD-SHELL", "test \"$$(curl -fsS http://cursorapi:8765/healthz)\" = ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+networks:
+  cursorapi_private:
+    name: app-cursorapi_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

@@ -1,0 +1,21 @@
+{$CURSORAPI_SITE} {
+  import common_proxy
+  @cursorapi_api path /v1/* /healthz
+  handle @cursorapi_api {
+    reverse_proxy {$CURSORAPI_UPSTREAM} {
+      flush_interval -1
+      fail_duration 30s
+      health_uri /healthz
+      health_interval 10s
+      health_timeout 3s
+      header_up Host {http.reverse_proxy.upstream.hostport}
+    }
+  }
+  handle {
+    respond "not found" 404
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "cursorapi unavailable" 503
+  }
+}
