@@ -49,6 +49,11 @@ Woodpecker credentials. If a partial or older installation left different
 values in `foundation/env/woodpecker.env`, bootstrap replaces those local
 values with the supplied bundle and recreates the worker. The Leader keeps the stricter mismatch check so an established cluster secret cannot be changed by accident.
 
+The Beszel enrollment bundle is authoritative for the Follower's agent key and
+token as well. Matching files are left untouched; stale or partial files are
+moved to `/opt/platform/beszel/secrets/orphaned/`, replaced from the bundle, and
+the Beszel worker is recreated.
+
 Bootstrap and the daily deployment controller also remove image keys that are
 no longer declared by the checked-in manifests (for example, a key renamed
 during an app migration). This repairs stale installed image environments

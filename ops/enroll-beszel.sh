@@ -28,6 +28,19 @@ write_secret() {
 	chmod 600 "$tmp"
 	mv -f -- "$tmp" "$target"
 }
+quarantine_credentials() {
+	local key_file="$1" token_file="$2" orphan_dir orphan_stamp
+	[[ -e "$key_file" || -e "$token_file" ]] || return 0
+	orphan_dir="$(dirname "$key_file")/orphaned"
+	install -d -m 700 "$orphan_dir"
+	orphan_stamp="$(date -u '+%Y%m%dT%H%M%SZ').$$"
+	if [[ -e "$key_file" ]]; then
+		mv -f -- "$key_file" "$orphan_dir/key.$orphan_stamp"
+	fi
+	if [[ -e "$token_file" ]]; then
+		mv -f -- "$token_file" "$orphan_dir/token.$orphan_stamp"
+	fi
+}
 
 [[ -r "$APP_ENV" && -r "$BESZEL_ENV" ]] || die 'application or Beszel environment is missing'
 node_id="$(value NODE_ID "$NODE_CONFIG_FILE")"
@@ -52,8 +65,18 @@ if [[ "$node_role" == follower ]]; then
 	[[ -s "$key_file" ]] && key_present=1
 	[[ -s "$token_file" ]] && token_present=1
 	if ((key_present == 1 && token_present == 1)); then
-		[[ "$(tr -d '\r\n' <"$key_file")" == "$bundle_key" && "$(tr -d '\r\n' <"$token_file")" == "$bundle_token" ]] || die 'existing Beszel credentials differ from the cluster enrollment bundle'
-		exit 0
+		if [[ "$(tr -d '\r\n' <"$key_file")" == "$bundle_key" && "$(tr -d '\r\n' <"$token_file")" == "$bundle_token" ]]; then
+			exit 0
+		fi
+		# The Leader bundle is the source of truth for Followers. Preserve the
+		# old pair for diagnostics, then atomically replace both values and
+		# recreate the worker so it cannot keep stale bind-mounted credentials.
+		printf 'enroll-beszel: replacing stale follower credentials from the cluster enrollment bundle\n' >&2
+		quarantine_credentials "$key_file" "$token_file"
+	elif ((key_present == 1 || token_present == 1)); then
+		# A partial pair cannot be used safely. Keep it for diagnostics before
+		# provisioning the complete pair from the Leader.
+		quarantine_credentials "$key_file" "$token_file"
 	fi
 	write_secret "$key_file" "$bundle_key"
 	write_secret "$token_file" "$bundle_token"

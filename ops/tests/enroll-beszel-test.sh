@@ -19,4 +19,16 @@ APP_ENV="$tmp/app.env" BESZEL_ENV="$tmp/beszel.env" \
 	bash "$repo_root/ops/enroll-beszel.sh" >/dev/null
 [[ "$(<"$tmp/beszel/key")" == 'ssh-ed25519 AAA' ]]
 [[ "$(<"$tmp/beszel/token")" == token ]]
+printf 'old-public-key\n' >"$tmp/beszel/key"
+printf 'old-token\n' >"$tmp/beszel/token"
+reconcile_log="$tmp/reconcile.log"
+APP_ENV="$tmp/app.env" BESZEL_ENV="$tmp/beszel.env" \
+	NODE_CONFIG_FILE="$tmp/etc/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" \
+	BESZEL_ENROLLMENT_BUNDLE="$tmp/etc/bundle" \
+	bash "$repo_root/ops/enroll-beszel.sh" >"$reconcile_log" 2>&1
+[[ "$(<"$tmp/beszel/key")" == 'ssh-ed25519 AAA' ]]
+[[ "$(<"$tmp/beszel/token")" == token ]]
+grep -Fq 'replacing stale follower credentials' "$reconcile_log"
+orphan_count="$(find "$tmp/beszel/orphaned" -type f -print | wc -l | tr -d ' ')"
+[[ "$orphan_count" -eq 2 ]]
 printf 'Beszel enrollment tests passed\n'
