@@ -5,8 +5,8 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 60s
-    mem_limit: ${FLOWY_MEMORY_LIMIT:-768m}
-    cpus: ${FLOWY_CPUS:-0.75}
+    mem_limit: ${FLOWY_MEMORY_LIMIT:-1400m}
+    cpus: ${FLOWY_CPUS:-0.95}
     pids_limit: ${FLOWY_PIDS_LIMIT:-256}
     labels:
       com.aichorage.platform: llm-hub-lite
@@ -47,11 +47,13 @@ services:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/flowy:/data
     networks: [flowy_private, platform_edge]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:80/api/v1/health | grep -q '\"status\":\"Healthy\"'"]
-      interval: 30s
+      # Activepieces ships curl, but not wget. Keep the probe dependency-free
+      # with respect to the image and allow the PGlite/piece bootstrap to settle.
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:80/api/v1/health | grep -q '\"status\":\"Healthy\"'"]
+      interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 90s
 networks:
   flowy_private:
     name: app-flowy_private

@@ -86,6 +86,12 @@ grep -q '^FLOWY_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.pro
 grep -q '^CONDITIONAL_SECRET_KEYS=FLOWY_FILE_STORAGE_LOCATION=S3|FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"
 grep -Fq 'reverse_proxy flowy:80' "$repo_root/apps/flowy/route.follower.caddy"
 grep -Fq '127.0.0.1:80/api/v1/health' "$repo_root/apps/flowy/compose.yml"
+grep -Fq 'curl -fsS --max-time 5 http://127.0.0.1:80/api/v1/health' "$repo_root/apps/flowy/compose.yml"
+if grep -Fq 'wget -q -O - http://127.0.0.1:80/api/v1/health' "$repo_root/apps/flowy/compose.yml"; then
+	printf 'Flowy healthcheck must use an image-provided HTTP client\n' >&2
+	exit 1
+fi
+grep -q '^FLOWY_MEMORY_LIMIT=1400m$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_FILE_STORAGE_LOCATION=DB$' "$repo_root/apps/flowy/config.env"
 for app in aichorouter cpapi cursorapi pigeon; do
 	grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/$app/manifest.env"

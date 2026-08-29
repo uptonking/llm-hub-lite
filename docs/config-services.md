@@ -109,10 +109,8 @@ the connection URI.
 Aichorouter is the enabled singleton example at `aichorouter.aichorage.de` .
 It uses the upstream New API image plus a tiny HTTP health-probe sidecar, a
 bind-mounted SQLite database at `data/prod/aichorouter/aichorouter.db` , and
-no Redis, PostgreSQL, or other local dependency. `SESSION_SECRET` and `CRYPTO_SECRET` are stored in `/etc/llm-hub-lite/aichorouter.env` on the selected follower. The image is memory-capped and has no host-published port; all public traffic enters through
-the Leader's Caddy route. SQLite is intentionally local and is not replicated,
-so a target move is intentionally a fresh local deployment. Previous local
-state is retained in an archive directory until manually removed.
+no Redis, PostgreSQL, or other local dependency. `SESSION_SECRET` and `CRYPTO_SECRET` are stored in `/etc/llm-hub-lite/aichorouter.env` on the selected follower. The image is memory-capped and has no host-published port; all public traffic enters through the Leader's Caddy route. SQLite is intentionally local and is not replicated, so a target move is intentionally a fresh local deployment. Previous local state is retained in an archive directory until manually removed.
+For the first login, open  https://aichorouter.aichorage.de/setup/.
 
 Flowy is the Activepieces singleton at `flowy.aichorage.de` , enabled on the
 active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/flowy.policy` to move it to another active follower, then regenerate the reviewed workflows. Flowy uses one `WORKER_AND_APP` process with PGlite under `data/prod/flowy/config/pglite` , in-memory Redis, one worker, sandbox code-only execution, official piece synchronization, and bounded memory/CPU. The default `FLOWY_FILE_STORAGE_LOCATION=DB` keeps files in the local PGlite

@@ -171,6 +171,7 @@ ssh -tt "root@$LEADER" \
     DOMAIN_NAME=aichorage.de \
     SSL_EMAIL=admin@aichorage.de \
     WOODPECKER_ADMIN=uptonking \
+    BOOTSTRAP_ASSUME_YES=1 \
     /root/llm-hub-lite-bootstrap.sh"
 
 # Copy these root-only files before starting either Follower. Use a protected
@@ -203,6 +204,7 @@ ssh -tt "root@$WORKER_1" \
     DOMAIN_NAME=aichorage.de \
     SSL_EMAIL=admin@aichorage.de \
     WOODPECKER_ADMIN=uptonking \
+    BOOTSTRAP_ASSUME_YES=1 \
     /root/llm-hub-lite-bootstrap.sh"
 
 ssh -tt "root@$WORKER_2" \
@@ -211,6 +213,7 @@ ssh -tt "root@$WORKER_2" \
      DOMAIN_NAME=aichorage.de \
      SSL_EMAIL=admin@aichorage.de \
      WOODPECKER_ADMIN=uptonking \
+     BOOTSTRAP_ASSUME_YES=1 \
      /root/llm-hub-lite-bootstrap.sh"
 
 ssh -tt "root@$WORKER_3" \
@@ -219,6 +222,7 @@ ssh -tt "root@$WORKER_3" \
     DOMAIN_NAME=aichorage.de \
     SSL_EMAIL=admin@aichorage.de \
     WOODPECKER_ADMIN=uptonking \
+    BOOTSTRAP_ASSUME_YES=1 \
     /root/llm-hub-lite-bootstrap.sh"
 ```
 
@@ -506,6 +510,14 @@ commit:
 git status
 pre-commit run --all-files
 git push origin main
+```
+
+```
+git push
+  -> Woodpecker on Leader
+  -> node-labelled stage jobs
+  -> Leader publish job
+  -> follower stop/finalize jobs
 ```
 
 For a committed Docker Compose, manifest, route, or application configuration
