@@ -291,6 +291,38 @@ valid_input_value() {
 		return 1
 	fi
 }
+prompt_available() {
+	[[ -r /dev/tty || -t 0 ]]
+}
+PROMPT_VALUE=''
+prompt_read() {
+	local prompt="$1" secret="${2:-0}" value=''
+	# Secret reconciliation runs inside process-substitution loops. In that
+	# context stdin is the loop's pipe, not the operator's terminal, so prefer
+	# the controlling TTY and retain stdin as a fallback for normal shells.
+	if [[ -r /dev/tty ]]; then
+		if [[ "$secret" == 1 ]]; then
+			if IFS= read -r -s -p "$prompt: " value </dev/tty; then
+				printf '\n'
+				PROMPT_VALUE="$value"
+				return 0
+			fi
+		else
+			if IFS= read -r -p "$prompt: " value </dev/tty; then
+				PROMPT_VALUE="$value"
+				return 0
+			fi
+		fi
+	fi
+	[[ -t 0 ]] || return 1
+	if [[ "$secret" == 1 ]]; then
+		IFS= read -r -s -p "$prompt: " value || return 1
+		printf '\n'
+	else
+		IFS= read -r -p "$prompt: " value || return 1
+	fi
+	PROMPT_VALUE="$value"
+}
 prompt_required() {
 	local key="$1" prompt="$2" secret="${3:-0}" min_length="${4:-1}" value
 	while :; do
@@ -299,17 +331,12 @@ prompt_required() {
 			if valid_input_value "$key" "$value" "$min_length"; then
 				return 0
 			fi
-			[[ -t 0 ]] || die "$key is invalid; provide a clean replacement through the environment or shared secret bundle"
+			prompt_available || die "$key is invalid; provide a clean replacement through the environment or shared secret bundle"
 			printf 'Please replace %s with a value containing no control characters.\n' "$key" >&2
 			printf -v "$key" '%s' ''
 		fi
-		[[ -t 0 ]] || die "$key is required; provide it through the environment or shared secret bundle"
-		if [[ "$secret" == 1 ]]; then
-			if ! read -r -s -p "$prompt: " value; then die "$key input was not received"; fi
-			printf '\n'
-		else
-			if ! read -r -p "$prompt: " value; then die "$key input was not received"; fi
-		fi
+		if ! prompt_read "$prompt" "$secret"; then die "$key input was not received"; fi
+		value="$PROMPT_VALUE"
 		if valid_input_value "$key" "$value" "$min_length"; then
 			printf -v "$key" '%s' "$value"
 			return 0
