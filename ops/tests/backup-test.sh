@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC2016 # grep intentionally matches literal '$BACKUP_ROOT' text in the source
+grep -Fq 'STAGE_ROOT="${BACKUP_STAGE_ROOT:-$BACKUP_ROOT/stage}"' "$repo_root/ops/backup-platform.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/pigeon"

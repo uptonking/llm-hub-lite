@@ -13,7 +13,11 @@ NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
 CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster/policy.env}"
 REPO="${RESTIC_REPOSITORY:-/opt/backups/llm-hub-lite/repository}"
 PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-$CONFIG_ROOT/restic-password}"
-STAGE_ROOT="${BACKUP_STAGE_ROOT:-/run/llm-hub-lite/backup}"
+BACKUP_ROOT="${BACKUP_ROOT:-/opt/backups/llm-hub-lite}"
+# PGlite trees can exceed the size of /run (a tmpfs on many VPS images). Keep
+# staging on the persistent backup filesystem; BACKUP_STAGE_ROOT remains an
+# override for tests and operators with a dedicated volume.
+STAGE_ROOT="${BACKUP_STAGE_ROOT:-$BACKUP_ROOT/stage}"
 LOCK_FILE="${PLATFORM_LOCK_FILE:-/run/lock/llm-hub-lite/platform.lock}"
 PLATFORMCTL_SCRIPT="${PLATFORMCTL_SCRIPT:-/usr/local/bin/platformctl}"
 MIN_FREE_BYTES="${BACKUP_MIN_FREE_BYTES:-5368709120}"
@@ -396,11 +400,24 @@ snapshot() {
 	check_space
 	local -a stopped_pglite_apps=()
 	restart_stopped_pglite() {
-		local app
+		local app descriptor
 		for app in "${stopped_pglite_apps[@]-}"; do
 			[[ -n "$app" ]] || continue
-			PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" start "app:$APPS_ROOT/$app" >/dev/null 2>&1 ||
-				printf 'warning: unable to restart PGlite app after backup: %s\n' "$app" >&2
+			descriptor="$APPS_ROOT/$app"
+			if [[ ! -f "$descriptor/manifest.env" ]]; then
+				printf 'PGlite app descriptor disappeared during backup: %s\n' "$descriptor" >&2
+				return 1
+			fi
+			# Singleton reconciliation is normally suppressed during cluster-wide
+			# operations. Force this explicitly stopped app back up and retry once;
+			# a successful backup must never leave its workload offline.
+			if ! PLATFORM_FORCE_SINGLETON_ACTION=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" start "app:$descriptor"; then
+				printf 'retrying PGlite app restart after backup: %s\n' "$app" >&2
+				PLATFORM_FORCE_SINGLETON_ACTION=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" start "app:$descriptor" || {
+					printf 'PGlite app remained stopped after backup: %s\n' "$app" >&2
+					return 1
+				}
+			fi
 		done
 	}
 	cleanup_snapshot() {

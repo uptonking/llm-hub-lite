@@ -12,6 +12,7 @@ APP_ENV="${APP_ENV:-$APP_ROOT/shared/.env.prod}"
 REPO="${RESTIC_REPOSITORY:-/opt/backups/llm-hub-lite/repository}"
 PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-$CONFIG_ROOT/restic-password}"
 RESTORE_ROOT="${RESTORE_ROOT:-/opt/backups/llm-hub-lite/restores}"
+BACKUP_STAGE_ROOT="${BACKUP_STAGE_ROOT:-/opt/backups/llm-hub-lite/stage}"
 MAINTENANCE_FILE="${PLATFORM_MAINTENANCE_FILE:-$CONFIG_ROOT/maintenance}"
 LOCK_FILE="${PLATFORM_LOCK_FILE:-/run/lock/llm-hub-lite/platform.lock}"
 PLATFORMCTL_SCRIPT="${PLATFORMCTL_SCRIPT:-/usr/local/bin/platformctl}"
@@ -95,7 +96,22 @@ remote)
 *) die 'RESTORE_SOURCE must be local or remote' ;;
 esac
 [[ -s "$PASSWORD_FILE" ]] || die "missing Restic password file: $PASSWORD_FILE"
+[[ "$BACKUP_STAGE_ROOT" == /* && "$BACKUP_STAGE_ROOT" != *..* ]] || die 'BACKUP_STAGE_ROOT must be an absolute path without ..'
 export RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD_FILE="$PASSWORD_FILE"
+
+staged_backup_root() {
+	local target="$1" current legacy
+	current="$target$BACKUP_STAGE_ROOT"
+	legacy="$target/run/llm-hub-lite/backup"
+	# Keep snapshots made before the persistent staging fix restorable. New
+	# snapshots always use BACKUP_STAGE_ROOT; legacy is selected only when the
+	# new path is absent and the old archive path exists.
+	if [[ -d "$current" || ! -d "$legacy" ]]; then
+		printf '%s\n' "$current"
+	else
+		printf '%s\n' "$legacy"
+	fi
+}
 
 safe_target() { [[ "$1" == "$RESTORE_ROOT"/* && "$1" != *..* ]] || {
 	printf 'restore target must be below %s\n' "$RESTORE_ROOT" >&2
@@ -115,27 +131,29 @@ safe_observer_data_root() {
 
 validate_extract() {
 	local target="$1" database count=0 app_id data_rel pglite_rel
+	local staged
+	staged="$(staged_backup_root "$target")"
 	while IFS= read -r database; do
 		sqlite3 "$database" 'PRAGMA integrity_check;' | grep -qx ok || {
 			printf 'restored SQLite integrity check failed: %s\n' "$database" >&2
 			return 1
 		}
 		count=$((count + 1))
-	done < <(find "$target/run/llm-hub-lite/backup/sqlite" -type f \( -name '*.db' -o -name '*.sqlite' \) 2>/dev/null | sort)
+	done < <(find "$staged/sqlite" -type f \( -name '*.db' -o -name '*.sqlite' \) 2>/dev/null | sort)
 	# A newly bootstrapped instance may not have created every optional database.
 	((count > 0)) || printf 'snapshot contains no SQLite copies; continuing (optional databases may be empty)\n' >&2
-	if [[ -f "$target/run/llm-hub-lite/backup/pglite/map.tsv" ]]; then
+	if [[ -f "$staged/pglite/map.tsv" ]]; then
 		while IFS=$'\t' read -r app_id data_rel pglite_rel; do
 			[[ "$app_id" =~ ^[a-z][a-z0-9-]*$ && "$data_rel" != /* && "$data_rel" != *..* && "$pglite_rel" != /* && "$pglite_rel" != *..* ]] || die 'invalid PGlite restore map'
-			[[ -d "$target/run/llm-hub-lite/backup/pglite/$app_id" ]] || die "missing PGlite artifact: $app_id"
-		done <"$target/run/llm-hub-lite/backup/pglite/map.tsv"
+			[[ -d "$staged/pglite/$app_id" ]] || die "missing PGlite artifact: $app_id"
+		done <"$staged/pglite/map.tsv"
 	fi
-	if [[ -f "$target/run/llm-hub-lite/backup/postgres/new-api.dump" ]]; then
+	if [[ -f "$staged/postgres/new-api.dump" ]]; then
 		command -v pg_restore >/dev/null 2>&1 || {
 			printf 'pg_restore is required to validate the New API dump\n' >&2
 			return 1
 		}
-		pg_restore --list "$target/run/llm-hub-lite/backup/postgres/new-api.dump" >/dev/null
+		pg_restore --list "$staged/postgres/new-api.dump" >/dev/null
 		printf 'New API PostgreSQL dump validated; restore it explicitly with pg_restore after review\n' >&2
 	fi
 }
@@ -155,16 +173,16 @@ extract_snapshot() {
 
 install_verified_databases() {
 	local target="$1" staged database app_id relative data_rel snapshot_file pglite_rel
-	staged="$target/run/llm-hub-lite/backup/sqlite"
+	staged="$(staged_backup_root "$target")/sqlite"
 	install -d -m 700 "$target$PLATFORM_ROOT/woodpecker/data" "$target$PLATFORM_ROOT/beszel/hub"
-	if [[ -f "$target/run/llm-hub-lite/backup/pglite/map.tsv" ]]; then
+	if [[ -f "$(staged_backup_root "$target")/pglite/map.tsv" ]]; then
 		while IFS=$'\t' read -r app_id data_rel pglite_rel; do
 			[[ "$app_id" =~ ^[a-z][a-z0-9-]*$ && "$data_rel" != /* && "$data_rel" != *..* && "$pglite_rel" != /* && "$pglite_rel" != *..* ]] || die 'invalid PGlite restore map'
-			[[ -d "$target/run/llm-hub-lite/backup/pglite/$app_id" ]] || die "missing PGlite artifact: $app_id"
+			[[ -d "$(staged_backup_root "$target")/pglite/$app_id" ]] || die "missing PGlite artifact: $app_id"
 			install -d -m 700 "$target${DATA_ROOT:?}/$data_rel"
 			rm -rf -- "$target${DATA_ROOT:?}/$data_rel/$pglite_rel"
-			cp -a -- "$target/run/llm-hub-lite/backup/pglite/$app_id" "$target$DATA_ROOT/$data_rel/$pglite_rel"
-		done <"$target/run/llm-hub-lite/backup/pglite/map.tsv"
+			cp -a -- "$(staged_backup_root "$target")/pglite/$app_id" "$target$DATA_ROOT/$data_rel/$pglite_rel"
+		done <"$(staged_backup_root "$target")/pglite/map.tsv"
 	fi
 	if [[ -f "$staged/map.tsv" ]]; then
 		while IFS=$'\t' read -r app_id data_rel relative snapshot_file; do

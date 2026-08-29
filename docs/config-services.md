@@ -114,12 +114,14 @@ For the first login, open  https://aichorouter.aichorage.de/setup/.
 
 Flowy is the Activepieces singleton at `flowy.aichorage.de` , enabled on the
 active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/flowy.policy` to move it to another active follower, then regenerate the reviewed workflows. Flowy uses one `WORKER_AND_APP` process with PGlite under `data/prod/flowy/config/pglite` , in-memory Redis, one worker, sandbox code-only execution, official piece synchronization, and bounded memory/CPU. The default `FLOWY_FILE_STORAGE_LOCATION=DB` keeps files in the local PGlite
-database for a minimal single-node deployment. Cloudflare R2 is optional: set
+ database for a minimal single-node deployment. Cloudflare R2 is optional: set
 the mode to `S3` and provide the endpoint, bucket, region, access key, and
-secret key through protected deployment secrets. `FLOWY_ENCRYPTION_KEY` and
-`FLOWY_JWT_SECRET` are node-local. Singleton moves are fresh deployments and
-archive the prior local PGlite directory; backups stop the running Flowy
-container before copying its PGlite state.
+ secret key through protected deployment secrets. `FLOWY_ENCRYPTION_KEY` and
+ `FLOWY_JWT_SECRET` are node-local. Singleton moves are fresh deployments and
+ archive the prior local PGlite directory; backups stop the running Flowy
+ container before copying its PGlite state. Backup staging is kept under
+ `/opt/backups/llm-hub-lite/stage` by default rather than `/run`, because VPS
+ `/run` is commonly a small tmpfs that cannot hold the PGlite directory.
 
 Cursorapi packages `cursor-api-proxy` and a checksum-pinned Cursor Agent into the repository-owned `ghcr.io/uptonking/cursor-api-proxy` image because the upstream project does not publish a deployable image. It is an ephemeral singleton on `worker-1` by default, with no database, persistent volume, host port, or Docker socket. Its read-only non-root container is capped at `512m` memory, `0.50` CPU, and 128 processes. Moving it to another follower is a fresh deployment; no local application data is copied. `CURSORAPI_CURSOR_API_KEY` maps to upstream `CURSOR_API_KEY` and must be entered manually from the Cursor account credential. `CURSORAPI_BRIDGE_API_KEY` protects all public `/v1/*` requests and should be generated with `openssl rand -hex 32` . The public route exposes only `/v1/*` and the unauthenticated `/healthz` ; the upstream dashboard and `/api/*` control endpoints remain private. Clients use `https://cursorapi.aichorage.de/v1` as their base URL and `CURSORAPI_BRIDGE_API_KEY` as the API key. Cursorapi images are never built by GitHub Actions, Woodpecker, bootstrap, or
 the normal deployment controller. To publish a reviewed upstream revision
