@@ -24,8 +24,9 @@ steps:
       - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite
       - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite
       - /etc/llm-hub-lite:/etc/llm-hub-lite
-      - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
+      - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
+      - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro
       - /usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro
       - /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro

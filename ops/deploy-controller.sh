@@ -39,6 +39,21 @@ source "$config_file"
 # may set these to zero to avoid waiting after a mocked/transient failure.
 : "${DEPLOY_FETCH_RETRY_DELAY_SECONDS:=5}"
 : "${DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS:=5}"
+# These switches are intentionally test-only controls consumed by the
+# candidate platformctl process. They default to strict production behavior
+# and are forwarded explicitly so a child release cannot accidentally inherit
+# a partially configured test environment.
+: "${PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION:=0}"
+: "${PLATFORM_TEST_MODE:=0}"
+: "${PLATFORM_TEST_SKIP_SYNC_VALIDATION:=0}"
+: "${PLATFORM_TEST_SKIP_RENDER:=0}"
+: "${PLATFORM_TEST_SKIP_COMPOSE_INSPECTION:=0}"
+: "${PLATFORM_TEST_FAST_VALIDATE:=0}"
+: "${PLATFORM_TEST_SKIP_CLUSTER_VALIDATION:=0}"
+: "${PLATFORM_TEST_ONLY_DESCRIPTOR:=}"
+# Test fixtures that fully mock platformctl may skip the candidate validation
+# tree; production deployments always validate releases before mutation.
+: "${DEPLOY_TEST_SKIP_RELEASE_VALIDATION:=0}"
 
 env_value() {
 	local key="$1" file="${2:-$APP_ENV}" line value=''
@@ -54,6 +69,15 @@ env_value() {
 }
 [[ "$DEPLOY_FETCH_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]] || die 'DEPLOY_FETCH_RETRY_DELAY_SECONDS must be a non-negative integer'
 [[ "$DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS" =~ ^[0-9]+$ ]] || die 'DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS must be a non-negative integer'
+[[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 0 || "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 1 ]] || die 'DEPLOY_TEST_SKIP_RELEASE_VALIDATION must be 0 or 1'
+[[ "$PLATFORM_TEST_MODE" == 0 || "$PLATFORM_TEST_MODE" == 1 ]] || die 'PLATFORM_TEST_MODE must be 0 or 1'
+[[ "$PLATFORM_TEST_MODE" == 1 || ("$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 0 && "$PLATFORM_TEST_SKIP_SYNC_VALIDATION" == 0 && "$PLATFORM_TEST_SKIP_RENDER" == 0 && "$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" == 0 && "$PLATFORM_TEST_FAST_VALIDATE" == 0 && -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" && "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 0) ]] || die 'test-only deployment controls require PLATFORM_TEST_MODE=1'
+[[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 0 || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'DEPLOY_TEST_SKIP_RELEASE_VALIDATION requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1'
+[[ "$PLATFORM_TEST_FAST_VALIDATE" == 0 || "$PLATFORM_TEST_FAST_VALIDATE" == 1 ]] || die 'PLATFORM_TEST_FAST_VALIDATE must be 0 or 1'
+[[ -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" || "$PLATFORM_TEST_ONLY_DESCRIPTOR" =~ ^[a-z][a-z0-9-]*$ ]] || die 'PLATFORM_TEST_ONLY_DESCRIPTOR must be a valid application ID'
+[[ "$PLATFORM_TEST_FAST_VALIDATE" == 0 || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'PLATFORM_TEST_FAST_VALIDATE requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1'
+[[ "$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" == 0 || ("$PLATFORM_TEST_MODE" == 1 && "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 && "$PLATFORM_TEST_FAST_VALIDATE" == 1) ]] || die 'PLATFORM_TEST_SKIP_CLUSTER_VALIDATION requires fast explicit test mode'
+[[ -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'PLATFORM_TEST_ONLY_DESCRIPTOR requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1'
 policy_value() { env_value "$1" "$CONTROL_ROOT/current/config/cluster/policy.env"; }
 node_value() { env_value "$1" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; }
 csv_contains() {
@@ -64,54 +88,48 @@ runtime_node_role() {
 	[[ "$(node_value NODE_ID)" == "$(policy_value LEADER_NODE_ID)" ]] && printf 'leader\n' || printf 'follower\n'
 }
 foundation_enabled() {
-	local foundations disabled
-	[[ "$1" == caddy ]] && return 0
-	if [[ "$(runtime_node_role)" == leader ]]; then
-		foundations="$(policy_value FOUNDATION_LEADER)"
-	else
-		foundations="$(policy_value FOUNDATION_FOLLOWER)"
-	fi
-	disabled="$(policy_value DISABLED_FOUNDATION)"
-	csv_contains "$foundations" "$1" && ! csv_contains "$disabled" "$1"
+	local component="$1" manifest roles policy_rel enabled mandatory
+	manifest="$CONTROL_ROOT/current/compose/foundation/manifests/$component.env"
+	[[ -f "$manifest" ]] || return 1
+	roles="$(env_value ROLES "$manifest")"
+	csv_contains "$roles" "$(runtime_node_role)" || return 1
+	policy_rel="$(env_value POLICY_FILE "$manifest")"
+	enabled="$(env_value ENABLED "$CONTROL_ROOT/current/config/$policy_rel")"
+	mandatory="$(env_value MANDATORY "$manifest")"
+	[[ "$mandatory" != true || "$enabled" == true ]] || die "mandatory foundation service is disabled: $component"
+	[[ "$enabled" == true ]]
 }
 app_enabled_for_image() {
-	local id="$1" d placement target_key target
+	local id="$1" d policy_rel nodes
 	[[ "$(runtime_node_role)" == follower ]] || return 1
 	d="$CONTROL_ROOT/current/apps/$id"
 	[[ -f "$d/manifest.env" ]] || return 1
-	[[ "$(sed -n 's/^ENABLED=//p' "$(sed -n 's/^POLICY_FILE=//p' "$d/manifest.env" | tail -n1 | sed "s#^#$CONTROL_ROOT/current/config/#")" | tail -n1)" != false ]] || return 1
-	placement="$(sed -n 's/^PLACEMENT=//p' "$d/manifest.env" | tail -n1)"
-	if [[ "$placement" == single-follower ]]; then
-		target_key="$(sed -n 's/^TARGET_NODE_KEY=//p' "$d/manifest.env" | tail -n1)"
-		target="$(sed -n "s/^$target_key=//p" "$(sed -n 's/^POLICY_FILE=//p' "$d/manifest.env" | tail -n1 | sed "s#^#$CONTROL_ROOT/current/config/#")" | tail -n1)"
-		[[ "$target" == "$(node_value NODE_ID)" ]]
-	fi
+	policy_rel="$(env_value POLICY_FILE "$d/manifest.env")"
+	[[ "$(env_value ENABLED "$CONTROL_ROOT/current/config/$policy_rel")" == true ]] || return 1
+	nodes="$(env_value NODES "$CONTROL_ROOT/current/config/$policy_rel")"
+	csv_contains "$nodes" "$(node_value NODE_ID)"
 }
 image_required() {
-	local key="$1" descriptor image_key app_id
-	case "$key" in
-	CADDY_IMAGE) return 0 ;;
-	WOODPECKER_SERVER_IMAGE) foundation_enabled woodpecker-controller ;;
-	WOODPECKER_AGENT_IMAGE) foundation_enabled woodpecker-worker || foundation_enabled woodpecker-deployer ;;
-	BESZEL_HUB_IMAGE) foundation_enabled beszel-controller ;;
-	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) foundation_enabled beszel-worker ;;
-	OBSERVER_IMAGE) foundation_enabled observer-controller ;;
-	OBSERVER_HEALTH_PROBE_IMAGE) foundation_enabled observer-controller || foundation_enabled observer-collector ;;
-	OBSERVER_LOG_PROXY_IMAGE | OBSERVER_LOG_SHIPPER_IMAGE) foundation_enabled observer-collector ;;
-	NEW_API_IMAGE) app_enabled_for_image newapi ;;
-	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) app_enabled_for_image librechat ;;
-	*)
-		while IFS= read -r descriptor; do
-			while IFS= read -r image_key; do
-				[[ "$image_key" == "$key" ]] || continue
-				app_id="$(sed -n 's/^APP_ID=//p' "$descriptor" | tail -n1)"
-				app_enabled_for_image "$app_id"
-				return
-			done < <(sed -n 's/^IMAGE_KEYS=//p' "$descriptor" | tail -n1 | tr ' ' '\n')
-		done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
-		return 1
-		;;
-	esac
+	local key="$1" descriptor image_key app_id manifest component matched=0
+	for manifest in "$CONTROL_ROOT"/current/compose/foundation/manifests/*.env; do
+		[[ -f "$manifest" ]] || continue
+		component="$(env_value COMPONENT_ID "$manifest")"
+		for image_key in $(env_value IMAGE_KEYS "$manifest"); do
+			[[ "$image_key" == "$key" ]] || continue
+			matched=1
+			foundation_enabled "$component" && return 0
+		done
+	done
+	while IFS= read -r descriptor; do
+		while IFS= read -r image_key; do
+			[[ "$image_key" == "$key" ]] || continue
+			matched=1
+			app_id="$(env_value APP_ID "$descriptor")"
+			app_enabled_for_image "$app_id" && return 0
+		done < <(env_value IMAGE_KEYS "$descriptor" | tr ' ' '\n')
+	done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+	((matched == 0)) && die "image key is not declared by a manifest: $key"
+	return 1
 }
 
 git_auth_helper="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/git-auth.sh"
@@ -170,7 +188,7 @@ sync_node_config() {
 	mv -f -- "$tmp" "$destination"
 }
 
-mkdir -p "$APP_ROOT/shared/logs" "$RELEASES" "$(dirname "$PLATFORM_LOCK_FILE")"
+mkdir -p "$APP_ROOT/shared/logs" "$APP_ROOT/shared/runtime" "$RELEASES" "$(dirname "$PLATFORM_LOCK_FILE")"
 # The normal controller keeps an append-only deployment log. Test harnesses
 # can set DEPLOY_LOG=/dev/null (or DEPLOY_LOG_TEE=0) to avoid creating a
 # process-substitution tee for every mocked deployment; this also makes
@@ -230,7 +248,7 @@ verify_app_scope() {
 	new_sha="$(basename "$new_release")"
 	while IFS= read -r path; do
 		case "$path" in
-		compose/foundation/** | ops/images.foundation.prod.env | ops/foundation/** | ops/systemd/** | ops/*.sh | ops/deploy-runner/** | ops/tests/**)
+		compose/foundation/** | config/Caddyfile | config/foundation-routes.d/** | config/cluster/foundation/** | ops/images.foundation.prod.env | ops/foundation/** | ops/systemd/** | ops/*.sh | ops/deploy-runner/** | ops/tests/**)
 			[[ "$mode" == foundation || "$mode" == cluster-reconcile || "$mode" == rollback ]] || {
 				scope_failure "$old_sha" "$new_sha" "$mode"
 				die "foundation/control-plane change requires the reviewed foundation workflow: $path"
@@ -248,25 +266,21 @@ verify_app_scope() {
 		esac
 		case "$path" in
 		config/cluster/policy.env | config/cluster/nodes/*)
-			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || {
-				scope_failure "$old_sha" "$new_sha" "$mode"
-				die "cluster policy or inventory change requires the cluster-reconcile workflow: $path"
-			}
+			scope_failure "$old_sha" "$new_sha" "$mode"
+			die "cluster policy or inventory change requires a consumer or cluster reconciliation workflow: $path"
 			;;
 		config/cluster/apps/*)
-			[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || {
-				scope_failure "$old_sha" "$new_sha" "$mode"
-				die "cluster app policy requires its dedicated reconciliation workflow: $path"
-			}
+			scope_failure "$old_sha" "$new_sha" "$mode"
+			die "cluster app policy requires its consumer reconciliation workflow: $path"
 			;;
 		config/cluster/*)
 			scope_failure "$old_sha" "$new_sha" "$mode"
 			die "unsupported cluster configuration path in application deployment: $path"
 			;;
 		esac
-		if [[ "$path" == ops/images.apps.prod.env && "$mode" != app-upgrade && "$mode" != singleton-stage && "$mode" != singleton-switch && "$mode" != singleton-stop ]]; then
+		if [[ "$path" == ops/images.apps.prod.env && "$mode" != app-upgrade ]]; then
 			scope_failure "$old_sha" "$new_sha" "$mode"
-			die "application image manifest changes require the app-upgrade or singleton workflow: $path"
+			die "application image manifest changes require the reviewed consumer workflow: $path"
 		fi
 	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
 }
@@ -286,7 +300,7 @@ verify_cluster_scope() {
 				scope_failure "$old_sha" "$new_sha" cluster-reconcile
 				die "cluster reconciliation contains an undeclared application policy: $path"
 			fi
-			if [[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower && "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" != false ]]; then
+			if [[ "$(sed -n 's/^UPSTREAM_MODE=//p' "$manifest" | tail -n1)" == singleton && "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" == true ]]; then
 				scope_failure "$old_sha" "$new_sha" cluster-reconcile
 				die "cluster reconciliation cannot own an enabled singleton policy: $path; use its dedicated stage/switch/stop workflow"
 			fi
@@ -300,21 +314,34 @@ verify_cluster_scope() {
 	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$old_sha" "$new_sha")
 }
 
-verify_singleton_scope() {
-	local old_release="$1" new_release="$2" mode="$3" app="${SINGLETON_APP_ID:-}" path
-	[[ "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] || return 0
-	[[ -n "$app" ]] || die 'singleton deployment is missing SINGLETON_APP_ID'
-	[[ -f "$new_release/apps/$app/manifest.env" ]] || die "singleton application is not present in target release: $app"
-	# There is no previous release to diff during the first deployment. The
-	# target manifest check above is sufficient; every file is new by definition.
+verify_woodpecker_self_disable() {
+	local old_release="$1" new_release="$2" old_policy new_policy old_enabled new_enabled
+	[[ "$(runtime_node_role)" == leader && -n "$old_release" ]] || return 0
+	old_policy="$old_release/config/cluster/foundation/woodpecker.policy"
+	new_policy="$new_release/config/cluster/foundation/woodpecker.policy"
+	[[ -f "$old_policy" && -f "$new_policy" ]] || return 0
+	old_enabled="$(env_value ENABLED "$old_policy")"
+	new_enabled="$(env_value ENABLED "$new_policy")"
+	if [[ "$old_enabled" == true && "$new_enabled" == false && "${ALLOW_WOODPECKER_SELF_DISABLE:-0}" != 1 ]]; then
+		die 'refusing to disable Woodpecker from its own deployment control plane; run an explicit recovery deployment with ALLOW_WOODPECKER_SELF_DISABLE=1'
+	fi
+}
+
+verify_consumer_scope() {
+	local old_release="$1" new_release="$2" mode="$3" app="${CONSUMER_APP_ID:-}" path manifest
+	[[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop ]] || return 0
+	[[ "$app" =~ ^[a-z][a-z0-9-]*$ ]] || die 'consumer deployment is missing a valid CONSUMER_APP_ID'
+	manifest="$new_release/apps/$app/manifest.env"
+	[[ -f "$manifest" && "$(env_value APP_ID "$manifest")" == "$app" ]] || die "consumer application is not present in target release: $app"
+	[[ "$(env_value PLACEMENT "$manifest")" == consumer ]] || die "application is not a consumer: $app"
 	[[ -n "$old_release" ]] || return 0
 	while IFS= read -r path; do
 		case "$path" in
-		apps/"$app"/** | config/cluster/apps/"$app".policy | ops/images.apps.prod.env | .env.prod.example | .env.dev.example | \
-			.woodpecker/singleton-stage-"$app".yml | .woodpecker/singleton-switch-"$app".yml | .woodpecker/singleton-stop-"$app"-*.yml) ;;
+		apps/** | config/cluster/apps/*.policy | config/cluster/nodes/*.env | config/cluster/overrides/** | config/cluster/policy.env | \
+			config/routes.d/** | .woodpecker/** | ops/images.apps.prod.env | README.md | AGENTS.md | LICENSE.md | .env.prod.example | .env.dev.example) ;;
 		*)
-			log "singleton scope rejected: app=$app mode=$mode path=$path"
-			die "singleton workflow for $app cannot apply unrelated path: $path"
+			scope_failure "$(basename "$old_release")" "$(basename "$new_release")" "$mode"
+			die "consumer workflow for $app contains a control-plane or foundation change: $path"
 			;;
 		esac
 	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$(basename "$old_release")" "$(basename "$new_release")")
@@ -329,18 +356,17 @@ singleton_previous_target() {
 	singleton_release_target "$release" "$app"
 }
 singleton_release_target() {
-	local release="$1" app="$2" manifest policy_rel target_key
+	local release="$1" app="$2" manifest policy_rel
 	[[ -n "$release" && -f "$release/apps/$app/manifest.env" ]] || return 0
 	manifest="$release/apps/$app/manifest.env"
 	policy_rel="$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)"
-	target_key="$(sed -n 's/^TARGET_NODE_KEY=//p' "$manifest" | tail -n1)"
-	sed -n "s/^$target_key=//p" "$release/config/$policy_rel" 2>/dev/null | tail -n1
+	sed -n 's/^NODES=//p' "$release/config/$policy_rel" 2>/dev/null | tail -n1
 }
 record_singleton_transitions() {
 	local old_release="$1" new_release="$2" manifest app old_target new_target state_file tmp
 	[[ -n "$old_release" && -d "$new_release/apps" ]] || return 0
 	while IFS= read -r manifest; do
-		[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower ]] || continue
+		[[ "$(sed -n 's/^UPSTREAM_MODE=//p' "$manifest" | tail -n1)" == singleton ]] || continue
 		app="$(basename "$(dirname "$manifest")")"
 		old_target="$(singleton_release_target "$old_release" "$app")"
 		new_target="$(singleton_release_target "$new_release" "$app")"
@@ -353,20 +379,46 @@ record_singleton_transitions() {
 		mv -f -- "$tmp" "$state_file"
 	done < <(find "$new_release/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 }
+remove_compose_project_containers() {
+	local project="$1" description="$2" ids id
+	if ! ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null)"; then
+		log "ERROR: unable to enumerate containers for $description: $project" >&2
+		return 1
+	fi
+	[[ -n "$ids" ]] || return 0
+	log "stopping $description project $project"
+	while IFS= read -r id; do
+		[[ -n "$id" ]] || continue
+		if ! docker rm -f "$id" >/dev/null 2>&1; then
+			log "ERROR: unable to stop $description project: $project" >&2
+			return 1
+		fi
+	done <<<"$ids"
+}
+
 stop_removed_projects() {
-	local old_release="$1" new_release="$2" manifest app project id
+	local old_release="$1" new_release="$2" manifest app project
 	[[ -n "$old_release" && -d "$old_release/apps" ]] || return 0
 	while IFS= read -r manifest; do
 		app="$(basename "$(dirname "$manifest")")"
 		[[ -f "$new_release/apps/$app/manifest.env" ]] && continue
+		[[ "$app" =~ ^[a-z][a-z0-9-]*$ && "$(env_value APP_ID "$manifest")" == "$app" ]] || die "invalid removed application manifest: $manifest"
 		project="$(sed -n 's/^COMPOSE_PROJECT=//p' "$manifest" | tail -n1)"
-		[[ "$project" =~ ^app-[a-z0-9-]+$ ]] || continue
-		while IFS= read -r id; do
-			[[ -n "$id" ]] || continue
-			log "stopping removed application project $project"
-			docker rm -f "$id" >/dev/null 2>&1 || die "unable to stop removed application project: $project"
-		done < <(docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null || true)
+		[[ "$project" == "app-$app" ]] || die "invalid Compose project in removed application manifest: $manifest"
+		remove_compose_project_containers "$project" 'removed application' || return 1
 	done < <(find "$old_release/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+}
+
+stop_removed_foundation_projects() {
+	local old_release="$1" new_release="$2" manifest component project
+	[[ -n "$old_release" && -d "$old_release/compose/foundation/manifests" ]] || return 0
+	while IFS= read -r manifest; do
+		component="$(basename "$manifest" .env)"
+		[[ -f "$new_release/compose/foundation/manifests/$component.env" ]] && continue
+		[[ "$component" =~ ^[a-z][a-z0-9-]*$ && "$(env_value COMPONENT_ID "$manifest")" == "$component" ]] || die "invalid removed foundation manifest: $manifest"
+		project="foundation-$component"
+		remove_compose_project_containers "$project" 'removed foundation component' || return 1
+	done < <(find "$old_release/compose/foundation/manifests" -mindepth 1 -maxdepth 1 -type f -name '*.env' -print | sort)
 }
 
 prepare_release() {
@@ -375,9 +427,31 @@ prepare_release() {
 	printf '%s\n' "$release"
 }
 
+validate_application_image_locks() {
+	local release="$1" manifest app lock key image lock_image line lock_key
+	while IFS= read -r manifest; do
+		[[ -f "$manifest" ]] || continue
+		app="$(env_value APP_ID "$manifest")"
+		lock="$release/apps/$app/images.lock.env"
+		[[ -f "$lock" ]] || die "application image lock is missing: $app"
+		while IFS= read -r key; do
+			[[ -n "$key" ]] || continue
+			image="$(env_value "$key" "$release/ops/images.apps.prod.env")"
+			lock_image="$(env_value "$key" "$lock")"
+			[[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] || die "canonical application image is not digest-pinned: $app/$key"
+			[[ "$lock_image" == "$image" ]] || die "application image lock differs from the canonical manifest: $app/$key"
+		done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			case "$line" in '' | \#*) continue ;; *=*) lock_key="${line%%=*}" ;; *) die "invalid application image lock entry: $lock" ;; esac
+			csv_contains "$(env_value IMAGE_KEYS "$manifest" | tr ' ' ',')" "$lock_key" || die "undeclared image key in application lock: $app/$lock_key"
+		done <"$lock"
+	done < <(find "$release/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+}
+
 validate_release() {
 	local release="$1" runtime foundation_validate control_validate image_apps image_foundation
 	[[ -f "$release/ops/platformctl.sh" && -d "$release/apps" && -d "$release/config" ]] || die 'release is missing platform files'
+	validate_application_image_locks "$release"
 	install -d -m 700 "$APP_ROOT/shared/runtime"
 	runtime="$(mktemp -d "$APP_ROOT/shared/runtime/validate.XXXXXX")"
 	foundation_validate="$(mktemp -d "$APP_ROOT/shared/runtime/foundation-validate.XXXXXX")"
@@ -392,19 +466,28 @@ validate_release() {
 	install -d -m 700 "$control_validate/config/cluster/nodes"
 	cp -a "$release/config/cluster/." "$control_validate/config/cluster/"
 	sync_node_config "$release" "$control_validate/node.env"
-	install -m 600 "$release/compose/foundation/caddy.yml" "$foundation_validate/caddy.yml"
-	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do
-		install -m 600 "$release/compose/foundation/$file" "$foundation_validate/$file"
-	done
+	copy_foundation_payload "$release" "$foundation_validate"
 	if ! PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$control_validate" APPS_ROOT="$release/apps" RUNTIME_ROOT="$runtime" \
 		APP_ENV="$APP_ENV" APP_IMAGE_ENV="$image_apps" FOUNDATION_IMAGE_ENV="$image_foundation" \
 		FOUNDATION_ROOT="$foundation_validate" FOUNDATION_ENV_ROOT="$foundation_validate/env" NODE_CONFIG_FILE="$control_validate/node.env" CLUSTER_POLICY_FILE="$control_validate/config/cluster/policy.env" \
-		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
+		PLATFORM_TEST_MODE="$PLATFORM_TEST_MODE" PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" PLATFORM_TEST_SKIP_SYNC_VALIDATION="$PLATFORM_TEST_SKIP_SYNC_VALIDATION" PLATFORM_TEST_SKIP_RENDER="$PLATFORM_TEST_SKIP_RENDER" PLATFORM_TEST_SKIP_COMPOSE_INSPECTION="$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" PLATFORM_TEST_FAST_VALIDATE="$PLATFORM_TEST_FAST_VALIDATE" PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR" PLATFORM_TEST_SKIP_CLUSTER_VALIDATION="$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" \
+		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" PLATFORM_LOCK_HELD=1 \
 		"$release/ops/platformctl.sh" validate --check; then
 		rm -rf -- "$runtime" "$foundation_validate" "$control_validate"
 		return 1
 	fi
 	rm -rf -- "$runtime" "$foundation_validate" "$control_validate"
+}
+
+copy_foundation_payload() {
+	local release="$1" destination="$2" file mode
+	install -d -m 700 "$destination"
+	for file in "$release"/compose/foundation/*; do
+		[[ -f "$file" ]] || continue
+		mode=600
+		[[ "$file" == *.sh ]] && mode=700
+		install -m "$mode" "$file" "$destination/$(basename "$file")"
+	done
 }
 
 pull_image() {
@@ -427,11 +510,15 @@ backup() {
 }
 
 install_foundation_files() {
-	local release="$1"
-	install -d -m 700 "$FOUNDATION_ROOT/env"
-	install -m 600 "$release/compose/foundation/caddy.yml" "$FOUNDATION_ROOT/caddy.yml"
-	for file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do
-		install -m 600 "$release/compose/foundation/$file" "$FOUNDATION_ROOT/$file"
+	local release="$1" file
+	install -d -m 700 "$FOUNDATION_ROOT/env" "$FOUNDATION_ROOT/manifests"
+	find "$FOUNDATION_ROOT" -mindepth 1 -maxdepth 1 -type f -delete
+	rm -rf -- "$FOUNDATION_ROOT/manifests"
+	install -d -m 700 "$FOUNDATION_ROOT/manifests"
+	copy_foundation_payload "$release" "$FOUNDATION_ROOT"
+	for file in "$release"/compose/foundation/manifests/*.env; do
+		[[ -f "$file" ]] || continue
+		install -m 600 "$file" "$FOUNDATION_ROOT/manifests/$(basename "$file")"
 	done
 }
 
@@ -451,11 +538,33 @@ refresh_descriptor_registry() {
 	done
 }
 
+install_application_image_lock() {
+	local release="$1" app="$2" manifest lock key image tmp next
+	manifest="$release/apps/$app/manifest.env"
+	lock="$release/apps/$app/images.lock.env"
+	[[ -f "$manifest" && -f "$lock" ]] || die "missing application manifest or image lock: $app"
+	install -d -m 700 "$(dirname "$APP_IMAGE_ENV")"
+	tmp="$(mktemp "${APP_IMAGE_ENV}.tmp.XXXXXX")"
+	[[ -f "$APP_IMAGE_ENV" ]] && cp "$APP_IMAGE_ENV" "$tmp"
+	while IFS= read -r key; do
+		[[ -n "$key" ]] || continue
+		image="$(env_value "$key" "$lock")"
+		[[ -n "$image" ]] || die "application image lock is missing $key: $app"
+		next="$(mktemp "${APP_IMAGE_ENV}.key.XXXXXX")"
+		sed "/^${key}=/d" "$tmp" >"$next"
+		printf '%s=%s\n' "$key" "$image" >>"$next"
+		mv -f -- "$next" "$tmp"
+	done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$APP_IMAGE_ENV"
+}
+
 prefetch_images() {
 	local mode="$1" file key image should_pull
 	local -a files=()
 	case "$mode" in
-	app | app-upgrade | singleton-stage | singleton-switch | singleton-stop) files=("$APP_IMAGE_ENV") ;;
+	app | app-upgrade | consumer-publish | consumer-stop) files=("$APP_IMAGE_ENV") ;;
+	consumer-stage) files=("$CONTROL_ROOT/current/apps/${CONSUMER_APP_ID:?missing CONSUMER_APP_ID}/images.lock.env") ;;
 	foundation) files=("$FOUNDATION_IMAGE_ENV") ;;
 	cluster-reconcile | rollback) files=("$APP_IMAGE_ENV" "$FOUNDATION_IMAGE_ENV") ;;
 	*) die "unknown image prefetch mode: $mode" ;;
@@ -486,7 +595,15 @@ reconcile() {
 		NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" \
 		CLUSTER_POLICY_FILE="${CLUSTER_POLICY_FILE:-$CONTROL_ROOT/current/config/cluster/policy.env}" \
 		PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}" \
+		PLATFORM_ONLY_ROUTE_APP_ID="${PLATFORM_ONLY_ROUTE_APP_ID:-}" \
+		PLATFORM_PRESERVE_CONSUMER_ROUTES="${PLATFORM_PRESERVE_CONSUMER_ROUTES:-0}" \
 		PLATFORM_RECONCILE_DISABLED_SINGLETONS="${PLATFORM_RECONCILE_DISABLED_SINGLETONS:-0}" \
+		PLATFORM_TEST_MODE="$PLATFORM_TEST_MODE" \
+		PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" \
+		PLATFORM_TEST_SKIP_SYNC_VALIDATION="$PLATFORM_TEST_SKIP_SYNC_VALIDATION" \
+		PLATFORM_TEST_SKIP_RENDER="$PLATFORM_TEST_SKIP_RENDER" \
+		PLATFORM_TEST_SKIP_COMPOSE_INSPECTION="$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" \
+		PLATFORM_TEST_FAST_VALIDATE="$PLATFORM_TEST_FAST_VALIDATE" PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR" PLATFORM_TEST_SKIP_CLUSTER_VALIDATION="$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" \
 		PLATFORM_RECREATE_FOUNDATION="${DEPLOY_RECREATE_FOUNDATION:-0}" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
 		PLATFORM_LOCK_HELD=1 \
@@ -494,16 +611,18 @@ reconcile() {
 }
 
 smoke_apps() {
-	local descriptor id placement policy_file
+	local descriptor id mode policy_file nodes
 	for descriptor in "$CONTROL_ROOT/current"/apps/*; do
 		[[ -f "$descriptor/manifest.env" ]] || continue
 		id="$(basename "$descriptor")"
-		placement="$(sed -n 's/^PLACEMENT=//p' "$descriptor/manifest.env" | tail -n1)"
-		[[ "$placement" == follower || "$placement" == single-follower ]] || continue
+		[[ "$(sed -n 's/^PLACEMENT=//p' "$descriptor/manifest.env" | tail -n1)" == consumer ]] || continue
+		mode="$(sed -n 's/^UPSTREAM_MODE=//p' "$descriptor/manifest.env" | tail -n1)"
 		[[ -z "${PLATFORM_ONLY_APP_ID:-}" || "$id" == "$PLATFORM_ONLY_APP_ID" ]] || continue
-		[[ "${DEPLOY_SKIP_SINGLETONS:-0}" != 1 || "$placement" != single-follower ]] || continue
+		[[ "${DEPLOY_SKIP_SINGLETONS:-0}" != 1 || "$mode" != singleton ]] || continue
 		policy_file="$(sed -n 's/^POLICY_FILE=//p' "$descriptor/manifest.env" | tail -n1)"
-		[[ "$(sed -n 's/^ENABLED=//p' "$CONTROL_ROOT/current/config/$policy_file" | tail -n1)" != false ]] || continue
+		[[ "$(sed -n 's/^ENABLED=//p' "$CONTROL_ROOT/current/config/$policy_file" | tail -n1)" == true ]] || continue
+		nodes="$(sed -n 's/^NODES=//p' "$CONTROL_ROOT/current/config/$policy_file" | tail -n1)"
+		csv_contains "$nodes" "$(node_value NODE_ID)" || continue
 		APP_ENV="$APP_ENV" PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" PLATFORM_LOCK_HELD=1 \
 			"$PLATFORMCTL_SCRIPT" smoke "app:$descriptor" || die "smoke failed: $id"
 	done
@@ -533,7 +652,7 @@ cleanup() {
 }
 
 apply() {
-	local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0 previous_singleton_target singleton_prepare_failed=0
+	local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0 cleanup_failed=0 previous_singleton_target singleton_prepare_failed=0
 	# Foundation upgrades install shared control logic but never start, stop, or
 	# publish singleton consumers. Their dedicated workflow owns that change.
 	[[ "$mode" == foundation ]] && DEPLOY_SKIP_SINGLETONS=1
@@ -542,6 +661,17 @@ apply() {
 	if [[ "$mode" == cluster-reconcile ]]; then
 		DEPLOY_SKIP_SINGLETONS=1
 		PLATFORM_RECONCILE_DISABLED_SINGLETONS=1
+	fi
+	if [[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop ]]; then
+		[[ "${CONSUMER_APP_ID:-}" =~ ^[a-z][a-z0-9-]*$ ]] || die 'consumer workflow requires CONSUMER_APP_ID'
+		PLATFORM_ONLY_APP_ID="$CONSUMER_APP_ID"
+		if [[ "$mode" == consumer-stage ]]; then
+			DEPLOY_SKIP_SINGLETONS=0
+			PLATFORM_ONLY_ROUTE_APP_ID="$CONSUMER_APP_ID"
+		else
+			DEPLOY_SKIP_SINGLETONS=1
+			PLATFORM_PRESERVE_CONSUMER_ROUTES=1
+		fi
 	fi
 	sha_valid "$sha"
 	exec 9>"$PLATFORM_LOCK_FILE"
@@ -558,22 +688,38 @@ apply() {
 	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
 	verify_fast_forward "$old_current" "$sha" "$mode"
 	[[ "$mode" == cluster-reconcile ]] && verify_cluster_scope "$old_current" "$release"
-	validate_release "$release"
+	if [[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 1 ]]; then
+		log 'test mode: skipping candidate release validation (platformctl is mocked)'
+	else
+		validate_release "$release"
+	fi
+	verify_woodpecker_self_disable "$old_current" "$release"
 	old_previous="$(readlink "$PREVIOUS" 2>/dev/null || true)"
 	old_app_previous="$(readlink "$APP_PREVIOUS" 2>/dev/null || true)"
-	[[ "$mode" == app || "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]] && verify_app_scope "$old_current" "$release" "$mode"
-	verify_singleton_scope "$old_current" "$release" "$mode"
+	[[ "$mode" == app || "$mode" == app-upgrade ]] && verify_app_scope "$old_current" "$release" "$mode"
+	verify_consumer_scope "$old_current" "$release" "$mode"
 	record_singleton_transitions "$old_current" "$release"
-	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
-		previous_singleton_target="$(singleton_previous_target "$old_current" "$SINGLETON_APP_ID")"
+	if [[ "$mode" == consumer-stage && -n "${CONSUMER_APP_ID:-}" && "$(env_value UPSTREAM_MODE "$release/apps/$CONSUMER_APP_ID/manifest.env")" == singleton ]]; then
+		previous_singleton_target="$(singleton_previous_target "$old_current" "$CONSUMER_APP_ID")"
 	fi
 	backup "pre-$mode"
-	stop_removed_projects "$old_current" "$release"
+	if [[ "$mode" != consumer-stage && "$mode" != consumer-publish && "$mode" != consumer-stop ]]; then
+		if ! stop_removed_projects "$old_current" "$release"; then
+			cleanup_failed=1
+		elif [[ "$mode" == foundation || "$mode" == rollback ]] && ! stop_removed_foundation_projects "$old_current" "$release"; then
+			cleanup_failed=1
+		fi
+		if ((cleanup_failed == 1)); then
+			log 'removed-project cleanup failed; reconciling the current release'
+			DEPLOY_SYNC_SCOPE=all reconcile || true
+			return 1
+		fi
+	fi
 	tx="$(mktemp -d "$APP_ROOT/shared/runtime/transaction.XXXXXX")"
 	cp -f "$APP_IMAGE_ENV" "$tx/images.apps" 2>/dev/null || true
 	cp -f "$FOUNDATION_IMAGE_ENV" "$tx/images.foundation" 2>/dev/null || true
 	cp -f "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" "$tx/node.env" 2>/dev/null || true
-	for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do cp -f "$FOUNDATION_ROOT/$file" "$tx/$file" 2>/dev/null || true; done
+	[[ -d "$FOUNDATION_ROOT" ]] && cp -a "$FOUNDATION_ROOT" "$tx/foundation"
 	[[ -d "$CONTROL_ROOT/descriptors" ]] && cp -a "$CONTROL_ROOT/descriptors" "$tx/descriptors"
 	if [[ -n "$old_current" ]]; then
 		atomic_link "$old_current" "$PREVIOUS"
@@ -585,11 +731,13 @@ apply() {
 	refresh_descriptor_registry "$release"
 	# A newly introduced singleton needs its candidate image keys before
 	# singleton-prepare evaluates the Compose project to stop/archive it.
-	if [[ "$mode" == app-upgrade || "$mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop ]]; then
+	if [[ "$mode" == app-upgrade ]]; then
 		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
+	elif [[ "$mode" == consumer-stage ]]; then
+		install_application_image_lock "$release" "$CONSUMER_APP_ID"
 	fi
-	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
-		if ! SINGLETON_PREVIOUS_TARGET="$previous_singleton_target" SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-prepare "$SINGLETON_APP_ID"; then
+	if [[ "$mode" == consumer-stage && "$(env_value UPSTREAM_MODE "$release/apps/$CONSUMER_APP_ID/manifest.env")" == singleton ]]; then
+		if ! SINGLETON_PREVIOUS_TARGET="$previous_singleton_target" SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-prepare "$CONSUMER_APP_ID"; then
 			singleton_prepare_failed=1
 		fi
 	fi
@@ -612,8 +760,8 @@ apply() {
 	[[ "$mode" == foundation ]] && sync_scope=foundation
 	[[ "$mode" == cluster-reconcile || "$mode" == rollback ]] && sync_scope=all
 	if ((singleton_prepare_failed == 0)) && prefetch_images "$mode" && DEPLOY_RECREATE_FOUNDATION="$foundation_changed" DEPLOY_SYNC_SCOPE="$sync_scope" reconcile && smoke_apps && {
-		[[ "$mode" != singleton-stage || -z "${SINGLETON_APP_ID:-}" ]] ||
-			SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-origin-smoke "$SINGLETON_APP_ID"
+		[[ "$mode" != consumer-stage ]] ||
+			SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-origin-smoke "$CONSUMER_APP_ID"
 	}; then
 		cleanup
 		rm -rf -- "$tx"
@@ -631,13 +779,8 @@ apply() {
 	if [[ -f "$tx/images.foundation" ]]; then install -m 600 "$tx/images.foundation" "$FOUNDATION_IMAGE_ENV"; fi
 	if [[ -f "$tx/node.env" ]]; then install -m 600 "$tx/node.env" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; else rm -f -- "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"; fi
 	if ((foundation_changed)); then
-		for file in caddy.yml woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do
-			if [[ -f "$tx/$file" ]]; then
-				install -m 600 "$tx/$file" "$FOUNDATION_ROOT/$file"
-			else
-				rm -f -- "$FOUNDATION_ROOT/$file"
-			fi
-		done
+		rm -rf -- "$FOUNDATION_ROOT"
+		if [[ -d "$tx/foundation" ]]; then cp -a "$tx/foundation" "$FOUNDATION_ROOT"; else install -d -m 700 "$FOUNDATION_ROOT"; fi
 	fi
 	rm -rf -- "$CONTROL_ROOT/descriptors"
 	[[ -d "$tx/descriptors" ]] && cp -a "$tx/descriptors" "$CONTROL_ROOT/descriptors"
@@ -647,8 +790,8 @@ apply() {
 		PLATFORM_RECONCILE_DISABLED_SINGLETONS=0
 	fi
 	DEPLOY_RECREATE_FOUNDATION="$foundation_changed" DEPLOY_SYNC_SCOPE=all reconcile || true
-	if [[ "$mode" == singleton-stage && -n "${SINGLETON_APP_ID:-}" ]]; then
-		SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-transition-fail "$SINGLETON_APP_ID" || true
+	if [[ "$mode" == consumer-stage && -n "${CONSUMER_APP_ID:-}" && "$(env_value UPSTREAM_MODE "$release/apps/$CONSUMER_APP_ID/manifest.env")" == singleton ]]; then
+		SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-transition-fail "$CONSUMER_APP_ID" || true
 	fi
 	return 1
 }
@@ -660,24 +803,53 @@ rollback() {
 	apply "$(basename "$target")" rollback
 }
 
+retire_node_release() {
+	local sha="$1" release node descriptor_state old_current
+	sha_valid "$sha"
+	exec 9>"$PLATFORM_LOCK_FILE"
+	flock -w 300 9 || die 'timed out waiting for deployment lock'
+	node="$(node_value NODE_ID)"
+	[[ "$node" != "$(policy_value LEADER_NODE_ID)" ]] || die 'the designated Leader cannot be retired in place'
+	log "node retirement start: node=$node sha=$sha"
+	ensure_mirror
+	fetch_main || die 'unable to fetch repository'
+	verify_target "$sha"
+	release="$(prepare_release "$sha")"
+	descriptor_state="$(env_value NODE_STATE "$release/config/cluster/nodes/$node.env")"
+	[[ "$descriptor_state" == retired ]] || die "target release does not mark this node retired: $node/$descriptor_state"
+	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
+	verify_fast_forward "$old_current" "$sha" node-retire
+	validate_release "$release"
+	backup pre-node-retire
+	if [[ -n "$old_current" ]]; then
+		atomic_link "$old_current" "$PREVIOUS"
+		atomic_link "$old_current" "$APP_PREVIOUS"
+	fi
+	atomic_link "$release" "$CURRENT"
+	atomic_link "$release" "$APP_CURRENT"
+	sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
+	refresh_descriptor_registry "$release"
+	log "node retirement release installed: node=$node sha=$sha; deferred shutdown may proceed"
+}
+
 case "${1:-}" in
 deploy)
 	[[ $# -eq 2 ]] || die 'usage: deploy <sha>'
 	apply "$2" app
 	;;
-singleton-stage)
-	[[ $# -eq 2 && -n "${SINGLETON_APP_ID:-}" ]] || die 'usage: deploy-controller singleton-stage <sha>'
-	DEPLOY_SKIP_SINGLETONS=0 apply "$2" singleton-stage
+consumer-stage)
+	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-stage <sha>'
+	apply "$2" consumer-stage
 	;;
-singleton-switch)
-	[[ $# -eq 2 && -n "${SINGLETON_APP_ID:-}" ]] || die 'usage: deploy-controller singleton-switch <sha>'
-	DEPLOY_SKIP_SINGLETONS=1 apply "$2" singleton-switch
-	PLATFORM_SKIP_SINGLETONS=0 SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-switch "$SINGLETON_APP_ID"
+consumer-publish)
+	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-publish <sha>'
+	apply "$2" consumer-publish
+	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-publish "$CONSUMER_APP_ID"
 	;;
-singleton-stop)
-	[[ $# -eq 2 && -n "${SINGLETON_APP_ID:-}" ]] || die 'usage: deploy-controller singleton-stop <sha>'
-	DEPLOY_SKIP_SINGLETONS=1 apply "$2" singleton-stop
-	SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-stop "$SINGLETON_APP_ID"
+consumer-stop)
+	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-stop <sha>'
+	apply "$2" consumer-stop
+	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-stop "$CONSUMER_APP_ID"
 	;;
 foundation-upgrade)
 	[[ $# -eq 2 ]] || die 'usage: deploy-controller foundation-upgrade <sha>'
@@ -691,7 +863,11 @@ app-upgrade)
 	[[ $# -eq 2 ]] || die 'usage: deploy-controller app-upgrade <sha>'
 	apply "$2" app-upgrade
 	;;
+node-retire)
+	[[ $# -eq 2 ]] || die 'usage: deploy-controller node-retire <sha>'
+	retire_node_release "$2"
+	;;
 rollback) rollback "${2:-previous}" ;;
 status) printf 'current=%s\nprevious=%s\n' "$(readlink "$CURRENT" 2>/dev/null || true)" "$(readlink "$PREVIOUS" 2>/dev/null || true)" ;;
-*) die 'usage: deploy-controller {deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|status} <sha>' ;;
+*) die 'usage: deploy-controller {deploy|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback|status} <sha>' ;;
 esac

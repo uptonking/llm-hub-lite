@@ -14,55 +14,21 @@ umask 077
 REPO_URL="${REPO_URL:-https://github.com/uptonking/llm-hub-lite.git}"
 REPO_SLUG="${REPO_SLUG:-uptonking/llm-hub-lite}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
+BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-first}"
 APP_ROOT="${APP_ROOT:-/opt/apps/llm-hub-lite}"
 PLATFORM_ROOT="${PLATFORM_ROOT:-/opt/platform}"
 SOURCE_ROOT="${SOURCE_ROOT:-$PLATFORM_ROOT/source}"
 CONTROL_ROOT="${CONTROL_ROOT:-$PLATFORM_ROOT/control}"
 FOUNDATION_ROOT="${FOUNDATION_ROOT:-$PLATFORM_ROOT/foundation}"
 CONFIG_ROOT="${CONFIG_ROOT:-/etc/llm-hub-lite}"
+PLATFORM_LOCK_FILE="${PLATFORM_LOCK_FILE:-/run/lock/llm-hub-lite/platform.lock}"
 NODE_ID="${NODE_ID:-}"
 LEADER_PUBLIC_IP="${LEADER_PUBLIC_IP:-}"
 BESZEL_ENROLLMENT_BUNDLE_B64="${BESZEL_ENROLLMENT_BUNDLE_B64:-}"
-NEW_API_SESSION_SECRET="${NEW_API_SESSION_SECRET:-}"
-NEW_API_CRYPTO_SECRET="${NEW_API_CRYPTO_SECRET:-}"
-NEW_API_SQL_DSN="${NEW_API_SQL_DSN:-}"
-AICHOROUTER_SESSION_SECRET="${AICHOROUTER_SESSION_SECRET:-}"
-AICHOROUTER_CRYPTO_SECRET="${AICHOROUTER_CRYPTO_SECRET:-}"
-CPAPI_API_KEY="${CPAPI_API_KEY:-}"
-CPAPI_MANAGEMENT_KEY="${CPAPI_MANAGEMENT_KEY:-}"
 OBSERVER_ROOT_USER_EMAIL="${OBSERVER_ROOT_USER_EMAIL:-}"
 OBSERVER_ROOT_USER_PASSWORD="${OBSERVER_ROOT_USER_PASSWORD:-}"
 OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-}"
 OBSERVER_INGEST_TOKEN="${OBSERVER_INGEST_TOKEN:-}"
-LIBRECHAT_MONGO_URI="${LIBRECHAT_MONGO_URI:-}"
-LIBRECHAT_REDIS_URI="${LIBRECHAT_REDIS_URI:-}"
-LIBRECHAT_JWT_SECRET="${LIBRECHAT_JWT_SECRET:-}"
-LIBRECHAT_JWT_REFRESH_SECRET="${LIBRECHAT_JWT_REFRESH_SECRET:-}"
-LIBRECHAT_ADMIN_PANEL_SESSION_SECRET="${LIBRECHAT_ADMIN_PANEL_SESSION_SECRET:-}"
-LIBRECHAT_AWS_ENDPOINT_URL="${LIBRECHAT_AWS_ENDPOINT_URL:-}"
-LIBRECHAT_AWS_ACCESS_KEY_ID="${LIBRECHAT_AWS_ACCESS_KEY_ID:-}"
-LIBRECHAT_AWS_SECRET_ACCESS_KEY="${LIBRECHAT_AWS_SECRET_ACCESS_KEY:-}"
-LIBRECHAT_AWS_REGION="${LIBRECHAT_AWS_REGION:-auto}"
-LIBRECHAT_AWS_BUCKET_NAME="${LIBRECHAT_AWS_BUCKET_NAME:-}"
-LIBRECHAT_AWS_FORCE_PATH_STYLE="${LIBRECHAT_AWS_FORCE_PATH_STYLE:-true}"
-AICHOROUTER_MEMORY_LIMIT="${AICHOROUTER_MEMORY_LIMIT:-768m}"
-AICHOROUTER_CPUS="${AICHOROUTER_CPUS:-0.9}"
-AICHOROUTER_PIDS_LIMIT="${AICHOROUTER_PIDS_LIMIT:-256}"
-AICHOROUTER_GOMAXPROCS="${AICHOROUTER_GOMAXPROCS:-1}"
-AICHOROUTER_GOMEMLIMIT="${AICHOROUTER_GOMEMLIMIT:-500MiB}"
-AICHOROUTER_MEMORY_CACHE_ENABLED="${AICHOROUTER_MEMORY_CACHE_ENABLED:-false}"
-AICHOROUTER_ERROR_LOG_ENABLED="${AICHOROUTER_ERROR_LOG_ENABLED:-false}"
-AICHOROUTER_BATCH_UPDATE_ENABLED="${AICHOROUTER_BATCH_UPDATE_ENABLED:-false}"
-AICHOROUTER_SQL_MAX_IDLE_CONNS="${AICHOROUTER_SQL_MAX_IDLE_CONNS:-1}"
-AICHOROUTER_SQL_MAX_OPEN_CONNS="${AICHOROUTER_SQL_MAX_OPEN_CONNS:-4}"
-AICHOROUTER_SQL_MAX_LIFETIME="${AICHOROUTER_SQL_MAX_LIFETIME:-60}"
-AICHOROUTER_RELAY_MAX_IDLE_CONNS="${AICHOROUTER_RELAY_MAX_IDLE_CONNS:-32}"
-AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST="${AICHOROUTER_RELAY_MAX_IDLE_CONNS_PER_HOST:-8}"
-AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT="${AICHOROUTER_RELAY_IDLE_CONN_TIMEOUT:-30}"
-AICHOROUTER_MAX_REQUEST_BODY_MB="${AICHOROUTER_MAX_REQUEST_BODY_MB:-16}"
-AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB="${AICHOROUTER_STREAM_SCANNER_MAX_BUFFER_MB:-32}"
-AICHOROUTER_MAX_FILE_DOWNLOAD_MB="${AICHOROUTER_MAX_FILE_DOWNLOAD_MB:-32}"
-AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS="${AICHOROUTER_SHUTDOWN_TIMEOUT_SECONDS:-120}"
 WOODPECKER_AGENT_SECRET="${WOODPECKER_AGENT_SECRET:-}"
 WOODPECKER_GRPC_SECRET="${WOODPECKER_GRPC_SECRET:-}"
 WOODPECKER_GITHUB_CLIENT="${WOODPECKER_GITHUB_CLIENT:-}"
@@ -111,6 +77,7 @@ LOW_MEMORY_SWAP_ENABLED="${LOW_MEMORY_SWAP_ENABLED:-true}"
 LOW_MEMORY_SWAPFILE="${LOW_MEMORY_SWAPFILE:-/swapfile}"
 LOW_MEMORY_SWAP_SIZE="${LOW_MEMORY_SWAP_SIZE:-1G}"
 LOW_MEMORY_SWAP_SWAPPINESS="${LOW_MEMORY_SWAP_SWAPPINESS:-10}"
+edge_network="${PLATFORM_EDGE_NETWORK:-platform_edge}"
 SSH_PORT="${SSH_PORT:-}"
 
 die() {
@@ -136,15 +103,16 @@ csv_contains() {
 	[[ "$csv" == *",$2,"* ]]
 }
 bootstrap_foundation_enabled() {
-	local foundations disabled
-	[[ "$1" == caddy ]] && return 0
-	if [[ "$NODE_ROLE" == leader ]]; then
-		foundations="$(sed -n 's/^FOUNDATION_LEADER=//p' "$policy_file" | tail -n1)"
-	else
-		foundations="$(sed -n 's/^FOUNDATION_FOLLOWER=//p' "$policy_file" | tail -n1)"
-	fi
-	disabled="$(sed -n 's/^DISABLED_FOUNDATION=//p' "$policy_file" | tail -n1)"
-	csv_contains "$foundations" "$1" && ! csv_contains "$disabled" "$1"
+	local component="$1" manifest roles policy_rel enabled mandatory
+	manifest="$SOURCE_ROOT/compose/foundation/manifests/$component.env"
+	[[ -f "$manifest" ]] || return 1
+	roles="$(sed -n 's/^ROLES=//p' "$manifest" | tail -n1)"
+	csv_contains "$roles" "$NODE_ROLE" || return 1
+	policy_rel="$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)"
+	enabled="$(sed -n 's/^ENABLED=//p' "$SOURCE_ROOT/config/$policy_rel" | tail -n1)"
+	mandatory="$(sed -n 's/^MANDATORY=//p' "$manifest" | tail -n1)"
+	[[ "$mandatory" != true || "$enabled" == true ]] || die "mandatory foundation service is disabled: $component"
+	[[ "$enabled" == true ]]
 }
 pull_image() {
 	local image="$1" attempt
@@ -190,32 +158,26 @@ normalize_restic_features() {
 	fi
 }
 image_required() {
-	local key="$1" manifest image_key app_id
-	case "$key" in
-	CADDY_IMAGE) return 0 ;;
-	WOODPECKER_SERVER_IMAGE) bootstrap_foundation_enabled woodpecker-controller ;;
-	WOODPECKER_AGENT_IMAGE) bootstrap_foundation_enabled woodpecker-worker || bootstrap_foundation_enabled woodpecker-deployer ;;
-	BESZEL_HUB_IMAGE) bootstrap_foundation_enabled beszel-controller ;;
-	BESZEL_AGENT_IMAGE | BESZEL_SOCKET_PROXY_IMAGE) bootstrap_foundation_enabled beszel-worker ;;
-	OBSERVER_IMAGE) bootstrap_foundation_enabled observer-controller ;;
-	OBSERVER_HEALTH_PROBE_IMAGE) bootstrap_foundation_enabled observer-controller || bootstrap_foundation_enabled observer-collector ;;
-	OBSERVER_LOG_PROXY_IMAGE | OBSERVER_LOG_SHIPPER_IMAGE) bootstrap_foundation_enabled observer-collector ;;
-	NEW_API_IMAGE) ((newapi_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
-	LIBRECHAT_API_IMAGE | LIBRECHAT_ADMIN_IMAGE | LIBRECHAT_CLIENT_IMAGE) ((librechat_enabled)) && [[ "$NODE_ROLE" == follower ]] ;;
-	*)
-		while IFS= read -r manifest; do
-			while IFS= read -r image_key; do
-				[[ "$image_key" == "$key" ]] || continue
-				app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
-				app_enabled "$app_id" || return 1
-				[[ "$NODE_ROLE" == follower ]] || return 1
-				[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" != single-follower || "$(app_target "$app_id")" == "$NODE_ID" ]] || return 1
-				return 0
-			done < <(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1 | tr ' ' '\n')
-		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
-		return 1
-		;;
-	esac
+	local key="$1" manifest image_key app_id matched=0 component
+	for manifest in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
+		[[ -f "$manifest" ]] || continue
+		component="$(sed -n 's/^COMPONENT_ID=//p' "$manifest" | tail -n1)"
+		for image_key in $(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1); do
+			[[ "$image_key" == "$key" ]] || continue
+			matched=1
+			bootstrap_foundation_enabled "$component" && return 0
+		done
+	done
+	while IFS= read -r manifest; do
+		while IFS= read -r image_key; do
+			[[ "$image_key" == "$key" ]] || continue
+			matched=1
+			app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+			app_active_on_node "$app_id" && return 0
+		done < <(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1 | tr ' ' '\n')
+	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+	((matched == 0)) && die "image key is not declared by a manifest: $key"
+	return 1
 }
 valid_ipv4() {
 	local ip="$1" octet
@@ -228,9 +190,25 @@ valid_ipv4() {
 	done
 }
 [[ "$REPO_SLUG" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "invalid REPO_SLUG: $REPO_SLUG"
+case "$BOOTSTRAP_MODE" in
+first | repair) ;;
+*) die "BOOTSTRAP_MODE must be first or repair: $BOOTSTRAP_MODE" ;;
+esac
 ensure_key() {
 	local file="$1" key="$2" value="$3"
 	grep -q "^${key}=" "$file" 2>/dev/null || printf '%s=%s\n' "$key" "$value" >>"$file"
+}
+set_derived_key() {
+	local file="$1" key="$2" value="$3" previous_domain="$4" prefix="$5" current old_value
+	current="$(sed -n "s/^${key}=//p" "$file" 2>/dev/null | tail -n1)"
+	if [[ -z "$current" ]]; then
+		ensure_key "$file" "$key" "$value"
+		return 0
+	fi
+	[[ -n "$previous_domain" ]] || return 0
+	old_value="${prefix}${previous_domain}"
+	[[ "$current" == "$old_value" ]] || return 0
+	set_key "$file" "$key" "$value"
 }
 set_key() {
 	local file="$1" key="$2" value="$3" tmp
@@ -407,20 +385,11 @@ generate_shared_secret() {
 if [[ -z "$LEADER_PUBLIC_IP" && -r "$CONFIG_ROOT/node.env" ]]; then
 	LEADER_PUBLIC_IP="$(sed -n 's/^LEADER_PUBLIC_IP=//p' "$CONFIG_ROOT/node.env" 2>/dev/null | tail -n1)"
 fi
-for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET OBSERVER_INGEST_USER OBSERVER_INGEST_TOKEN; do
+for shared_key in LEADER_PUBLIC_IP WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET OBSERVER_INGEST_USER OBSERVER_INGEST_TOKEN; do
 	load_bundle_value "$shared_key"
 done
-for shared_key in LEADER_PUBLIC_IP NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET WOODPECKER_GITHUB_CLIENT WOODPECKER_GITHUB_SECRET; do
+for shared_key in LEADER_PUBLIC_IP WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET WOODPECKER_GITHUB_CLIENT WOODPECKER_GITHUB_SECRET; do
 	clear_placeholder "$shared_key"
-done
-for runtime_key in NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN; do
-	load_runtime_value "$runtime_key" "$app_env"
-done
-for runtime_key in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET; do
-	load_runtime_value "$runtime_key" "$app_env"
-done
-for runtime_key in LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE; do
-	load_runtime_value "$runtime_key" "$app_env"
 done
 for runtime_key in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET WOODPECKER_GITHUB_CLIENT WOODPECKER_GITHUB_SECRET; do
 	load_runtime_value "$runtime_key" "$woodpecker_env"
@@ -435,9 +404,6 @@ done
 OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-llm-hub-lite-collector}"
 clear_placeholder OBSERVER_INGEST_USER
 clear_placeholder OBSERVER_INGEST_TOKEN
-if [[ -z "$NODE_ID" ]]; then read -r -p 'Stable cluster node ID (for example leader, worker-1): ' NODE_ID; fi
-[[ "$NODE_ID" =~ ^[a-z][a-z0-9-]*$ ]] || die 'invalid NODE_ID'
-
 install_docker() {
 	command -v docker >/dev/null 2>&1 && return 0
 	[[ -r /etc/os-release ]] || die 'Docker installation requires /etc/os-release'
@@ -572,6 +538,13 @@ if ((${#missing[@]})); then
 fi
 need jq
 normalize_restic_features
+# Serialize the complete bootstrap transaction, including source/runtime
+# mutation and credential provisioning. Nested platformctl calls inherit this
+# marker and therefore do not try to acquire the same lock recursively.
+install -d -m 700 "$(dirname "$PLATFORM_LOCK_FILE")"
+exec 9>"$PLATFORM_LOCK_FILE"
+flock -w "${PLATFORM_LOCK_WAIT:-300}" 9 || die 'timed out waiting for the platform bootstrap lock'
+export PLATFORM_LOCK_HELD=1
 if remote_enabled; then
 	export RESTIC_REPOSITORY="$RESTIC_REMOTE_REPOSITORY" RESTIC_PASSWORD_FILE="$RESTIC_REMOTE_PASSWORD_FILE" RESTIC_COMPRESSION
 	restic snapshots --no-lock >/dev/null 2>&1 || die "remote Restic repository is unavailable or uninitialized: $RESTIC_REMOTE_REPOSITORY; initialize it explicitly with RESTIC_REPOSITORY='$RESTIC_REMOTE_REPOSITORY' RESTIC_PASSWORD_FILE='$RESTIC_REMOTE_PASSWORD_FILE' restic init"
@@ -666,8 +639,51 @@ fi
 
 policy_file="$SOURCE_ROOT/config/cluster/policy.env"
 [[ -f "$policy_file" ]] || die "missing cluster policy: $policy_file"
+[[ "$(sed -n 's/^CLUSTER_CONFIG_VERSION=//p' "$policy_file" | tail -n1)" == 3 ]] || die 'unsupported cluster policy version'
+if [[ -z "$NODE_ID" && "$BOOTSTRAP_MODE" == repair && -r "$CONFIG_ROOT/node.env" ]]; then
+	NODE_ID="$(sed -n 's/^NODE_ID=//p' "$CONFIG_ROOT/node.env" | tail -n1)"
+fi
 leader_node_id="$(sed -n 's/^LEADER_NODE_ID=//p' "$policy_file" | tail -n1)"
 [[ -n "$leader_node_id" ]] || die 'cluster policy is missing LEADER_NODE_ID'
+node_ids="$(sed -n 's/^NODE_IDS=//p' "$policy_file" | tail -n1)"
+if [[ -z "$NODE_ID" ]]; then
+	[[ -t 0 ]] || die 'NODE_ID is required for non-interactive bootstrap'
+	while :; do
+		if ! read -r -p 'Node role (leader or follower): ' requested_role; then
+			die 'node role input was not received'
+		fi
+		case "$requested_role" in
+		leader | Leader | LEADER)
+			NODE_ID="$leader_node_id"
+			break
+			;;
+		follower | Follower | FOLLOWER)
+			followers=''
+			old_ifs="$IFS"
+			IFS=,
+			for candidate in $node_ids; do
+				[[ -n "$candidate" && "$candidate" != "$leader_node_id" ]] || continue
+				followers="${followers:+$followers,}$candidate"
+			done
+			IFS="$old_ifs"
+			[[ -n "$followers" ]] || die 'cluster policy has no follower nodes'
+			printf 'Configured follower node IDs: %s\n' "$followers"
+			if ! read -r -p 'Stable follower node ID: ' NODE_ID; then
+				die 'NODE_ID input was not received'
+			fi
+			break
+			;;
+		*) printf 'Enter leader or follower.\n' >&2 ;;
+		esac
+	done
+fi
+[[ "$NODE_ID" =~ ^[a-z][a-z0-9-]*$ ]] || die 'invalid NODE_ID'
+csv_contains "$node_ids" "$NODE_ID" || die "node is absent from NODE_IDS: $NODE_ID"
+if [[ "$BOOTSTRAP_MODE" == repair && -r "$CONFIG_ROOT/node.env" ]]; then
+	existing_node_id="$(sed -n 's/^NODE_ID=//p' "$CONFIG_ROOT/node.env" | tail -n1)"
+	[[ -z "$existing_node_id" || "$existing_node_id" == "$NODE_ID" ]] ||
+		die "repair NODE_ID $NODE_ID does not match the installed node identity $existing_node_id"
+fi
 NODE_ROLE=leader
 [[ "$NODE_ID" == "$leader_node_id" ]] || NODE_ROLE=follower
 app_policy_file() {
@@ -678,19 +694,41 @@ app_policy_file() {
 app_enabled() {
 	local app="$1" file
 	file="$(app_policy_file "$app")"
-	[[ "$(sed -n 's/^ENABLED=//p' "$file" | tail -n1)" != false ]]
+	# Policies are authoritative. Treat a missing or malformed ENABLED value as
+	# disabled here; validate() will report the precise policy error later. This
+	# prevents a partially fetched release from prompting for secrets or pulling
+	# images for an app that was never explicitly enabled.
+	[[ "$(sed -n 's/^ENABLED=//p' "$file" 2>/dev/null | tail -n1)" == true ]]
 }
+app_nodes() { sed -n 's/^NODES=//p' "$(app_policy_file "$1")" | tail -n1; }
 app_target() {
-	local app="$1" key
-	key="$(sed -n 's/^TARGET_NODE_KEY=//p' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"
-	sed -n "s/^$key=//p" "$(app_policy_file "$app")" | tail -n1
+	local app="$1" nodes
+	nodes="$(app_nodes "$app")"
+	[[ "$(sed -n 's/^UPSTREAM_MODE=//p' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)" == singleton && -n "$nodes" && "$nodes" != *,* ]] || return 1
+	printf '%s\n' "$nodes"
 }
-newapi_enabled=0
-app_enabled newapi && newapi_enabled=1
-librechat_enabled=0
-app_enabled librechat && librechat_enabled=1
+app_active_on_node() {
+	local app="$1"
+	app_enabled "$app" || return 1
+	[[ "$NODE_ROLE" == follower ]] || return 1
+	[[ "${NODE_STATE:-}" == active ]] || return 1
+	csv_contains "$(app_nodes "$app")" "$NODE_ID"
+}
 inventory_file="$SOURCE_ROOT/config/cluster/nodes/$NODE_ID.env"
 [[ -f "$inventory_file" ]] || die "node is absent from cluster inventory: $NODE_ID"
+[[ "$(sed -n 's/^NODE_ID=//p' "$inventory_file" | tail -n1)" == "$NODE_ID" ]] || die "node inventory identity mismatch: $NODE_ID"
+NODE_STATE="$(sed -n 's/^NODE_STATE=//p' "$inventory_file" | tail -n1)"
+case "$NODE_STATE" in
+joining | active) ;;
+draining | retired) die "cannot bootstrap a node in $NODE_STATE state: $NODE_ID" ;;
+*) die "invalid node state in cluster inventory: $NODE_ID/$NODE_STATE" ;;
+esac
+if [[ "$NODE_ROLE" == leader && "$NODE_STATE" != active ]]; then
+	die 'the designated Leader must be active before bootstrap'
+fi
+if [[ "$BOOTSTRAP_MODE" == repair && ! -r "$CONFIG_ROOT/node.env" ]]; then
+	die 'BOOTSTRAP_MODE=repair requires an existing node installation'
+fi
 prompt_required LEADER_PUBLIC_IP 'Leader public IPv4 address'
 valid_ipv4 "$LEADER_PUBLIC_IP" || die 'LEADER_PUBLIC_IP must be a valid IPv4 address'
 printf 'Derived node role: %s (Leader node ID: %s)\n' "$NODE_ROLE" "$leader_node_id"
@@ -709,42 +747,92 @@ if [[ "$NODE_ROLE" == follower ]]; then
 fi
 
 if [[ "${BOOTSTRAP_ASSUME_YES:-0}" != 1 && -t 0 ]]; then
-	if ! read -r -p "Continue bootstrapping $NODE_ID as $NODE_ROLE? [y/N]: " confirm; then
+	if ! read -r -p "Continue $BOOTSTRAP_MODE bootstrap of $NODE_ID as $NODE_ROLE ($NODE_STATE)? [y/N]: " confirm; then
 		die 'bootstrap confirmation was not received; rerun with ssh -tt or set BOOTSTRAP_ASSUME_YES=1'
 	fi
 	[[ "$confirm" =~ ^[Yy]$ ]] || die 'bootstrap cancelled'
 fi
-if ((newapi_enabled)); then
-	prompt_required NEW_API_SQL_DSN 'Shared Neon PostgreSQL DSN'
-	[[ "$NEW_API_SQL_DSN" =~ ^postgres(ql)?:// ]] || die 'New API requires a postgres:// or postgresql:// DSN'
-	if [[ "$NODE_ROLE" == leader ]]; then
-		generate_shared_secret NEW_API_SESSION_SECRET
-		generate_shared_secret NEW_API_CRYPTO_SECRET
-	else
-		prompt_required NEW_API_SESSION_SECRET 'Shared New API SESSION_SECRET' 1
-		prompt_required NEW_API_CRYPTO_SECRET 'Shared New API CRYPTO_SECRET' 1
-	fi
+
+# Create the shared application environment before resolving application
+# secrets. set_key() is deliberately allowed to create a file, so doing this
+# afterwards could leave a fresh host with only secret keys and skip all of
+# the required platform defaults. ensure_key() keeps this repairable for hosts
+# that were initialized by an older bootstrap revision.
+if [[ ! -f "$app_env" ]]; then
+	{
+		printf 'DOMAIN_NAME=%s\nSSL_EMAIL=%s\nSHARED_NETWORK_NAME=%s\nPLATFORM_EDGE_NETWORK=%s\n' "$DOMAIN_NAME" "$SSL_EMAIL" "$edge_network" "$edge_network"
+		printf 'DATA_ROOT=%s/shared/data/prod\nTZ=Asia/Shanghai\n' "$APP_ROOT"
+		printf 'RESTIC_REMOTE_ENABLED=%s\nRESTIC_REMOTE_REPOSITORY=%s\nRESTIC_REMOTE_PASSWORD_FILE=%s\nRESTIC_REMOTE_ENV_FILE=%s\nRESTIC_CACHE_DIR=%s\nRESTIC_READ_CONCURRENCY=%s\nRESTIC_COMPRESSION=%s\nRESTIC_SKIP_IF_UNCHANGED=%s\nRESTIC_NICE_LEVEL=%s\nRESTIC_IONICE_ENABLED=%s\nRESTIC_IONICE_CLASS=%s\nRESTIC_IONICE_LEVEL=%s\nRESTIC_SCHEDULE_INTERVAL=%s\nPRODUCTION_REQUIRE_REMOTE_BACKUP=%s\n' "$RESTIC_REMOTE_ENABLED" "$RESTIC_REMOTE_REPOSITORY" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$RESTIC_CACHE_DIR" "$RESTIC_READ_CONCURRENCY" "$RESTIC_COMPRESSION" "$RESTIC_SKIP_IF_UNCHANGED" "$RESTIC_NICE_LEVEL" "$RESTIC_IONICE_ENABLED" "$RESTIC_IONICE_CLASS" "$RESTIC_IONICE_LEVEL" "$RESTIC_SCHEDULE_INTERVAL" "$PRODUCTION_REQUIRE_REMOTE_BACKUP"
+		printf 'NODE_ID=%s\nCLUSTER_POLICY_FILE=%s\nNODE_CONFIG_FILE=%s/node.env\n' "$NODE_ID" "$CONTROL_ROOT/current/config/cluster/policy.env" "$CONFIG_ROOT"
+		printf 'WOODPECKER_SITE=https://ci.%s\nBESZEL_SITE=https://status.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME"
+		printf 'WOODPECKER_GRPC_SITE=https://ci-grpc.%s\nOBSERVER_SITE=https://observer.%s\nOBSERVER_INGEST_SITE=https://observer-ingest.%s\nOBSERVER_INGEST_URL=https://observer-ingest.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME"
+	} >"$app_env"
 fi
-if ((librechat_enabled)); then
-	prompt_required LIBRECHAT_MONGO_URI 'Shared LibreChat MongoDB Atlas URI' 1
-	[[ "$LIBRECHAT_MONGO_URI" =~ ^mongodb(\+srv)?:// ]] || die 'LibreChat requires a mongodb:// or mongodb+srv:// URI'
-	prompt_required LIBRECHAT_REDIS_URI 'Shared LibreChat Upstash Redis URI' 1
-	[[ "$LIBRECHAT_REDIS_URI" =~ ^rediss:// ]] || die 'LibreChat Upstash requires a TLS rediss:// URI'
-	prompt_required LIBRECHAT_AWS_ENDPOINT_URL 'Shared Cloudflare R2 endpoint URL' 0
-	prompt_required LIBRECHAT_AWS_ACCESS_KEY_ID 'Shared Cloudflare R2 access key ID' 1
-	prompt_required LIBRECHAT_AWS_SECRET_ACCESS_KEY 'Shared Cloudflare R2 secret access key' 1
-	prompt_required LIBRECHAT_AWS_BUCKET_NAME 'Shared Cloudflare R2 bucket name' 0
-	[[ "$LIBRECHAT_AWS_ENDPOINT_URL" =~ ^https:// ]] || die 'LibreChat R2 endpoint must use https://'
-	if [[ "$NODE_ROLE" == leader ]]; then
-		generate_shared_secret LIBRECHAT_JWT_SECRET
-		generate_shared_secret LIBRECHAT_JWT_REFRESH_SECRET
-		generate_shared_secret LIBRECHAT_ADMIN_PANEL_SESSION_SECRET
-	else
-		prompt_required LIBRECHAT_JWT_SECRET 'Shared LibreChat JWT secret' 1
-		prompt_required LIBRECHAT_JWT_REFRESH_SECRET 'Shared LibreChat JWT refresh secret' 1
-		prompt_required LIBRECHAT_ADMIN_PANEL_SESSION_SECRET 'Shared LibreChat admin panel session secret' 1
-	fi
-fi
+for pair in \
+	"DOMAIN_NAME=$DOMAIN_NAME" "SSL_EMAIL=$SSL_EMAIL" "SHARED_NETWORK_NAME=$edge_network" \
+	"PLATFORM_EDGE_NETWORK=$edge_network" "DATA_ROOT=$APP_ROOT/shared/data/prod" "TZ=Asia/Shanghai" \
+	"RESTIC_REMOTE_ENABLED=$RESTIC_REMOTE_ENABLED" "RESTIC_REMOTE_REPOSITORY=$RESTIC_REMOTE_REPOSITORY" \
+	"RESTIC_REMOTE_PASSWORD_FILE=$RESTIC_REMOTE_PASSWORD_FILE" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" \
+	"RESTIC_CACHE_DIR=$RESTIC_CACHE_DIR" "RESTIC_READ_CONCURRENCY=$RESTIC_READ_CONCURRENCY" \
+	"RESTIC_COMPRESSION=$RESTIC_COMPRESSION" "RESTIC_SKIP_IF_UNCHANGED=$RESTIC_SKIP_IF_UNCHANGED" \
+	"RESTIC_NICE_LEVEL=$RESTIC_NICE_LEVEL" "RESTIC_IONICE_ENABLED=$RESTIC_IONICE_ENABLED" \
+	"RESTIC_IONICE_CLASS=$RESTIC_IONICE_CLASS" "RESTIC_IONICE_LEVEL=$RESTIC_IONICE_LEVEL" \
+	"RESTIC_SCHEDULE_INTERVAL=$RESTIC_SCHEDULE_INTERVAL" "PRODUCTION_REQUIRE_REMOTE_BACKUP=$PRODUCTION_REQUIRE_REMOTE_BACKUP" \
+	"NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env"; do
+	ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"
+done
+chmod 600 "$app_env"
+
+manifest_has_generated_secret() {
+	local manifest="$1" key="$2" generated
+	generated="$(sed -n 's/^GENERATED_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+	csv_contains "$generated" "$key"
+}
+prepare_application_secrets() {
+	local manifest app_id keys runtime_rel runtime_file key min_length
+	while IFS= read -r manifest; do
+		[[ -f "$manifest" ]] || continue
+		[[ "$(sed -n 's/^MANIFEST_VERSION=//p' "$manifest" | tail -n1)" == 5 ]] || die "unsupported application manifest version: $manifest"
+		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+		app_enabled "$app_id" || continue
+		if [[ "$NODE_ROLE" == leader ]]; then
+			keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+			while IFS= read -r key; do
+				[[ -n "$key" ]] || continue
+				load_bundle_value "$key"
+				load_runtime_value "$key" "$app_env"
+				clear_placeholder "$key"
+				manifest_has_generated_secret "$manifest" "$key" && generate_shared_secret "$key"
+				min_length="$(manifest_secret_min_length "$manifest" "$key")"
+				prompt_required "$key" "$app_id shared $key" 1 "$min_length"
+			done < <(printf '%s\n' "$keys" | tr ',' '\n')
+			continue
+		fi
+		app_active_on_node "$app_id" || continue
+		keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		while IFS= read -r key; do
+			[[ -n "$key" ]] || continue
+			load_bundle_value "$key"
+			load_runtime_value "$key" "$app_env"
+			clear_placeholder "$key"
+			min_length="$(manifest_secret_min_length "$manifest" "$key")"
+			prompt_required "$key" "$app_id shared $key" 1 "$min_length"
+		done < <(printf '%s\n' "$keys" | tr ',' '\n')
+		runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
+		keys="$(sed -n 's/^NODE_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		[[ -z "$keys" || (-n "$runtime_rel" && "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$) ]] || die "invalid RUNTIME_ENV_FILE for $app_id"
+		runtime_file="$CONFIG_ROOT/$runtime_rel"
+		while IFS= read -r key; do
+			[[ -n "$key" ]] || continue
+			load_runtime_value "$key" "$runtime_file"
+			clear_placeholder "$key"
+			manifest_has_generated_secret "$manifest" "$key" && generate_shared_secret "$key"
+			min_length="$(manifest_secret_min_length "$manifest" "$key")"
+			prompt_required "$key" "$app_id node-local $key" 1 "$min_length"
+		done < <(printf '%s\n' "$keys" | tr ',' '\n')
+	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+}
+prepare_application_secrets
 if bootstrap_foundation_enabled observer-controller; then
 	clear_placeholder OBSERVER_ROOT_USER_EMAIL
 	clear_placeholder OBSERVER_ROOT_USER_PASSWORD
@@ -757,26 +845,6 @@ if bootstrap_foundation_enabled observer-collector; then
 		prompt_observer_ingest_token
 	fi
 fi
-for manifest in "$SOURCE_ROOT"/apps/*/manifest.env; do
-	[[ -f "$manifest" ]] || continue
-	[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower ]] || continue
-	app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
-	app_enabled "$app_id" || continue
-	[[ "$NODE_ROLE" == follower && "$(app_target "$app_id")" == "$NODE_ID" ]] || continue
-	secret_keys="$(sed -n 's/^SECRET_KEYS=//p' "$manifest" | tail -n1)"
-	runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
-	runtime_file="$CONFIG_ROOT/$runtime_rel"
-	old_ifs="$IFS"
-	IFS=,
-	for secret_key in $secret_keys; do
-		[[ -n "$secret_key" ]] || continue
-		load_runtime_value "$secret_key" "$runtime_file"
-		clear_placeholder "$secret_key"
-		secret_min_length="$(manifest_secret_min_length "$manifest" "$secret_key")"
-		prompt_required "$secret_key" "$app_id $secret_key" 1 "$secret_min_length"
-	done
-	IFS="$old_ifs"
-done
 if [[ "$NODE_ROLE" == leader ]]; then
 	generate_shared_secret WOODPECKER_AGENT_SECRET
 	generate_shared_secret WOODPECKER_GRPC_SECRET
@@ -806,7 +874,6 @@ if [[ ! -x "$COMPOSE_BIN" ]] || ! echo "$compose_sha256  $COMPOSE_BIN" | sha256s
 fi
 "$COMPOSE_BIN" version >/dev/null
 
-edge_network="${PLATFORM_EDGE_NETWORK:-platform_edge}"
 docker network inspect "$edge_network" >/dev/null 2>&1 || docker network create "$edge_network" >/dev/null
 ufw default deny incoming >/dev/null
 ufw default allow outgoing >/dev/null
@@ -816,96 +883,77 @@ ufw allow 443/tcp comment 'HTTPS' >/dev/null
 ufw allow 443/udp comment 'HTTP/3' >/dev/null
 ufw --force enable >/dev/null
 
-app_env="$APP_ROOT/shared/.env.prod"
-if [[ ! -f "$app_env" ]]; then
-	{
-		printf 'DOMAIN_NAME=%s\nSSL_EMAIL=%s\nSHARED_NETWORK_NAME=%s\nPLATFORM_EDGE_NETWORK=%s\n' "$DOMAIN_NAME" "$SSL_EMAIL" "$edge_network" "$edge_network"
-		printf 'DATA_ROOT=%s/shared/data/prod\nTZ=Asia/Shanghai\n' "$APP_ROOT"
-		printf 'RESTIC_REMOTE_ENABLED=%s\nRESTIC_REMOTE_REPOSITORY=%s\nRESTIC_REMOTE_PASSWORD_FILE=%s\nRESTIC_REMOTE_ENV_FILE=%s\nRESTIC_CACHE_DIR=%s\nRESTIC_READ_CONCURRENCY=%s\nRESTIC_COMPRESSION=%s\nRESTIC_SKIP_IF_UNCHANGED=%s\nRESTIC_NICE_LEVEL=%s\nRESTIC_IONICE_ENABLED=%s\nRESTIC_IONICE_CLASS=%s\nRESTIC_IONICE_LEVEL=%s\nRESTIC_SCHEDULE_INTERVAL=%s\nPRODUCTION_REQUIRE_REMOTE_BACKUP=%s\n' "$RESTIC_REMOTE_ENABLED" "$RESTIC_REMOTE_REPOSITORY" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$RESTIC_CACHE_DIR" "$RESTIC_READ_CONCURRENCY" "$RESTIC_COMPRESSION" "$RESTIC_SKIP_IF_UNCHANGED" "$RESTIC_NICE_LEVEL" "$RESTIC_IONICE_ENABLED" "$RESTIC_IONICE_CLASS" "$RESTIC_IONICE_LEVEL" "$RESTIC_SCHEDULE_INTERVAL" "$PRODUCTION_REQUIRE_REMOTE_BACKUP"
-		printf 'NODE_ID=%s\nCLUSTER_POLICY_FILE=%s\nNODE_CONFIG_FILE=%s/node.env\n' "$NODE_ID" "$CONTROL_ROOT/current/config/cluster/policy.env" "$CONFIG_ROOT"
-		printf 'NEW_API_SESSION_SECRET=%s\nNEW_API_CRYPTO_SECRET=%s\nNEW_API_SQL_DSN=%s\n' "${NEW_API_SESSION_SECRET:-}" "${NEW_API_CRYPTO_SECRET:-}" "${NEW_API_SQL_DSN:-}"
-		printf 'LIBRECHAT_MONGO_URI=%s\nLIBRECHAT_REDIS_URI=%s\nLIBRECHAT_JWT_SECRET=%s\nLIBRECHAT_JWT_REFRESH_SECRET=%s\nLIBRECHAT_ADMIN_PANEL_SESSION_SECRET=%s\nLIBRECHAT_AWS_ENDPOINT_URL=%s\nLIBRECHAT_AWS_ACCESS_KEY_ID=%s\nLIBRECHAT_AWS_SECRET_ACCESS_KEY=%s\nLIBRECHAT_AWS_REGION=%s\nLIBRECHAT_AWS_BUCKET_NAME=%s\nLIBRECHAT_AWS_FORCE_PATH_STYLE=%s\n' "$LIBRECHAT_MONGO_URI" "$LIBRECHAT_REDIS_URI" "$LIBRECHAT_JWT_SECRET" "$LIBRECHAT_JWT_REFRESH_SECRET" "$LIBRECHAT_ADMIN_PANEL_SESSION_SECRET" "$LIBRECHAT_AWS_ENDPOINT_URL" "$LIBRECHAT_AWS_ACCESS_KEY_ID" "$LIBRECHAT_AWS_SECRET_ACCESS_KEY" "$LIBRECHAT_AWS_REGION" "$LIBRECHAT_AWS_BUCKET_NAME" "$LIBRECHAT_AWS_FORCE_PATH_STYLE"
-		printf 'NEW_API_SITE=https://newapi.%s\nLIBRECHAT_DOMAIN_CLIENT=https://chat.%s\nLIBRECHAT_DOMAIN_SERVER=https://chat.%s\nLIBRECHAT_ADMIN_PANEL_URL=https://chat-admin.%s\nWOODPECKER_SITE=https://ci.%s\nBESZEL_SITE=https://status.%s\nSESSION_COOKIE_TRUSTED_URL=https://newapi.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME"
-		printf 'WOODPECKER_GRPC_SITE=https://ci-grpc.%s\nOBSERVER_SITE=https://observer.%s\nOBSERVER_INGEST_SITE=https://observer-ingest.%s\nOBSERVER_INGEST_URL=https://observer-ingest.%s\n' "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME" "$DOMAIN_NAME"
-		while IFS= read -r manifest; do
-			public_key="$(sed -n 's/^PUBLIC_URL_KEY=//p' "$manifest" | tail -n1)"
-			public_host="$(sed -n 's/^PUBLIC_HOST=//p' "$manifest" | tail -n1)"
-			[[ -n "$public_key" && -n "$public_host" ]] || continue
-			printf '%s=https://%s.%s\n' "$public_key" "$public_host" "$DOMAIN_NAME"
-		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
-	} >"$app_env"
-fi
+previous_app_domain="$(sed -n 's/^DOMAIN_NAME=//p' "$app_env" 2>/dev/null | tail -n1)"
+set_key "$app_env" DOMAIN_NAME "$DOMAIN_NAME"
+set_key "$app_env" SSL_EMAIL "$SSL_EMAIL"
 for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "RESTIC_CACHE_DIR=$RESTIC_CACHE_DIR" "RESTIC_READ_CONCURRENCY=$RESTIC_READ_CONCURRENCY" "RESTIC_SKIP_IF_UNCHANGED=$RESTIC_SKIP_IF_UNCHANGED" "RESTIC_NICE_LEVEL=$RESTIC_NICE_LEVEL" "RESTIC_IONICE_ENABLED=$RESTIC_IONICE_ENABLED" "RESTIC_IONICE_CLASS=$RESTIC_IONICE_CLASS" "RESTIC_IONICE_LEVEL=$RESTIC_IONICE_LEVEL" "RESTIC_SCHEDULE_INTERVAL=$RESTIC_SCHEDULE_INTERVAL" "PRODUCTION_REQUIRE_REMOTE_BACKUP=true"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
 set_key "$app_env" RESTIC_COMPRESSION "$RESTIC_COMPRESSION"
 set_key "$app_env" RESTIC_SKIP_IF_UNCHANGED "$RESTIC_SKIP_IF_UNCHANGED"
 remove_key "$app_env" NODE_ROLE
 remove_key "$app_env" LEADER_PUBLIC_IP
-ensure_key "$app_env" WOODPECKER_GRPC_SITE "https://ci-grpc.$DOMAIN_NAME"
-ensure_key "$app_env" OBSERVER_SITE "https://observer.$DOMAIN_NAME"
-ensure_key "$app_env" OBSERVER_INGEST_SITE "https://observer-ingest.$DOMAIN_NAME"
-ensure_key "$app_env" OBSERVER_INGEST_URL "https://observer-ingest.$DOMAIN_NAME"
+set_derived_key "$app_env" WOODPECKER_SITE "https://ci.$DOMAIN_NAME" "$previous_app_domain" 'https://ci.'
+set_derived_key "$app_env" BESZEL_SITE "https://status.$DOMAIN_NAME" "$previous_app_domain" 'https://status.'
+set_derived_key "$app_env" WOODPECKER_GRPC_SITE "https://ci-grpc.$DOMAIN_NAME" "$previous_app_domain" 'https://ci-grpc.'
+set_derived_key "$app_env" OBSERVER_SITE "https://observer.$DOMAIN_NAME" "$previous_app_domain" 'https://observer.'
+set_derived_key "$app_env" OBSERVER_INGEST_SITE "https://observer-ingest.$DOMAIN_NAME" "$previous_app_domain" 'https://observer-ingest.'
+set_derived_key "$app_env" OBSERVER_INGEST_URL "https://observer-ingest.$DOMAIN_NAME" "$previous_app_domain" 'https://observer-ingest.'
 while IFS= read -r manifest; do
-	public_key="$(sed -n 's/^PUBLIC_URL_KEY=//p' "$manifest" | tail -n1)"
-	public_host="$(sed -n 's/^PUBLIC_HOST=//p' "$manifest" | tail -n1)"
-	[[ -n "$public_key" && -n "$public_host" ]] || continue
-	ensure_key "$app_env" "$public_key" "https://$public_host.$DOMAIN_NAME"
+	while IFS='|' read -r public_key public_host; do
+		[[ -n "$public_key" && -n "$public_host" ]] || continue
+		set_derived_key "$app_env" "$public_key" "https://$public_host.$DOMAIN_NAME" "$previous_app_domain" "https://$public_host."
+	done < <(sed -n 's/^PUBLIC_ENDPOINTS=//p' "$manifest" | tail -n1 | tr ';' '\n')
 done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 
+# App tuning is committed in apps/<id>/config.env and may be overridden only
+# by a committed per-node override. Remove keys written by older bootstraps so
+# the shared host environment cannot keep shadowing the declarative values.
 while IFS= read -r manifest; do
 	[[ -f "$manifest" ]] || continue
 	while IFS= read -r config_key; do
-		[[ -n "$config_key" ]] || continue
-		load_runtime_value "$config_key" "$app_env"
-		config_value="${!config_key:-}"
-		[[ -n "$config_value" ]] && ensure_key "$app_env" "$config_key" "$config_value"
+		[[ -n "$config_key" ]] && remove_key "$app_env" "$config_key"
 	done < <(sed -n 's/^ENV_KEYS=//p' "$manifest" | tail -n1 | tr ',' '\n')
 done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 
-for pair in \
-	"LIBRECHAT_MONGO_URI=$LIBRECHAT_MONGO_URI" "LIBRECHAT_REDIS_URI=$LIBRECHAT_REDIS_URI" \
-	"LIBRECHAT_JWT_SECRET=$LIBRECHAT_JWT_SECRET" "LIBRECHAT_JWT_REFRESH_SECRET=$LIBRECHAT_JWT_REFRESH_SECRET" \
-	"LIBRECHAT_ADMIN_PANEL_SESSION_SECRET=$LIBRECHAT_ADMIN_PANEL_SESSION_SECRET" "LIBRECHAT_FILE_STRATEGY=s3" \
-	"LIBRECHAT_AWS_ENDPOINT_URL=$LIBRECHAT_AWS_ENDPOINT_URL" "LIBRECHAT_AWS_ACCESS_KEY_ID=$LIBRECHAT_AWS_ACCESS_KEY_ID" "LIBRECHAT_AWS_SECRET_ACCESS_KEY=$LIBRECHAT_AWS_SECRET_ACCESS_KEY" "LIBRECHAT_AWS_REGION=$LIBRECHAT_AWS_REGION" "LIBRECHAT_AWS_BUCKET_NAME=$LIBRECHAT_AWS_BUCKET_NAME" "LIBRECHAT_AWS_FORCE_PATH_STYLE=$LIBRECHAT_AWS_FORCE_PATH_STYLE" \
-	"LIBRECHAT_DOMAIN_CLIENT=https://chat.$DOMAIN_NAME" "LIBRECHAT_DOMAIN_SERVER=https://chat.$DOMAIN_NAME" \
-	"LIBRECHAT_ADMIN_PANEL_URL=https://chat-admin.$DOMAIN_NAME" "LIBRECHAT_SITE=https://chat.$DOMAIN_NAME" "LIBRECHAT_ADMIN_SITE=https://chat-admin.$DOMAIN_NAME" "LIBRECHAT_ALLOW_REGISTRATION=true" \
-	"LIBRECHAT_USE_REDIS=true" "LIBRECHAT_USE_REDIS_STREAMS=true" "LIBRECHAT_SEARCH=false" "LIBRECHAT_MONGO_BACKUP_ENABLED=false" "LIBRECHAT_MONGO_BACKUP_NODE_ID=worker-1" \
-	"LIBRECHAT_API_MEMORY_LIMIT=512m" "LIBRECHAT_API_CPUS=0.75" "LIBRECHAT_API_PIDS_LIMIT=256" "LIBRECHAT_API_NODE_OPTIONS=--max-old-space-size=384" \
-	"LIBRECHAT_ADMIN_MEMORY_LIMIT=128m" "LIBRECHAT_ADMIN_CPUS=0.25" "LIBRECHAT_ADMIN_PIDS_LIMIT=128" "LIBRECHAT_ADMIN_NODE_OPTIONS=--max-old-space-size=96" \
-	"LIBRECHAT_CLIENT_MEMORY_LIMIT=32m" "LIBRECHAT_CLIENT_CPUS=0.10" "LIBRECHAT_CLIENT_PIDS_LIMIT=64" \
-	"LIBRECHAT_MONGO_MAX_POOL_SIZE=5" "LIBRECHAT_MONGO_MIN_POOL_SIZE=1" "LIBRECHAT_MONGO_MAX_CONNECTING=1" "LIBRECHAT_MONGO_MAX_IDLE_TIME_MS=60000" "LIBRECHAT_MONGO_WAIT_QUEUE_TIMEOUT_MS=5000" "LIBRECHAT_MONGO_AUTO_INDEX=false" "LIBRECHAT_MONGO_AUTO_CREATE=false" \
-	"LIBRECHAT_REDIS_KEY_PREFIX=aichorage-librechat-prod" "LIBRECHAT_REDIS_MAX_LISTENERS=20" "LIBRECHAT_REDIS_RETRY_MAX_DELAY=2000" "LIBRECHAT_REDIS_RETRY_MAX_ATTEMPTS=0" "LIBRECHAT_REDIS_CONNECT_TIMEOUT=5000" "LIBRECHAT_REDIS_ENABLE_OFFLINE_QUEUE=false" "LIBRECHAT_USE_REDIS_CLUSTER=false" \
-	"LIBRECHAT_REDIS_DELETE_CHUNK_SIZE=100" "LIBRECHAT_REDIS_UPDATE_CHUNK_SIZE=100" "LIBRECHAT_REDIS_SCAN_COUNT=100" "LIBRECHAT_FORCED_IN_MEMORY_CACHE_NAMESPACES=CONFIG_STORE,APP_CONFIG" "LIBRECHAT_MCP_REGISTRY_CACHE_TTL=30000" "LIBRECHAT_STREAM_DELTA_COALESCE_MS=25" \
-	"LIBRECHAT_SCHEDULES_DISABLED=true" "LIBRECHAT_DEPLOYMENT_PLUGIN_HOOKS=false" "LIBRECHAT_CODE_SANDBOX_PREWARM=false" "LIBRECHAT_FILE_UPLOAD_SSE_ENABLED=false" "LIBRECHAT_CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES=16777216"; do
-	ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"
-done
 chmod 600 "$app_env"
 
-while IFS= read -r manifest; do
-	[[ -f "$manifest" ]] || continue
-	[[ "$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)" == single-follower ]] || continue
-	app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
-	app_enabled "$app_id" || continue
-	[[ "$NODE_ROLE" == follower && "$(app_target "$app_id")" == "$NODE_ID" ]] || continue
-	runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
-	runtime_file="$CONFIG_ROOT/$runtime_rel"
-	secret_keys="$(sed -n 's/^SECRET_KEYS=//p' "$manifest" | tail -n1)"
-	while IFS= read -r secret_key; do
-		[[ -n "$secret_key" ]] || continue
-		set_key "$runtime_file" "$secret_key" "${!secret_key}"
-	done < <(printf '%s\n' "$secret_keys" | tr ',' '\n')
-	chmod 600 "$runtime_file"
-done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
-for shared_key in NEW_API_SESSION_SECRET NEW_API_CRYPTO_SECRET NEW_API_SQL_DSN LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_REGION LIBRECHAT_AWS_BUCKET_NAME LIBRECHAT_AWS_FORCE_PATH_STYLE; do
-	shared_value="${!shared_key:-}"
-	[[ -n "$shared_value" ]] || continue
-	existing_value="$(sed -n "s/^${shared_key}=//p" "$app_env" | tail -n1)"
-	if [[ -n "$existing_value" && "$existing_value" != "$shared_value" && "$existing_value" != replace-with-* && "$existing_value" != file:* ]]; then
-		die "$shared_key already differs from the supplied shared secret bundle"
-	fi
-	set_key "$app_env" "$shared_key" "$shared_value"
-done
+if [[ -n "$SHARED_SECRET_BUNDLE_FILE" && -s "$SHARED_SECRET_BUNDLE_FILE" && "$SHARED_SECRET_BUNDLE_FILE" != "$CONFIG_ROOT/shared-secrets.env" ]]; then
+	install -o root -g root -m 600 "$SHARED_SECRET_BUNDLE_FILE" "$CONFIG_ROOT/shared-secrets.env"
+	SHARED_SECRET_BUNDLE_FILE="$CONFIG_ROOT/shared-secrets.env"
+fi
+persist_application_secrets() {
+	local manifest app_id keys runtime_rel runtime_file key value
+	while IFS= read -r manifest; do
+		[[ -f "$manifest" ]] || continue
+		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+		app_enabled "$app_id" || continue
+		keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		if [[ "$NODE_ROLE" == leader || "$(app_active_on_node "$app_id" && printf true || printf false)" == true ]]; then
+			while IFS= read -r key; do
+				[[ -n "$key" ]] || continue
+				value="${!key:-}"
+				[[ -n "$value" ]] || die "application secret was not prepared: $app_id/$key"
+				set_key "$app_env" "$key" "$value"
+				[[ "$NODE_ROLE" != leader ]] || set_key "$CONFIG_ROOT/shared-secrets.env" "$key" "$value"
+			done < <(printf '%s\n' "$keys" | tr ',' '\n')
+		fi
+		[[ "$NODE_ROLE" == follower ]] || continue
+		app_active_on_node "$app_id" || continue
+		keys="$(sed -n 's/^NODE_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		[[ -n "$keys" ]] || continue
+		runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
+		runtime_file="$CONFIG_ROOT/$runtime_rel"
+		while IFS= read -r key; do
+			[[ -n "$key" ]] || continue
+			value="${!key:-}"
+			[[ -n "$value" ]] || die "node-local application secret was not prepared: $app_id/$key"
+			set_key "$runtime_file" "$key" "$value"
+		done < <(printf '%s\n' "$keys" | tr ',' '\n')
+	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+}
+persist_application_secrets
 
 woodpecker_env="$FOUNDATION_ROOT/env/woodpecker.env"
+previous_woodpecker_domain="$(sed -n 's/^WOODPECKER_HOST=https:\/\/ci\.//p' "$woodpecker_env" 2>/dev/null | tail -n1)"
 if [[ ! -f "$woodpecker_env" ]]; then
 	oauth_client=""
 	oauth_secret=""
@@ -937,6 +985,7 @@ done
 chmod 600 "$caddy_env"
 
 beszel_env="$FOUNDATION_ROOT/env/beszel.env"
+previous_beszel_domain="$(sed -n 's/^BESZEL_APP_URL=https:\/\/status\.//p' "$beszel_env" 2>/dev/null | tail -n1)"
 if [[ ! -f "$beszel_env" ]]; then
 	{
 		printf 'BESZEL_APP_URL=https://status.%s\nBESZEL_DATA_ROOT=%s/hub\nBESZEL_AGENT_DATA_ROOT=%s/agent\n' "$DOMAIN_NAME" "$PLATFORM_ROOT/beszel" "$PLATFORM_ROOT/beszel"
@@ -954,8 +1003,9 @@ for pair in \
 	"BESZEL_MFA_OTP=false" "BESZEL_DISABLE_PASSWORD_AUTH=false" "BESZEL_USER_CREATION=false"; do
 	ensure_key "$beszel_env" "${pair%%=*}" "${pair#*=}"
 done
+set_derived_key "$beszel_env" BESZEL_APP_URL "https://status.$DOMAIN_NAME" "$previous_beszel_domain" 'https://status.'
 ensure_key "$beszel_env" BESZEL_AGENT_APPARMOR unconfined
-ensure_key "$beszel_env" BESZEL_HUB_URL "https://status.$DOMAIN_NAME"
+set_derived_key "$beszel_env" BESZEL_HUB_URL "https://status.$DOMAIN_NAME" "$previous_beszel_domain" 'https://status.'
 for pair in \
 	"WOODPECKER_DATA_ROOT=$PLATFORM_ROOT/woodpecker/data" "WOODPECKER_AGENT_CONFIG_ROOT=$PLATFORM_ROOT/woodpecker/agent" "WOODPECKER_DEPLOYER_CONFIG_ROOT=$PLATFORM_ROOT/woodpecker/deployer" \
 	"WOODPECKER_HOST=https://ci.$DOMAIN_NAME" "WOODPECKER_ADMIN=$WOODPECKER_ADMIN" \
@@ -966,6 +1016,9 @@ for pair in \
 	"WOODPECKER_FORCE_IGNORE_SERVICE_FAILURE=false"; do
 	ensure_key "$woodpecker_env" "${pair%%=*}" "${pair#*=}"
 done
+set_derived_key "$woodpecker_env" WOODPECKER_HOST "https://ci.$DOMAIN_NAME" "$previous_woodpecker_domain" 'https://ci.'
+set_derived_key "$woodpecker_env" WOODPECKER_AGENT_SERVER "ci-grpc.$DOMAIN_NAME:443" "$previous_woodpecker_domain" 'ci-grpc.'
+set_derived_key "$woodpecker_env" WOODPECKER_DEPLOYER_SERVER "ci-grpc.$DOMAIN_NAME:443" "$previous_woodpecker_domain" 'ci-grpc.'
 if [[ "$NODE_ROLE" == leader ]]; then
 	oauth_client="$(sed -n 's/^WOODPECKER_GITHUB_CLIENT=//p' "$woodpecker_env" | tail -n1)"
 	WOODPECKER_GITHUB_CLIENT="$oauth_client"
@@ -994,6 +1047,7 @@ done
 chmod 600 "$woodpecker_env" "$beszel_env"
 
 if [[ ! -f "$observer_env" ]]; then : >"$observer_env"; fi
+previous_observer_domain="$(sed -n 's/^OBSERVER_SITE=https:\/\/observer\.//p' "$observer_env" 2>/dev/null | tail -n1)"
 observer_data_root="$(sed -n 's/^OBSERVER_DATA_ROOT=//p' "$observer_env" | tail -n1)"
 observer_data_root="${observer_data_root:-$PLATFORM_ROOT/observer}"
 safe_observer_data_root "$observer_data_root" || die "OBSERVER_DATA_ROOT must be a non-root path below $PLATFORM_ROOT: $observer_data_root"
@@ -1054,6 +1108,9 @@ for pair in \
 	"OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS=$(observer_default_value OBSERVER_LOG_HEARTBEAT_INTERVAL_SECONDS 300)"; do
 	ensure_key "$observer_env" "${pair%%=*}" "${pair#*=}"
 done
+set_derived_key "$observer_env" OBSERVER_SITE "https://observer.$DOMAIN_NAME" "$previous_observer_domain" 'https://observer.'
+set_derived_key "$observer_env" OBSERVER_INGEST_SITE "https://observer-ingest.$DOMAIN_NAME" "$previous_observer_domain" 'https://observer-ingest.'
+set_derived_key "$observer_env" OBSERVER_INGEST_URL "https://observer-ingest.$DOMAIN_NAME" "$previous_observer_domain" 'https://observer-ingest.'
 # Credentials are deliberately written with set_key.  An earlier singleton
 # deployment may have left a placeholder in the foundation environment; using
 # ensure_key for these fields would preserve that placeholder and make the new
@@ -1109,41 +1166,29 @@ if [[ "$NODE_ROLE" == follower ]]; then
 		printf '%s' "$BESZEL_ENROLLMENT_BUNDLE_B64" | base64 --decode >"$bundle_file" || die 'invalid BESZEL_ENROLLMENT_BUNDLE_B64'
 		chmod 600 "$bundle_file"
 	elif [[ ! -s "$bundle_file" ]]; then
-		read -r -p 'Path to the Leader-generated Beszel enrollment bundle (or leave empty to defer): ' bundle_source
-		if [[ -n "$bundle_source" ]]; then install -m 600 "$bundle_source" "$bundle_file"; fi
+		if [[ -t 0 ]]; then
+			read -r -p 'Path to the Leader-generated Beszel enrollment bundle (or leave empty to defer): ' bundle_source
+			if [[ -n "$bundle_source" ]]; then install -m 600 "$bundle_source" "$bundle_file"; fi
+		else
+			# Enrollment is intentionally retryable. An unattended bootstrap can
+			# bring up Caddy, the collector, and the socket proxy before the Leader
+			# bundle is transferred; the enrollment timer will finish the agent.
+			printf 'Beszel enrollment bundle not provided; deferring agent enrollment to platform-beszel-enroll.timer\n' >&2
+		fi
 	fi
 fi
 
 restic_password="$CONFIG_ROOT/restic-password"
 [[ -s "$restic_password" ]] || openssl rand -base64 48 >"$restic_password"
 chmod 600 "$restic_password"
-if [[ -n "$SHARED_SECRET_BUNDLE_FILE" && -s "$SHARED_SECRET_BUNDLE_FILE" && "$SHARED_SECRET_BUNDLE_FILE" != "$CONFIG_ROOT/shared-secrets.env" ]]; then
-	install -o root -g root -m 600 "$SHARED_SECRET_BUNDLE_FILE" "$CONFIG_ROOT/shared-secrets.env"
-	SHARED_SECRET_BUNDLE_FILE="$CONFIG_ROOT/shared-secrets.env"
-fi
 merge_image_manifest "$SOURCE_ROOT/ops/images.foundation.prod.env" "$CONFIG_ROOT/images.foundation.env"
 merge_image_manifest "$SOURCE_ROOT/ops/images.apps.prod.env" "$CONFIG_ROOT/images.apps.env"
 
 # Persist the shared values generated or supplied on the Leader so the exact
 # same bundle can be copied to every Follower during first deployment.
-if [[ "$NODE_ROLE" == leader && ! -s "$CONFIG_ROOT/shared-secrets.env" ]]; then
-	{
-		printf 'NEW_API_SESSION_SECRET=%s\n' "$(sed -n 's/^NEW_API_SESSION_SECRET=//p' "$app_env" | tail -n1)"
-		printf 'NEW_API_CRYPTO_SECRET=%s\n' "$(sed -n 's/^NEW_API_CRYPTO_SECRET=//p' "$app_env" | tail -n1)"
-		printf 'NEW_API_SQL_DSN=%s\n' "$(sed -n 's/^NEW_API_SQL_DSN=//p' "$app_env" | tail -n1)"
-		printf 'LIBRECHAT_MONGO_URI=%s\n' "$(sed -n 's/^LIBRECHAT_MONGO_URI=//p' "$app_env" | tail -n1)"
-		printf 'LIBRECHAT_REDIS_URI=%s\n' "$(sed -n 's/^LIBRECHAT_REDIS_URI=//p' "$app_env" | tail -n1)"
-		printf 'LIBRECHAT_AWS_ENDPOINT_URL=%s\nLIBRECHAT_AWS_ACCESS_KEY_ID=%s\nLIBRECHAT_AWS_SECRET_ACCESS_KEY=%s\nLIBRECHAT_AWS_REGION=%s\nLIBRECHAT_AWS_BUCKET_NAME=%s\nLIBRECHAT_AWS_FORCE_PATH_STYLE=%s\n' "$(sed -n 's/^LIBRECHAT_AWS_ENDPOINT_URL=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_ACCESS_KEY_ID=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_SECRET_ACCESS_KEY=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_REGION=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_BUCKET_NAME=//p' "$app_env" | tail -n1)" "$(sed -n 's/^LIBRECHAT_AWS_FORCE_PATH_STYLE=//p' "$app_env" | tail -n1)"
-		printf 'LIBRECHAT_JWT_SECRET=%s\n' "$(sed -n 's/^LIBRECHAT_JWT_SECRET=//p' "$app_env" | tail -n1)"
-		printf 'LIBRECHAT_JWT_REFRESH_SECRET=%s\n' "$(sed -n 's/^LIBRECHAT_JWT_REFRESH_SECRET=//p' "$app_env" | tail -n1)"
-		printf 'LIBRECHAT_ADMIN_PANEL_SESSION_SECRET=%s\n' "$(sed -n 's/^LIBRECHAT_ADMIN_PANEL_SESSION_SECRET=//p' "$app_env" | tail -n1)"
-		printf 'WOODPECKER_AGENT_SECRET=%s\n' "$(sed -n 's/^WOODPECKER_AGENT_SECRET=//p' "$woodpecker_env" | tail -n1)"
-		printf 'WOODPECKER_GRPC_SECRET=%s\n' "$(sed -n 's/^WOODPECKER_GRPC_SECRET=//p' "$woodpecker_env" | tail -n1)"
-		printf 'OBSERVER_INGEST_USER=%s\nOBSERVER_INGEST_TOKEN=%s\n' "$(sed -n 's/^OBSERVER_INGEST_USER=//p' "$observer_env" | tail -n1)" "$(sed -n 's/^OBSERVER_INGEST_TOKEN=//p' "$observer_env" | tail -n1)"
-	} >"$CONFIG_ROOT/shared-secrets.env"
-	chmod 600 "$CONFIG_ROOT/shared-secrets.env"
-fi
 if [[ "$NODE_ROLE" == leader ]]; then
+	set_key "$CONFIG_ROOT/shared-secrets.env" WOODPECKER_AGENT_SECRET "$(sed -n 's/^WOODPECKER_AGENT_SECRET=//p' "$woodpecker_env" | tail -n1)"
+	set_key "$CONFIG_ROOT/shared-secrets.env" WOODPECKER_GRPC_SECRET "$(sed -n 's/^WOODPECKER_GRPC_SECRET=//p' "$woodpecker_env" | tail -n1)"
 	set_key "$CONFIG_ROOT/shared-secrets.env" LEADER_PUBLIC_IP "$LEADER_PUBLIC_IP"
 	set_key "$CONFIG_ROOT/shared-secrets.env" OBSERVER_INGEST_USER "$(sed -n 's/^OBSERVER_INGEST_USER=//p' "$observer_env" | tail -n1)"
 	set_key "$CONFIG_ROOT/shared-secrets.env" OBSERVER_INGEST_TOKEN "$(sed -n 's/^OBSERVER_INGEST_TOKEN=//p' "$observer_env" | tail -n1)"
@@ -1165,13 +1210,20 @@ for descriptor in "$release"/apps/*; do
 	install -d -m 700 "$CONTROL_ROOT/descriptors/$descriptor_id"
 	install -m 600 "$descriptor/manifest.env" "$CONTROL_ROOT/descriptors/$descriptor_id/manifest.env"
 done
-install -o root -g root -m 600 "$SOURCE_ROOT/compose/foundation/caddy.yml" "$FOUNDATION_ROOT/caddy.yml"
-for foundation_file in woodpecker-controller.yml woodpecker-worker.yml woodpecker-deployer.yml beszel-controller.yml beszel-worker.yml observer-controller.yml observer-collector.yml observer-vector.toml observer-log-proxy-entrypoint.sh; do
-	install -o root -g root -m 600 "$SOURCE_ROOT/compose/foundation/$foundation_file" "$FOUNDATION_ROOT/$foundation_file"
+install -d -o root -g root -m 700 "$FOUNDATION_ROOT/manifests"
+for foundation_file in "$SOURCE_ROOT"/compose/foundation/*; do
+	[[ -f "$foundation_file" ]] || continue
+	foundation_mode=600
+	[[ "$foundation_file" == *.sh ]] && foundation_mode=700
+	install -o root -g root -m "$foundation_mode" "$foundation_file" "$FOUNDATION_ROOT/$(basename "$foundation_file")"
+done
+for foundation_file in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
+	[[ -f "$foundation_file" ]] || continue
+	install -o root -g root -m 600 "$foundation_file" "$FOUNDATION_ROOT/manifests/$(basename "$foundation_file")"
 done
 
 install -d -m 700 /usr/local/libexec
-for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-secrets configure-observer-ingest enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
+for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-placement configure-app-secrets configure-observer-ingest enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
 	cat >"/usr/local/bin/$script" <<EOF
 #!/bin/sh
 exec /opt/platform/control/current/ops/$script.sh "\$@"
@@ -1234,8 +1286,7 @@ fi
 # Foundation files are installed into stable host paths. Recreate their
 # containers so repeated recovery/bootstrap runs cannot retain an old
 # bind-mounted inode (notably Vector's observer-vector.toml).
-PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all
-PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl recover --quiet
+PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all
 
 systemctl enable platform.target platform-firewall.service platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer >/dev/null
 systemctl restart platform-firewall.service platform.target platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer
@@ -1244,31 +1295,32 @@ PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot p
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet\n' >&2
 curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet\n' >&2
 print_bootstrap_summary() {
-	local foundation consumers disabled manifest app_id display_name placement origin_key public_key public_host route_label route_index groups availability_note summary_observer_root
+	local foundation consumers disabled manifest app_id display_name placement origin_key public_key public_host route_label route_index groups availability_note summary_observer_root component
 	local -a local_consumers=()
 	# Keep the summary callable from tests and recovery tooling that do not run
 	# the full data-directory initialization block first.
 	summary_observer_root="${observer_data_root:-${OBSERVER_DATA_ROOT:-${PLATFORM_ROOT:-/opt/platform}/observer}}"
-	foundation='Caddy, Beszel Agent, Observer Collector'
+	foundation='none'
 	consumers='none'
 	disabled='none'
-	if [[ "$NODE_ROLE" == leader ]]; then
-		foundation='Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer, Observer, Observer Collector'
-	else
-		foundation='Caddy, Beszel Agent, Woodpecker Agent, Observer Collector'
-	fi
+	for manifest in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
+		[[ -f "$manifest" ]] || continue
+		component="$(sed -n 's/^COMPONENT_ID=//p' "$manifest" | tail -n1)"
+		bootstrap_foundation_enabled "$component" || continue
+		[[ "$foundation" == none ]] && foundation="$component" || foundation+=", $component"
+	done
 	while IFS= read -r manifest; do
 		[[ -f "$manifest" ]] || continue
 		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 		placement="$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)"
-		case "$placement" in follower | single-follower) ;; *) continue ;; esac
+		[[ "$placement" == consumer ]] || continue
 		display_name="$(sed -n 's/^DISPLAY_NAME=//p' "$manifest" | tail -n1)"
 		display_name="${display_name:-$app_id}"
 		if ! app_enabled "$app_id"; then
 			[[ "$disabled" == none ]] && disabled="$display_name (disabled by policy)" || disabled+=", $display_name (disabled by policy)"
 			continue
 		fi
-		if [[ "$NODE_ROLE" == follower && ("$placement" == follower || ("$placement" == single-follower && "$(app_target "$app_id")" == "$NODE_ID")) ]]; then
+		if app_active_on_node "$app_id"; then
 			local_consumers+=("$display_name")
 		else
 			[[ "$disabled" == none ]] && disabled="$display_name (not on this node)" || disabled+=", $display_name (not on this node)"
@@ -1293,12 +1345,12 @@ print_bootstrap_summary() {
 			app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 			app_enabled "$app_id" || continue
 			placement="$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)"
-			case "$placement" in follower | single-follower) ;; *) continue ;; esac
+			[[ "$placement" == consumer ]] || continue
 			display_name="$(sed -n 's/^DISPLAY_NAME=//p' "$manifest" | tail -n1)"
 			display_name="${display_name:-$app_id}"
 			groups="$(sed -n 's/^ROUTE_GROUPS=//p' "$manifest" | tail -n1)"
 			availability_note='available after a Follower is healthy'
-			[[ "$placement" == single-follower ]] && availability_note='available after its selected Follower is healthy'
+			[[ "$(sed -n 's/^UPSTREAM_MODE=//p' "$manifest" | tail -n1)" == singleton ]] && availability_note='available after its selected Follower is healthy'
 			route_index=0
 			while IFS='|' read -r public_key _; do
 				[[ -n "$public_key" ]] || continue
@@ -1318,7 +1370,7 @@ print_bootstrap_summary() {
 				app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 				app_enabled "$app_id" || continue
 				placement="$(sed -n 's/^PLACEMENT=//p' "$manifest" | tail -n1)"
-				[[ "$placement" == follower || ("$placement" == single-follower && "$(app_target "$app_id")" == "$NODE_ID") ]] || continue
+				app_active_on_node "$app_id" || continue
 				display_name="$(sed -n 's/^DISPLAY_NAME=//p' "$manifest" | tail -n1)"
 				display_name="${display_name:-$app_id}"
 				groups="$(sed -n 's/^ROUTE_GROUPS=//p' "$manifest" | tail -n1)"

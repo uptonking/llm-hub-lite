@@ -74,15 +74,35 @@ NODE_ID="${NODE_ID:-leader}"
 	exit 1
 }
 NODE_TAG="node:$NODE_ID"
-NEW_API_BACKUP_NODE_ID="$(policy_value NEW_API_BACKUP_NODE_ID)"
-NEW_API_BACKUP_NODE_ID="${NEW_API_BACKUP_NODE_ID:-$NODE_ID}"
-newapi_enabled=1
+newapi_enabled=0
 newapi_manifest="$CONTROL_ROOT/current/apps/newapi/manifest.env"
 newapi_policy_rel="$(sed -n 's/^POLICY_FILE=//p' "$newapi_manifest" 2>/dev/null | tail -n1 || true)"
-[[ "$(env_value ENABLED "$CONTROL_ROOT/current/config/$newapi_policy_rel")" == false ]] && newapi_enabled=0
+newapi_policy="$CONTROL_ROOT/current/config/$newapi_policy_rel"
+[[ "$(env_value ENABLED "$newapi_policy")" == true ]] && newapi_enabled=1
+NEW_API_BACKUP_NODE_ID="$(env_value NEW_API_BACKUP_NODE_ID "$newapi_policy")"
+NEW_API_BACKUP_NODE_ID="${NEW_API_BACKUP_NODE_ID:-$NODE_ID}"
 if ((newapi_enabled == 1)) && [[ -f "$CLUSTER_POLICY_FILE" ]]; then
-	csv_has "$(policy_value NODE_IDS)" "$NEW_API_BACKUP_NODE_ID" || {
-		printf 'NEW_API_BACKUP_NODE_ID is absent from cluster inventory: %s\n' "$NEW_API_BACKUP_NODE_ID" >&2
+	csv_has "$(env_value NODES "$newapi_policy")" "$NEW_API_BACKUP_NODE_ID" || {
+		printf 'NEW_API_BACKUP_NODE_ID is absent from New API placement: %s\n' "$NEW_API_BACKUP_NODE_ID" >&2
+		exit 1
+	}
+fi
+librechat_manifest="$CONTROL_ROOT/current/apps/librechat/manifest.env"
+librechat_policy_rel="$(sed -n 's/^POLICY_FILE=//p' "$librechat_manifest" 2>/dev/null | tail -n1 || true)"
+librechat_policy="$CONTROL_ROOT/current/config/$librechat_policy_rel"
+librechat_enabled=0
+if [[ -f "$librechat_manifest" && "$(env_value ENABLED "$librechat_policy")" == true ]]; then
+	librechat_enabled=1
+fi
+librechat_nodes="$(env_value NODES "$librechat_policy")"
+LIBRECHAT_MONGO_BACKUP_ENABLED="$(env_value MONGO_BACKUP_ENABLED "$librechat_policy")"
+LIBRECHAT_MONGO_BACKUP_ENABLED="${LIBRECHAT_MONGO_BACKUP_ENABLED:-false}"
+LIBRECHAT_MONGO_BACKUP_NODE_ID="$(env_value MONGO_BACKUP_NODE_ID "$librechat_policy")"
+LIBRECHAT_MONGO_BACKUP_NODE_ID="${LIBRECHAT_MONGO_BACKUP_NODE_ID:-${librechat_nodes%%,*}}"
+LIBRECHAT_MONGO_BACKUP_NODE_ID="${LIBRECHAT_MONGO_BACKUP_NODE_ID:-$NODE_ID}"
+if ((librechat_enabled == 1)) && truthy "$LIBRECHAT_MONGO_BACKUP_ENABLED" && [[ -f "$CLUSTER_POLICY_FILE" ]]; then
+	csv_has "$librechat_nodes" "$LIBRECHAT_MONGO_BACKUP_NODE_ID" || {
+		printf 'MONGO_BACKUP_NODE_ID is absent from LibreChat placement: %s\n' "$LIBRECHAT_MONGO_BACKUP_NODE_ID" >&2
 		exit 1
 	}
 fi
@@ -114,9 +134,6 @@ RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-3600}"
 RESTIC_SCHEDULE_MARKER="${RESTIC_SCHEDULE_MARKER:-/run/llm-hub-lite/restic-scheduled.timestamp}"
 NEW_API_SQL_DSN="${NEW_API_SQL_DSN:-$(env_value NEW_API_SQL_DSN)}"
 LIBRECHAT_MONGO_URI="${LIBRECHAT_MONGO_URI:-$(env_value LIBRECHAT_MONGO_URI)}"
-LIBRECHAT_MONGO_BACKUP_ENABLED="${LIBRECHAT_MONGO_BACKUP_ENABLED:-$(env_value LIBRECHAT_MONGO_BACKUP_ENABLED)}"
-LIBRECHAT_MONGO_BACKUP_NODE_ID="${LIBRECHAT_MONGO_BACKUP_NODE_ID:-$(env_value LIBRECHAT_MONGO_BACKUP_NODE_ID)}"
-LIBRECHAT_MONGO_BACKUP_NODE_ID="${LIBRECHAT_MONGO_BACKUP_NODE_ID:-worker-1}"
 WOODPECKER_DATA_ROOT="${WOODPECKER_DATA_ROOT:-$PLATFORM_ROOT/woodpecker/data}"
 BESZEL_DATA_ROOT="${BESZEL_DATA_ROOT:-$PLATFORM_ROOT/beszel/hub}"
 CADDY_DATA_ROOT="${CADDY_DATA_ROOT:-$PLATFORM_ROOT/caddy}"
@@ -331,12 +348,16 @@ backup_postgres() {
 	pg_restore --list "$STAGE_ROOT/postgres/new-api.dump" >/dev/null
 }
 backup_librechat_mongo() {
-	[[ "$NODE_ID" == "$LIBRECHAT_MONGO_BACKUP_NODE_ID" ]] || {
-		printf 'MongoDB Atlas export skipped: backup owner is %s (local node=%s)\n' "$LIBRECHAT_MONGO_BACKUP_NODE_ID" "$NODE_ID"
+	((librechat_enabled == 1)) || {
+		printf 'MongoDB Atlas export skipped: LibreChat is disabled by cluster policy\n'
 		return 0
 	}
-	[[ "$LIBRECHAT_MONGO_BACKUP_ENABLED" == true || "$LIBRECHAT_MONGO_BACKUP_ENABLED" == TRUE || "$LIBRECHAT_MONGO_BACKUP_ENABLED" == 1 ]] || {
-		printf 'MongoDB Atlas export skipped: set LIBRECHAT_MONGO_BACKUP_ENABLED=true and install mongodump to enable it\n'
+	truthy "$LIBRECHAT_MONGO_BACKUP_ENABLED" || {
+		printf 'MongoDB Atlas export skipped: set MONGO_BACKUP_ENABLED=true in config/cluster/apps/librechat.policy to enable it\n'
+		return 0
+	}
+	[[ "$NODE_ID" == "$LIBRECHAT_MONGO_BACKUP_NODE_ID" ]] || {
+		printf 'MongoDB Atlas export skipped: backup owner is %s (local node=%s)\n' "$LIBRECHAT_MONGO_BACKUP_NODE_ID" "$NODE_ID"
 		return 0
 	}
 	[[ -n "$LIBRECHAT_MONGO_URI" ]] || {

@@ -9,14 +9,22 @@ grep -Fq "printf '%s' \"\$value\" | LC_ALL=C grep '[[:cntrl:]]'" "$bootstrap"
 grep -Fq 'bootstrap-pending' "$bootstrap"
 grep -Fq 'prompt_observer_ingest_token()' "$bootstrap"
 grep -Fq 'OBSERVER_INGEST_TOKEN must be an OpenObserve token' "$bootstrap"
-grep -Fq 'AICHOROUTER_MEMORY_LIMIT="${AICHOROUTER_MEMORY_LIMIT:-768m}"' "$bootstrap"
-grep -Fq 'AICHOROUTER_CPUS="${AICHOROUTER_CPUS:-0.9}"' "$bootstrap"
-grep -Fq 'AICHOROUTER_GOMEMLIMIT="${AICHOROUTER_GOMEMLIMIT:-500MiB}"' "$bootstrap"
+if grep -Fq 'AICHOROUTER_MEMORY_LIMIT="${AICHOROUTER_MEMORY_LIMIT:-768m}"' "$bootstrap"; then
+	printf 'bootstrap still owns application resource tuning\n' >&2
+	exit 1
+fi
+grep -Fq 'AICHOROUTER_MEMORY_LIMIT=768m' "$repo_root/apps/aichorouter/config.env"
+grep -Fq 'AICHOROUTER_GOMEMLIMIT=500MiB' "$repo_root/apps/aichorouter/config.env"
 grep -Fq 'RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-3600}"' "$bootstrap"
 grep -Fq 'runtime_setting()' "$bootstrap"
 grep -Fq 'OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-}"' "$bootstrap"
 grep -Fq 'OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-llm-hub-lite-collector}"' "$bootstrap"
 grep -Fq 'observer_default_value()' "$bootstrap"
+grep -Fq 'set_derived_key()' "$bootstrap"
+grep -Fq 'previous_app_domain=' "$bootstrap"
+grep -Fq 'set_derived_key "$app_env" WOODPECKER_SITE' "$bootstrap"
+grep -Fq 'set_derived_key "$app_env" BESZEL_SITE' "$bootstrap"
+grep -Fq 'previous_observer_domain=' "$bootstrap"
 grep -Fq 'OBSERVER_DURABLE_WARN_BYTES=$(observer_default_value OBSERVER_DURABLE_WARN_BYTES 8589934592)' "$bootstrap"
 grep -Fq 'OBSERVER_LOG_BUFFER_WARN_PERCENT=$(observer_default_value OBSERVER_LOG_BUFFER_WARN_PERCENT 80)' "$bootstrap"
 grep -Fq 'safe_observer_data_root()' "$bootstrap"
@@ -53,7 +61,6 @@ grep -Fq 'container HTTPS preflight failed' "$bootstrap"
 grep -Fq 'Older bootstraps nested Hub and agent state' "$bootstrap"
 grep -Fq 'migrate_legacy_woodpecker_layout' "$bootstrap"
 grep -Fq '[[ -z "$LEADER_PUBLIC_IP" && -r "$CONFIG_ROOT/node.env" ]]' "$bootstrap"
-grep -Fq 'LibreChat Upstash requires a TLS rediss:// URI' "$bootstrap"
 grep -Fq 'unable to pull image after $attempt attempts' "$bootstrap"
 grep -Fq 'pull_image "$image_ref"' "$bootstrap"
 grep -Fq 'unable to fetch $MAIN_BRANCH after $attempt attempts' "$bootstrap"
@@ -62,15 +69,11 @@ grep -Fq 'unable to clone $MAIN_BRANCH after $attempt attempts' "$bootstrap"
 grep -Fq 'source root already exists but is not a Git checkout' "$bootstrap"
 grep -Fq 'Skipping image for disabled or inactive service' "$bootstrap"
 grep -Fq 'merge_image_manifest' "$bootstrap"
-image_function="$(sed -n '/^csv_contains() {/,/^}/p; /^bootstrap_foundation_enabled() {/,/^}/p; /^app_policy_file() {/,/^}/p; /^app_enabled() {/,/^}/p; /^app_target() {/,/^}/p; /^image_required() {/,/^}/p' "$bootstrap")"
+image_function="$(sed -n '/^csv_contains() {/,/^}/p; /^bootstrap_foundation_enabled() {/,/^}/p; /^app_policy_file() {/,/^}/p; /^app_enabled() {/,/^}/p; /^app_nodes() /p; /^app_target() {/,/^}/p; /^app_active_on_node() {/,/^}/p; /^image_required() {/,/^}/p' "$bootstrap")"
 image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bash -c '
 	set -Eeuo pipefail
 	eval "$IMAGE_FUNCTION"
-	tmp_policy="$(mktemp)"
-	trap '\''rm -f "$tmp_policy"'\'' EXIT
-	printf "FOUNDATION_FOLLOWER=beszel-worker,woodpecker-worker,observer-collector\\nFOUNDATION_LEADER=observer-controller,observer-collector\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
-	policy_file="$tmp_policy" NODE_ROLE=follower NODE_ID=worker-1
-	newapi_enabled=0 librechat_enabled=1
+	NODE_ROLE=follower NODE_ID=worker-1 NODE_STATE=active
 	for key in CADDY_IMAGE BESZEL_AGENT_IMAGE WOODPECKER_AGENT_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE CURSORAPI_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
 		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
 	done
@@ -89,11 +92,7 @@ grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$image_selection"
 leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bash -c '
 	set -Eeuo pipefail
 	eval "$IMAGE_FUNCTION"
-	tmp_policy="$(mktemp)"
-	trap '\''rm -f "$tmp_policy"'\'' EXIT
-	printf "FOUNDATION_LEADER=caddy,woodpecker-controller,woodpecker-deployer,beszel-controller,beszel-worker,observer-controller,observer-collector\\nDISABLED_FOUNDATION=\\n" >"$tmp_policy"
-	policy_file="$tmp_policy" NODE_ROLE=leader NODE_ID=leader
-	newapi_enabled=1 librechat_enabled=1
+	NODE_ROLE=leader NODE_ID=leader NODE_STATE=active
 	for key in CADDY_IMAGE LIBRECHAT_API_IMAGE NEW_API_IMAGE CPAPI_IMAGE AICHOROUTER_IMAGE CURSORAPI_IMAGE OBSERVER_IMAGE OBSERVER_LOG_PROXY_IMAGE OBSERVER_LOG_SHIPPER_IMAGE; do
 		if image_required "$key"; then printf "%s=required\\n" "$key"; else printf "%s=skipped\\n" "$key"; fi
 	done
@@ -107,19 +106,30 @@ grep -Fqx 'CURSORAPI_IMAGE=skipped' <<<"$leader_image_selection"
 grep -Fqx 'OBSERVER_IMAGE=required' <<<"$leader_image_selection"
 grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=required' <<<"$leader_image_selection"
 grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$leader_image_selection"
-grep -Fq 'if [[ "$NODE_ROLE" == leader ]]; then' "$bootstrap"
 grep -Fq 'missing cluster policy' "$bootstrap"
-grep -Fq 'newapi_enabled=0' "$bootstrap"
-grep -Fq 'librechat_enabled=0' "$bootstrap"
-grep -Fq 'prompt_required LIBRECHAT_MONGO_URI' "$bootstrap"
-grep -Fq 'prompt_required LIBRECHAT_REDIS_URI' "$bootstrap"
-grep -Fq 'old_ifs="$IFS"' "$bootstrap"
-grep -Fq 'for manifest in "$SOURCE_ROOT"/apps/*/manifest.env' "$bootstrap"
-grep -Fq 'generate_shared_secret LIBRECHAT_JWT_SECRET' "$bootstrap"
-grep -Fq 'prompt_required NEW_API_SQL_DSN' "$bootstrap"
-grep -Fq 'prompt_required NEW_API_SESSION_SECRET' "$bootstrap"
-grep -Fq 'load_runtime_value "$secret_key" "$runtime_file"' "$bootstrap"
-grep -Fq 'prompt_required "$secret_key" "$app_id $secret_key" 1' "$bootstrap"
+grep -Fq 'BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-first}"' "$bootstrap"
+grep -Fq 'BOOTSTRAP_MODE must be first or repair' "$bootstrap"
+grep -Fq "CLUSTER_CONFIG_VERSION=//p' \"\$policy_file\"" "$bootstrap"
+grep -Fq 'NODE_STATE="$(sed -n' "$bootstrap"
+grep -Fq 'cannot bootstrap a node in $NODE_STATE state' "$bootstrap"
+grep -Fq 'BOOTSTRAP_MODE=repair requires an existing node installation' "$bootstrap"
+grep -Fq 'find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env' "$bootstrap"
+grep -Fq 'prepare_application_secrets()' "$bootstrap"
+grep -Fq 'persist_application_secrets()' "$bootstrap"
+grep -Fq "s/^CLUSTER_SECRET_KEYS=//p" "$bootstrap"
+grep -Fq "s/^NODE_SECRET_KEYS=//p" "$bootstrap"
+grep -Fq "s/^GENERATED_SECRET_KEYS=//p" "$bootstrap"
+grep -Fq 'set_key "$CONFIG_ROOT/shared-secrets.env" "$key" "$value"' "$bootstrap"
+grep -Fq 'Create the shared application environment before resolving application' "$bootstrap"
+grep -Fq '"DATA_ROOT=$APP_ROOT/shared/data/prod"' "$bootstrap"
+app_env_init_line="$(grep -n '^if \[\[ ! -f "\$app_env" \]\]; then$' "$bootstrap" | head -n1 | cut -d: -f1)"
+prepare_call_line="$(grep -n '^prepare_application_secrets$' "$bootstrap" | head -n1 | cut -d: -f1)"
+[[ -n "$app_env_init_line" && -n "$prepare_call_line" && "$app_env_init_line" -lt "$prepare_call_line" ]] || {
+	printf 'bootstrap initializes .env.prod after secret reconciliation\n' >&2
+	exit 1
+}
+grep -Fq 'manifest_secret_min_length' "$bootstrap"
+grep -Fq 'app_active_on_node "$app_id"' "$bootstrap"
 grep -Fq 'generate_shared_secret WOODPECKER_AGENT_SECRET' "$bootstrap"
 grep -Fq "prompt_required LEADER_PUBLIC_IP 'Leader public IPv4 address'" "$bootstrap"
 grep -Fq "set_key \"\$CONFIG_ROOT/node.env\" LEADER_PUBLIC_IP \"\$LEADER_PUBLIC_IP\"" "$bootstrap"
@@ -130,9 +140,10 @@ grep -Fq 'production bootstrap requires RESTIC_REMOTE_ENABLED=true' "$bootstrap"
 grep -Fq 'remote Restic repository is unavailable or uninitialized' "$bootstrap"
 grep -Fq 'restic snapshots --no-lock' "$bootstrap"
 grep -Fq 'print_bootstrap_summary' "$bootstrap"
-grep -Fq 'PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all' "$bootstrap"
+grep -Fq 'PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all' "$bootstrap"
 grep -Fq 'OBSERVER_LOG_PROXY_STREAM_TIMEOUT=$(observer_default_value OBSERVER_LOG_PROXY_STREAM_TIMEOUT 24h)' "$bootstrap"
-grep -Fq 'observer-vector.toml observer-log-proxy-entrypoint.sh' "$bootstrap"
+grep -Fq 'for foundation_file in "$SOURCE_ROOT"/compose/foundation/*' "$bootstrap"
+grep -Fq 'for foundation_file in "$SOURCE_ROOT"/compose/foundation/manifests/*.env' "$bootstrap"
 grep -Fq "printf 'Services\\n  Foundation:" "$bootstrap"
 grep -Fq "printf 'Endpoints\\n'" "$bootstrap"
 grep -Fq "printf '\\nNext tasks\\n'" "$bootstrap"
@@ -141,6 +152,9 @@ grep -Fq 'available after a Follower is healthy' "$bootstrap"
 grep -Fq 'available after its selected Follower is healthy' "$bootstrap"
 grep -Fq 'BOOTSTRAP_ASSUME_YES' "$bootstrap"
 grep -Fq 'bootstrap confirmation was not received' "$bootstrap"
+grep -Fq "read -r -p 'Node role (leader or follower): ' requested_role" "$bootstrap"
+grep -Fq "read -r -p 'Stable follower node ID: ' NODE_ID" "$bootstrap"
+grep -Fq "NODE_ID is required for non-interactive bootstrap" "$bootstrap"
 grep -Fq 'origin: https://' "$bootstrap"
 summary_function="$(sed -n '/^print_bootstrap_summary() {/,/^}/p' "$bootstrap")"
 summary_inventory="$(mktemp)"
@@ -157,8 +171,12 @@ CPAPI_SITE=https://cpapi.example.test
 CURSORAPI_SITE=https://cursorapi.example.test
 OBSERVER_SITE=https://observer.example.test
 EOF
-summary_helpers='app_enabled() { local app="$1" rel; rel="$(sed -n '\''s/^POLICY_FILE=//p'\'' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"; [[ "$(sed -n '\''s/^ENABLED=//p'\'' "$SOURCE_ROOT/config/$rel" | tail -n1)" != false ]]; }
-app_target() { local app="$1" key rel; key="$(sed -n '\''s/^TARGET_NODE_KEY=//p'\'' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"; rel="$(sed -n '\''s/^POLICY_FILE=//p'\'' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"; sed -n "s/^$key=//p" "$SOURCE_ROOT/config/$rel" | tail -n1; }'
+summary_helpers='csv_contains() { local csv=",${1//[[:space:]]/},"; [[ "$csv" == *",$2,"* ]]; }
+app_policy_file() { local app="$1" rel; rel="$(sed -n '\''s/^POLICY_FILE=//p'\'' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"; printf "%s/config/%s\\n" "$SOURCE_ROOT" "$rel"; }
+app_enabled() { [[ "$(sed -n '\''s/^ENABLED=//p'\'' "$(app_policy_file "$1")" | tail -n1)" != false ]]; }
+app_nodes() { sed -n '\''s/^NODES=//p'\'' "$(app_policy_file "$1")" | tail -n1; }
+app_active_on_node() { local app="$1"; app_enabled "$app" && [[ "$NODE_ROLE" == follower ]] && csv_contains "$(app_nodes "$app")" "$NODE_ID"; }
+bootstrap_foundation_enabled() { local component="$1" manifest roles policy_rel enabled mandatory; manifest="$SOURCE_ROOT/compose/foundation/manifests/$component.env"; roles="$(sed -n '\''s/^ROLES=//p'\'' "$manifest" | tail -n1)"; csv_contains "$roles" "$NODE_ROLE" || return 1; policy_rel="$(sed -n '\''s/^POLICY_FILE=//p'\'' "$manifest" | tail -n1)"; enabled="$(sed -n '\''s/^ENABLED=//p'\'' "$SOURCE_ROOT/config/$policy_rel" | tail -n1)"; mandatory="$(sed -n '\''s/^MANDATORY=//p'\'' "$manifest" | tail -n1)"; [[ "$mandatory" != true || "$enabled" == true ]] && [[ "$enabled" == true ]]; }'
 leader_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summary_helpers" INVENTORY_FILE="$summary_inventory" bash -c '
 	set -Eeuo pipefail
 	eval "$SUMMARY_HELPERS"
@@ -167,7 +185,7 @@ leader_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summary
 	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
-grep -Fq 'Foundation: Caddy, Beszel Hub, Beszel Agent, Woodpecker Server, Woodpecker Deployer, Observer, Observer Collector' <<<"$leader_summary"
+grep -Fq 'Foundation: beszel-controller, beszel-worker, caddy, observer-collector, observer-controller, woodpecker-controller, woodpecker-deployer' <<<"$leader_summary"
 grep -Fq 'Consumers: none' <<<"$leader_summary"
 grep -Fq 'LibreChat: https://chat.example.test (available after a Follower is healthy)' <<<"$leader_summary"
 grep -Fq 'Bootstrap worker-1, then worker-2.' <<<"$leader_summary"
@@ -179,7 +197,7 @@ follower_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summa
 	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
-grep -Fq 'Foundation: Caddy, Beszel Agent, Woodpecker Agent, Observer Collector' <<<"$follower_summary"
+grep -Fq 'Foundation: beszel-worker, caddy, observer-collector, woodpecker-worker' <<<"$follower_summary"
 grep -Fq 'Consumers: Aichorouter, CPAPI, Cursor API Proxy, LibreChat' <<<"$follower_summary"
 grep -Fq 'LibreChat origin: https://worker-chat-origin.example.test' <<<"$follower_summary"
 grep -Fq 'Daily deployments are workflow-driven' <<<"$follower_summary"
@@ -278,4 +296,22 @@ if grep -Fq "WOODPECKER_AGENT_SECRET:-\$(openssl rand" "$bootstrap"; then
 	printf 'bootstrap still generates an unshared Woodpecker secret\n' >&2
 	exit 1
 fi
+derived_functions="$(sed -n '/^ensure_key() {/,/^}/p; /^set_key() {/,/^}/p; /^set_derived_key() {/,/^}/p' "$bootstrap")"
+derived_result="$(DERIVED_FUNCTIONS="$derived_functions" bash -c '
+	set -Eeuo pipefail
+	eval "$DERIVED_FUNCTIONS"
+	tmp="$(mktemp -d)"
+	trap '\''rm -rf "$tmp"'\'' EXIT
+	printf '\''DOMAIN_NAME=old.example\nOBSERVER_SITE=https://observer.old.example\n'\'' >"$tmp/generated.env"
+	set_derived_key "$tmp/generated.env" OBSERVER_SITE https://observer.new.example old.example https://observer.
+	grep -Fqx '\''OBSERVER_SITE=https://observer.new.example'\'' "$tmp/generated.env"
+	printf '\''OBSERVER_SITE=https://custom.example\n'\'' >"$tmp/custom.env"
+	set_derived_key "$tmp/custom.env" OBSERVER_SITE https://observer.new.example old.example https://observer.
+	grep -Fqx '\''OBSERVER_SITE=https://custom.example'\'' "$tmp/custom.env"
+	printf '\''preserved-custom\n'\''
+')"
+[[ "$derived_result" == preserved-custom ]] || {
+	printf 'derived URL migration did not update generated values and preserve overrides\n' >&2
+	exit 1
+}
 printf 'bootstrap policy tests passed\n'

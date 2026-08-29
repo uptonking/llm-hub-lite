@@ -1,1 +1,4 @@
 ENABLED=false
+NODES=worker-1,worker-2
+NEW_API_MIGRATION_NODE_ID=worker-1
+NEW_API_BACKUP_NODE_ID=worker-2

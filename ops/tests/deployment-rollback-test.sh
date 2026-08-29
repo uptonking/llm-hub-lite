@@ -2,6 +2,35 @@
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+lock_key="${repo_root//[^A-Za-z0-9]/_}"
+test_lock_dir="${TMPDIR:-/tmp}/llm-hub-lite-${lock_key}-deployment-rollback-test.lock"
+acquire_test_lock() {
+	local owner
+	if mkdir "$test_lock_dir" 2>/dev/null; then
+		printf '%s\n' "$$" >"$test_lock_dir/pid"
+		return
+	fi
+	owner="$(cat "$test_lock_dir/pid" 2>/dev/null || true)"
+	if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+		printf 'deployment rollback test is already running (pid %s); refusing a concurrent run\n' "$owner" >&2
+		exit 2
+	fi
+	rm -f -- "$test_lock_dir/pid" 2>/dev/null || true
+	rmdir "$test_lock_dir" 2>/dev/null || {
+		printf 'unable to clear stale deployment rollback test lock: %s\n' "$test_lock_dir" >&2
+		exit 2
+	}
+	mkdir "$test_lock_dir" || {
+		printf 'unable to acquire deployment rollback test lock: %s\n' "$test_lock_dir" >&2
+		exit 2
+	}
+	printf '%s\n' "$$" >"$test_lock_dir/pid"
+}
+release_test_lock() {
+	rm -f -- "$test_lock_dir/pid" 2>/dev/null || true
+	rmdir "$test_lock_dir" 2>/dev/null || true
+}
+acquire_test_lock
 tmp="$(mktemp -d)"
 work=""
 
@@ -28,16 +57,16 @@ debug_on_failure() {
 		printf '%s\n' '--- end deployment rollback test diagnostics ---' >&2
 	fi
 	rm -rf "$tmp"
+	release_test_lock
 	exit "$status"
 }
 trap debug_on_failure EXIT
 interrupted() {
-	# A controller normally runs synchronously, but an interrupt can arrive
-	# while its process substitution (or tee logger) is still attached. Stop
-	# direct children before the EXIT trap removes the transaction tree.
+	# The test runs synchronously and has no asynchronous children to reap.
+	# Avoid a broad process-group kill that can terminate unrelated commands.
 	trap - EXIT HUP INT TERM
-	pkill -TERM -P $$ 2>/dev/null || true
 	rm -rf -- "$tmp"
+	release_test_lock
 	exit 130
 }
 trap interrupted HUP INT TERM
@@ -45,6 +74,18 @@ trap interrupted HUP INT TERM
 # production retry counts while removing artificial backoff from this test.
 export DEPLOY_FETCH_RETRY_DELAY_SECONDS=0 DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS=0
 export DEPLOY_LOG_TEE=0
+# The fixture exercises release/scope/rollback semantics, not Docker Compose or
+# Caddy itself. Skip candidate rendering in every child platformctl validation
+# so the release matrix stays bounded on macOS Bash and small CI runners.
+export PLATFORM_TEST_MODE=1
+export PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1
+export PLATFORM_TEST_SKIP_SYNC_VALIDATION=1
+export PLATFORM_TEST_SKIP_RENDER=1
+export PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=1
+# Every platformctl call in this fixture is a deterministic stub. The first
+# release still runs the controller's full candidate validation (including
+# image-lock and release-structure checks); later transactions avoid rebuilding
+# that same validation tree because platformctl-test.sh covers the matrix.
 
 remote="$tmp/remote.git"
 work="$tmp/work"
@@ -79,7 +120,17 @@ cat >"$tmp/bin/docker" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${DOCKER_CALL_LOG:?}"
 case "$*" in
-  *"ps -aq --filter label=com.docker.compose.project=app-aichorouter"*) printf 'removed-aichorouter-container\n';;
+  *"ps -aq --filter label=com.docker.compose.project=app-pigeon"*)
+    [ "${FAIL_DOCKER_PS:-0}" = 1 ] && exit 1
+    printf 'removed-pigeon-container\n'
+    ;;
+  *"ps -aq --filter label=com.docker.compose.project=foundation-woodpecker-deployer"*)
+    [ "${FAIL_DOCKER_PS:-0}" = 1 ] && exit 1
+    printf 'removed-woodpecker-deployer-container\n'
+    ;;
+  "rm -f removed-pigeon-container"|"rm -f removed-woodpecker-deployer-container")
+    [ "${FAIL_DOCKER_RM:-0}" = 1 ] && exit 1
+    ;;
 esac
 exit 0
 EOF
@@ -100,9 +151,9 @@ config_root="$tmp/config"
 cp "$repo_root/.env.prod.example" "$app_root/shared/.env.prod"
 cp "$repo_root/ops/images.apps.prod.env" "$config_root/images.apps.env"
 cp "$repo_root/ops/images.foundation.prod.env" "$config_root/images.foundation.env"
-cp "$repo_root/ops/foundation"/*.env.example "$platform_root/foundation/env/"
-cp "$repo_root/ops/foundation/observer.env.example" \
-	"$platform_root/foundation/env/observer.env"
+for source in "$repo_root"/ops/foundation/*.env.example; do
+	cp "$source" "$platform_root/foundation/env/$(basename "$source" .example)"
+done
 sed -e 's#^OBSERVER_ROOT_USER_EMAIL=.*#OBSERVER_ROOT_USER_EMAIL=observer-admin@aichorage.test#' \
 	-e 's#^OBSERVER_ROOT_USER_PASSWORD=.*#OBSERVER_ROOT_USER_PASSWORD=test-observer-password#' \
 	-e 's#^OBSERVER_INGEST_TOKEN=.*#OBSERVER_INGEST_TOKEN=o2oi_00000000000000000000000000000000#' \
@@ -137,6 +188,11 @@ export DEPLOY_CONFIG_FILE="$tmp/config.env"
 export PLATFORMCTL_CALL_LOG="$tmp/platformctl.log" BACKUP_CALL_LOG="$tmp/backup.log"
 export FOUNDATION_RECREATE_CALL_LOG="$tmp/foundation-recreate.log"
 export PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose"
+: >"$tmp/docker.log"
+: >"$tmp/platform-compose.log"
+: >"$tmp/platformctl.log"
+: >"$tmp/backup.log"
+: >"$tmp/foundation-recreate.log"
 export GIT_CONFIG_COUNT=2
 export GIT_CONFIG_KEY_0="url.file://$remote.insteadOf"
 export GIT_CONFIG_VALUE_0=https://github.com/test/repo.git
@@ -161,6 +217,9 @@ if grep -Eq '^pull (calciumion/new-api|eceasy/cli-proxy-api)' "$tmp/docker.log";
 	printf 'application deployment pulled an image for a disabled consumer\n' >&2
 	exit 1
 fi
+# Subsequent cases focus on release pointers, scope, backup, cleanup, and
+# rollback behavior. Their Docker/Compose dependencies are deterministic stubs.
+export DEPLOY_TEST_SKIP_RELEASE_VALIDATION=1
 
 # A failed inventory reconciliation must restore both the release pointer and
 # the complete previous runtime node file, including the private Leader IP.
@@ -182,12 +241,27 @@ FAIL_SYNC=0 bash "$repo_root/ops/deploy-controller.sh" cluster-reconcile "$sha_n
 grep -qx 'NODE_CPAPI_ORIGIN_HOST=changed-cpapi-origin.aichorage.test' "$config_root/node.env"
 grep -qx 'LEADER_PUBLIC_IP=192.0.2.10' "$config_root/node.env"
 
-git -C "$work" rm --quiet -r apps/aichorouter
-git -C "$work" -c commit.gpgsign=false commit --quiet -m remove-singleton
+git -C "$work" rm --quiet -r apps/pigeon
+sed '/^PIGEON_IMAGE=/d' "$work/ops/images.apps.prod.env" >"$tmp/images.apps.without-pigeon"
+mv "$tmp/images.apps.without-pigeon" "$work/ops/images.apps.prod.env"
+git -C "$work" add ops/images.apps.prod.env
+git -C "$work" -c commit.gpgsign=false commit --quiet -m remove-disabled-consumer
 git -C "$work" push --quiet origin HEAD:main
 sha_removed="$(git -C "$work" rev-parse HEAD)"
-bash "$repo_root/ops/deploy-controller.sh" deploy "$sha_removed" >/dev/null
-grep -Fqx 'rm -f removed-aichorouter-container' "$tmp/docker.log"
+if FAIL_DOCKER_PS=1 bash "$repo_root/ops/deploy-controller.sh" app-upgrade "$sha_removed" >"$tmp/deploy-remove-enumeration.log" 2>&1; then
+	printf 'application removal ignored a Docker enumeration failure\n' >&2
+	exit 1
+fi
+grep -Fq 'unable to enumerate containers for removed application: app-pigeon' "$tmp/deploy-remove-enumeration.log"
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_node" ]]
+if FAIL_DOCKER_RM=1 bash "$repo_root/ops/deploy-controller.sh" app-upgrade "$sha_removed" >"$tmp/deploy-remove-container.log" 2>&1; then
+	printf 'application removal ignored a Docker container removal failure\n' >&2
+	exit 1
+fi
+grep -Fq 'unable to stop removed application project: app-pigeon' "$tmp/deploy-remove-container.log"
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_node" ]]
+bash "$repo_root/ops/deploy-controller.sh" app-upgrade "$sha_removed" >/dev/null
+grep -Fqx 'rm -f removed-pigeon-container' "$tmp/docker.log"
 
 printf '\nrollback test change\n' >>"$work/README.md"
 git -C "$work" add README.md
@@ -202,8 +276,8 @@ fi
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_removed" ]]
 grep -qx 'sync all' "$tmp/platformctl.log"
 
-printf '\nconfig route change\n' >>"$work/config/Caddyfile"
-git -C "$work" add config/Caddyfile
+printf '\napplication config change\n' >>"$work/apps/cpapi/config.env"
+git -C "$work" add apps/cpapi/config.env
 git -C "$work" -c commit.gpgsign=false commit --quiet -m config-change
 git -C "$work" push --quiet origin HEAD:main
 sha3="$(git -C "$work" rev-parse HEAD)"
@@ -237,19 +311,19 @@ fi
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
 grep -Fq 'target commit is older than the installed release' "$tmp/deploy-stale.log"
 
-# Singleton jobs are app-scoped. An unrelated path in the same commit must be
-# rejected before any backup, route, or Compose mutation occurs.
-printf '\n# cpapi singleton change\n' >>"$work/apps/cpapi/compose.yml"
-printf '\nunrelated file\n' >>"$work/README.md"
-git -C "$work" add apps/cpapi/compose.yml README.md
-git -C "$work" -c commit.gpgsign=false commit --quiet -m singleton-scope-change
+# Consumer jobs may carry coordinated app and placement changes, but must
+# reject a foundation/control-plane path before any runtime mutation occurs.
+printf '\n# cpapi consumer change\n' >>"$work/apps/cpapi/compose.yml"
+printf '\n# unrelated control-plane change\n' >>"$work/ops/platformctl.sh"
+git -C "$work" add apps/cpapi/compose.yml ops/platformctl.sh
+git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-scope-change
 git -C "$work" push --quiet origin HEAD:main
-sha_singleton_scope="$(git -C "$work" rev-parse HEAD)"
-if SINGLETON_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" singleton-stage "$sha_singleton_scope" >"$tmp/deploy-singleton-scope.log" 2>&1; then
-	printf 'singleton workflow accepted an unrelated path\n' >&2
+sha_consumer_scope="$(git -C "$work" rev-parse HEAD)"
+if CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_scope" >"$tmp/deploy-consumer-scope.log" 2>&1; then
+	printf 'consumer workflow accepted a control-plane path\n' >&2
 	exit 1
 fi
-grep -Fq 'cannot apply unrelated path: README.md' "$tmp/deploy-singleton-scope.log"
+grep -Fq 'consumer workflow for cpapi contains a control-plane or foundation change: ops/platformctl.sh' "$tmp/deploy-consumer-scope.log"
 
 aichorouter_image="$(sed -n 's/^AICHOROUTER_IMAGE=//p' "$work/ops/images.apps.prod.env")"
 aichorouter_prefix="${aichorouter_image%@sha256:*}"
@@ -263,7 +337,10 @@ aichorouter_changed_digest="${aichorouter_digest%?}0"
 sed "s#^AICHOROUTER_IMAGE=.*#AICHOROUTER_IMAGE=$aichorouter_prefix@sha256:$aichorouter_changed_digest#" \
 	"$work/ops/images.apps.prod.env" >"$tmp/images.apps.changed"
 mv "$tmp/images.apps.changed" "$work/ops/images.apps.prod.env"
-git -C "$work" add ops/images.apps.prod.env
+sed "s#^AICHOROUTER_IMAGE=.*#AICHOROUTER_IMAGE=$aichorouter_prefix@sha256:$aichorouter_changed_digest#" \
+	"$work/apps/aichorouter/images.lock.env" >"$tmp/aichorouter.images.changed"
+mv "$tmp/aichorouter.images.changed" "$work/apps/aichorouter/images.lock.env"
+git -C "$work" add ops/images.apps.prod.env apps/aichorouter/images.lock.env
 git -C "$work" -c commit.gpgsign=false commit --quiet -m image-change
 git -C "$work" push --quiet origin HEAD:main
 sha_image="$(git -C "$work" rev-parse HEAD)"
@@ -272,7 +349,7 @@ if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha_image" >"$tmp/deploy-
 	exit 1
 fi
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
-grep -Fq 'application image manifest changes require the app-upgrade or singleton workflow' "$tmp/deploy-image-change.log"
+grep -Fq 'application image manifest changes require the reviewed consumer workflow' "$tmp/deploy-image-change.log"
 
 printf '\nfoundation change\n' >>"$work/compose/foundation/caddy.yml"
 git -C "$work" add compose/foundation/caddy.yml
@@ -283,7 +360,7 @@ if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha4" >"$tmp/deploy-found
 	printf 'foundation change was accepted by application deployment\n' >&2
 	exit 1
 fi
-[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
 
 printf '\ncluster policy change\n' >>"$work/config/cluster/policy.env"
 git -C "$work" add config/cluster/policy.env
@@ -303,7 +380,7 @@ if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha5" >"$tmp/deploy-clust
 	printf 'cluster policy change was accepted by application deployment\n' >&2
 	exit 1
 fi
-[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha3" ]]
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
 
 # Installing foundation files replaces bind-mounted host files. The reviewed
 # foundation path must explicitly recreate containers so they cannot retain
@@ -324,5 +401,29 @@ rm -f -- "$platform_root/foundation/observer-log-proxy-entrypoint.sh"
 FAIL_SYNC=1 bash "$repo_root/ops/deploy-controller.sh" foundation-upgrade "$sha6" >/dev/null 2>&1 || true
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha5" ]]
 [[ ! -e "$platform_root/foundation/observer-log-proxy-entrypoint.sh" ]]
+
+# A reviewed foundation release owns retirement of components removed from its
+# manifest set. The old Compose project must not survive the release switch.
+git -C "$work" rm --quiet compose/foundation/manifests/woodpecker-deployer.env
+git -C "$work" -c commit.gpgsign=false commit -qm remove-foundation-component
+sha7="$(git -C "$work" rev-parse HEAD)"
+git -C "$work" push --quiet origin HEAD:main
+bash "$repo_root/ops/deploy-controller.sh" foundation-upgrade "$sha7" >/dev/null
+grep -Fqx 'rm -f removed-woodpecker-deployer-container' "$tmp/docker.log"
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha7" ]]
+
+# Global ingress and foundation route changes are foundation-scoped even when
+# they are committed alongside a consumer change. A consumer workflow must
+# fail before taking a backup or changing the current release pointer.
+printf '\n# unrelated global ingress change\n' >>"$work/config/Caddyfile"
+git -C "$work" add config/Caddyfile
+git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-ingress-scope-change
+git -C "$work" push --quiet origin HEAD:main
+sha_consumer_ingress_scope="$(git -C "$work" rev-parse HEAD)"
+if CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_ingress_scope" >"$tmp/deploy-consumer-ingress-scope.log" 2>&1; then
+	printf 'consumer workflow accepted a global ingress change\n' >&2
+	exit 1
+fi
+grep -Fq 'consumer workflow for cpapi contains a control-plane or foundation change: config/Caddyfile' "$tmp/deploy-consumer-ingress-scope.log"
 
 printf 'deployment rollback tests passed\n'

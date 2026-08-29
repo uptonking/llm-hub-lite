@@ -32,36 +32,60 @@ if grep -E -q '(^|[^0-9])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9]|$)' "$repo_root/READ
 	printf 'public documentation or node inventory contains an IPv4 literal\n' >&2
 	exit 1
 fi
-grep -q '^FOUNDATION_LEADER=' "$repo_root/config/cluster/policy.env"
-for manifest in "$repo_root"/apps/*/manifest.env; do grep -q '^MANIFEST_VERSION=3$' "$manifest"; done
+grep -q '^CLUSTER_CONFIG_VERSION=3$' "$repo_root/config/cluster/policy.env"
+if grep -q '^FOUNDATION_' "$repo_root/config/cluster/policy.env"; then
+	printf 'global cluster policy still owns foundation component placement\n' >&2
+	exit 1
+fi
+for manifest in "$repo_root"/apps/*/manifest.env; do
+	grep -q '^MANIFEST_VERSION=5$' "$manifest"
+	grep -q '^PLACEMENT=consumer$' "$manifest"
+	grep -q '^PUBLIC_ENDPOINTS=' "$manifest"
+	if grep -Eq '^(PUBLIC_URL_KEY|PUBLIC_HOST|SECRET_KEYS)=' "$manifest"; then
+		printf 'application manifest uses a retired manifest field: %s\n' "$manifest" >&2
+		exit 1
+	fi
+	app="$(basename "$(dirname "$manifest")")"
+	[[ -f "$repo_root/apps/$app/images.lock.env" ]]
+done
 grep -q '^LEADER_NODE_ID=leader$' "$repo_root/config/cluster/policy.env"
+grep -q '^NODE_IDS=leader,worker-1,worker-2$' "$repo_root/config/cluster/policy.env"
 grep -q '^REPO_SLUG=uptonking/llm-hub-lite$' "$repo_root/config/cluster/policy.env"
-grep -q '^PLACEMENT=follower$' "$repo_root/apps/newapi/manifest.env"
 grep -q '^APP_ID=cpapi$' "$repo_root/apps/cpapi/manifest.env"
-grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^APP_ID=librechat$' "$repo_root/apps/librechat/manifest.env"
-grep -q '^PLACEMENT=follower$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^NETWORK_ALIAS=librechat-client$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^LIBRECHAT_CLIENT_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
-grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^APP_ID=cursorapi$' "$repo_root/apps/cursorapi/manifest.env"
-grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/cursorapi/manifest.env"
 grep -q '^SECRET_MIN_LENGTHS=CURSORAPI_CURSOR_API_KEY:16,CURSORAPI_BRIDGE_API_KEY:32$' "$repo_root/apps/cursorapi/manifest.env"
 grep -q '^STATE_MODE=ephemeral$' "$repo_root/apps/cursorapi/manifest.env"
 grep -q '^MOVE_MODE=fresh$' "$repo_root/apps/cursorapi/manifest.env"
 grep -q '^APP_ID=pigeon$' "$repo_root/apps/pigeon/manifest.env"
-grep -q '^PLACEMENT=single-follower$' "$repo_root/apps/pigeon/manifest.env"
 grep -q '^SECRET_MIN_LENGTHS=PIGEON_SECRET_KEY:32,PIGEON_LOGIN_PASSWORD:12$' "$repo_root/apps/pigeon/manifest.env"
 grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/pigeon.policy"
-grep -q '^PIGEON_TARGET_NODE_ID=worker-2$' "$repo_root/config/cluster/apps/pigeon.policy"
-grep -q '^FOUNDATION_LEADER=.*observer-controller' "$repo_root/config/cluster/policy.env"
-grep -q '^FOUNDATION_FOLLOWER=.*observer-collector' "$repo_root/config/cluster/policy.env"
-grep -q '^AICHOROUTER_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/aichorouter.policy"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cursorapi.policy"
-grep -q '^CURSORAPI_TARGET_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/cursorapi.policy"
+for app in aichorouter cpapi cursorapi pigeon; do
+	grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/$app/manifest.env"
+	nodes="$(sed -n 's/^NODES=//p' "$repo_root/config/cluster/apps/$app.policy")"
+	[[ -n "$nodes" && "$nodes" != *,* ]]
+done
+grep -q '^NODES=worker-1$' "$repo_root/config/cluster/apps/aichorouter.policy"
+grep -q '^NODES=worker-1$' "$repo_root/config/cluster/apps/cpapi.policy"
+grep -q '^NODES=worker-1$' "$repo_root/config/cluster/apps/cursorapi.policy"
+grep -q '^NODES=worker-2$' "$repo_root/config/cluster/apps/pigeon.policy"
+grep -q '^UPSTREAM_MODE=active-active$' "$repo_root/apps/librechat/manifest.env"
+grep -q '^NODES=worker-1,worker-2$' "$repo_root/config/cluster/apps/librechat.policy"
+grep -q '^UPSTREAM_MODE=active-active$' "$repo_root/apps/newapi/manifest.env"
+grep -q '^NODES=worker-1,worker-2$' "$repo_root/config/cluster/apps/newapi.policy"
+for component in caddy beszel-controller beszel-worker woodpecker-controller woodpecker-deployer woodpecker-worker observer-controller observer-collector; do
+	grep -q "^COMPONENT_ID=$component$" "$repo_root/compose/foundation/manifests/$component.env"
+done
+grep -q '^MANDATORY=true$' "$repo_root/compose/foundation/manifests/caddy.env"
+grep -q '^ENABLED=true$' "$repo_root/config/cluster/foundation/caddy.policy"
+grep -q '^ROLES=leader$' "$repo_root/compose/foundation/manifests/observer-controller.env"
+grep -q '^ROLES=leader,follower$' "$repo_root/compose/foundation/manifests/observer-collector.env"
 grep -q '^AICHOROUTER_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^CPAPI_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^CURSORAPI_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
@@ -131,8 +155,8 @@ grep -Fq 'OBSERVER_LOG_BUFFER_WHEN_FULL' "$repo_root/compose/foundation/observer
 grep -Fq 'when_full = "${OBSERVER_LOG_BUFFER_WHEN_FULL}"' "$repo_root/compose/foundation/observer-vector.toml"
 grep -Fq 'validate_observer_env()' "$repo_root/ops/platformctl.sh"
 grep -Fq 'foundation_health_service()' "$repo_root/ops/platformctl.sh"
-grep -Fq "observer-controller) printf 'observer-health-probe\\n'" "$repo_root/ops/platformctl.sh"
-grep -Fq "observer-collector) printf 'observer-log-shipper\\n'" "$repo_root/ops/platformctl.sh"
+grep -q '^HEALTH_SERVICE=observer-health-probe$' "$repo_root/compose/foundation/manifests/observer-controller.env"
+grep -q '^HEALTH_SERVICE=observer-log-shipper$' "$repo_root/compose/foundation/manifests/observer-collector.env"
 grep -Fq 'OBSERVER_SMOKE_TIMEOUT_SECONDS:-120' "$repo_root/ops/platformctl.sh"
 grep -Fq 'OBSERVER_SMOKE_REQUEST_TIMEOUT_SECONDS:-10' "$repo_root/ops/platformctl.sh"
 grep -Fq 'Observer collector buffer policy must be block or drop_newest' "$repo_root/ops/platformctl.sh"
@@ -143,8 +167,25 @@ grep -Fq 'Observer ingestion site must use http:// or https:// and contain no pa
 grep -Fq 'Observer log organization contains invalid path characters' "$repo_root/ops/platformctl.sh"
 grep -Fq 'DEPLOY_FETCH_RETRY_DELAY_SECONDS:=5' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'DEPLOY_PULL_RETRY_BASE_DELAY_SECONDS:=5' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'DEPLOY_TEST_SKIP_RELEASE_VALIDATION:=0' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'DEPLOY_TEST_SKIP_RELEASE_VALIDATION requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'PLATFORM_WAIT_INTERVAL_SECONDS:-3' "$repo_root/ops/platformctl.sh"
 grep -Fq 'PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION:-0' "$repo_root/ops/platformctl.sh"
+grep -Fq 'PLATFORM_TEST_MODE:-0' "$repo_root/ops/platformctl.sh"
+grep -Fq 'PLATFORM_TEST_MODE:=0' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'test-only validation controls require PLATFORM_TEST_MODE=1' "$repo_root/ops/platformctl.sh"
+grep -Fq 'test-only deployment controls require PLATFORM_TEST_MODE=1' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_TEST_SKIP_COMPOSE_INSPECTION:-0' "$repo_root/ops/platformctl.sh"
+grep -Fq 'PLATFORM_TEST_SKIP_COMPOSE_INSPECTION requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1' "$repo_root/ops/platformctl.sh"
+grep -Fq 'PLATFORM_TEST_ONLY_DESCRIPTOR' "$repo_root/ops/platformctl.sh"
+grep -Fq 'PLATFORM_TEST_FAST_VALIDATE' "$repo_root/ops/platformctl.sh"
+grep -Fq 'PLATFORM_TEST_FAST_VALIDATE:=0' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR"' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_TEST_FAST_VALIDATE="$PLATFORM_TEST_FAST_VALIDATE" PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR"' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_TEST_SKIP_COMPOSE_INSPECTION="$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION"' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION"' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_TEST_SKIP_SYNC_VALIDATION="$PLATFORM_TEST_SKIP_SYNC_VALIDATION"' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_TEST_SKIP_RENDER="$PLATFORM_TEST_SKIP_RENDER"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'docker_host = "http://observer-log-proxy:2375"' "$repo_root/compose/foundation/observer-vector.toml"
 grep -Fq 'uri = "${OBSERVER_INGEST_URL}/api/${OBSERVER_LOG_ORGANIZATION}/${OBSERVER_LOG_STREAM}/_json"' "$repo_root/compose/foundation/observer-vector.toml"
 grep -Fq 'path_regexp ^/api/[^/]+/[^/]+/_json$' "$repo_root/config/foundation-routes.d/observer.caddy"
@@ -259,11 +300,8 @@ grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/pigeon/manifest.env"
 grep -Fq 'health_uri /healthz' "$repo_root/apps/cpapi/route.leader.caddy"
 grep -Fq 'observer-health-probe:' "$repo_root/compose/foundation/observer-controller.yml"
 grep -Fq 'singleton-transition-fail' "$repo_root/ops/platformctl.sh"
-grep -Fq '[[ "$mode" == foundation ]] && DEPLOY_SKIP_SINGLETONS=1' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'PLATFORM_RECONCILE_DISABLED_SINGLETONS=1' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'verify_cluster_scope "$old_current" "$release"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'cluster reconciliation contains a non-cluster change' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT=' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'current_route="$RUNTIME_ROOT/config/routes.d/$a.caddy"' "$repo_root/ops/platformctl.sh"
 grep -Fq 'stopping retired Observer container' "$repo_root/ops/platformctl.sh"
@@ -271,18 +309,27 @@ grep -Fq "stop_inactive || die 'inactive project cleanup failed'" "$repo_root/op
 grep -Fq 'Observer retention days must be between 1 and 365' "$repo_root/ops/platformctl.sh"
 grep -Fq '[observer-collector-recent]' "$repo_root/ops/platformctl.sh"
 grep -Fq 'transition_begin' "$repo_root/ops/platformctl.sh"
-if grep -Fq 'depends_on:' "$repo_root/.woodpecker/singleton-stage-cpapi.yml"; then
-	printf 'singleton stage must not depend on an unrelated cluster workflow\n' >&2
-	exit 1
-fi
+grep -Fq 'CONSUMER_APP_ID=cpapi /usr/local/bin/platform-submit consumer-stage' "$repo_root/.woodpecker/consumer-stage-cpapi-worker-1.yml"
+grep -Fq 'consumer-stage-cpapi-worker-1' "$repo_root/.woodpecker/consumer-publish-cpapi.yml"
+grep -Fq 'consumer-publish-cpapi' "$repo_root/.woodpecker/consumer-stop-cpapi-worker-2.yml"
+grep -Fq 'consumer-stage-librechat-worker-1' "$repo_root/.woodpecker/consumer-stage-librechat-worker-2.yml"
+grep -Fq 'consumer-stage-librechat-worker-2' "$repo_root/.woodpecker/consumer-publish-librechat.yml"
 grep -q '^NEW_API_NODE_TYPE=master$' "$repo_root/config/cluster/nodes/worker-1.env"
 grep -q '^NEW_API_NODE_TYPE=slave$' "$repo_root/config/cluster/nodes/worker-2.env"
-grep -q '^NEW_API_BACKUP_NODE_ID=worker-2$' "$repo_root/config/cluster/policy.env"
-grep -q '^NEW_API_MIGRATION_NODE_ID=worker-1$' "$repo_root/config/cluster/policy.env"
+grep -q '^NEW_API_BACKUP_NODE_ID=worker-2$' "$repo_root/config/cluster/apps/newapi.policy"
+grep -q '^NEW_API_MIGRATION_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -Fq 'cluster-reconcile' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'singleton-stage' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'singleton-switch' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'singleton-stop' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'consumer-stage)' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'consumer-publish)' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'consumer-stop)' "$repo_root/ops/deploy-controller.sh"
+if grep -Eq '^(singleton-stage|singleton-switch|singleton-stop)\)' "$repo_root/ops/deploy-controller.sh"; then
+	printf 'deployment controller still exposes a retired singleton workflow mode\n' >&2
+	exit 1
+fi
+if grep -Eq '\^\(.*singleton-(stage|switch|stop)' "$repo_root/ops/platform-submit.sh"; then
+	printf 'platform submitter still accepts a retired singleton workflow mode\n' >&2
+	exit 1
+fi
 grep -Fq 'singleton-prepare' "$repo_root/ops/platformctl.sh"
 grep -Fq 'app_in_reconcile_scope' "$repo_root/ops/platformctl.sh"
 grep -Fq 'PLATFORM_FORCE_SINGLETON_ACTION' "$repo_root/ops/platformctl.sh"
@@ -291,14 +338,16 @@ grep -Fq 'Leader route and active containers reconciled' "$repo_root/ops/platfor
 grep -Fq 'app_policy_enabled "$(basename "$d")"' "$repo_root/ops/platformctl.sh"
 grep -Fq 'record_singleton_transitions' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton_prepare_failed' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'singleton-origin-smoke' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'cluster app policy requires its dedicated reconciliation workflow' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'stop_removed_foundation_projects "$old_current" "$release"' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'unable to enumerate containers for $description: $project' "$repo_root/ops/deploy-controller.sh"
+if grep -Fq 'docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null || true' "$repo_root/ops/deploy-controller.sh"; then
+	printf 'deployment cleanup still ignores Docker enumeration failures\n' >&2
+	exit 1
+fi
+grep -Fq 'cluster app policy requires its consumer reconciliation workflow' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'unsupported cluster configuration path in application deployment' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'application image manifest changes require the app-upgrade or singleton workflow' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'application image manifest changes require the reviewed consumer workflow' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'ops/*.sh | ops/deploy-runner/** | ops/tests/**' "$repo_root/ops/deploy-controller.sh"
-grep -Fq '.woodpecker/singleton-stage-"$app".yml' "$repo_root/ops/deploy-controller.sh"
-grep -Fq '.woodpecker/singleton-stop-"$app"-*.yml' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'mode" == singleton-stage || "$mode" == singleton-switch || "$mode" == singleton-stop' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-state' "$repo_root/ops/backup-platform.sh"
 if grep -Fq 'rm -f -- "$runtime_env"' "$repo_root/ops/platformctl.sh"; then
@@ -306,8 +355,10 @@ if grep -Fq 'rm -f -- "$runtime_env"' "$repo_root/ops/platformctl.sh"; then
 	exit 1
 fi
 grep -Fq 'firewall-reconcile.request' "$repo_root/ops/platform-submit.sh"
-grep -Fq '/var/run/docker.sock:/var/run/docker.sock' "$repo_root/.woodpecker/deploy-smoke.yml"
-grep -Fq '/run/lock/llm-hub-lite:/run/lock/llm-hub-lite' "$repo_root/.woodpecker/deploy-smoke.yml"
+if find "$repo_root/.woodpecker" -maxdepth 1 -type f \( -name 'deploy-*.yml' -o -name 'singleton-*.yml' -o -name 'app-upgrade-*.yml' -o -name 'cluster-reconcile-*.yml' \) -print -quit | grep -q .; then
+	printf 'retired generated workflow family remains in .woodpecker\n' >&2
+	exit 1
+fi
 for compose_file in "$repo_root"/compose/foundation/*.yml; do
 	grep -Fq 'mem_limit:' "$compose_file"
 	grep -Fq 'cpus:' "$compose_file"
@@ -361,7 +412,9 @@ compose/foundation/observer-controller.yml|observer-health-probe
 compose/foundation/observer-collector.yml|observer-log-proxy
 compose/foundation/observer-collector.yml|observer-log-shipper
 EOF
-grep -Fq 'LIBRECHAT_AWS_ACCESS_KEY_ID' "$repo_root/ops/bootstrap-vps.sh"
+grep -Fq 'prepare_application_secrets()' "$repo_root/ops/bootstrap-vps.sh"
+grep -Fq "s/^CLUSTER_SECRET_KEYS=//p" "$repo_root/ops/bootstrap-vps.sh"
+grep -Fq "s/^NODE_SECRET_KEYS=//p" "$repo_root/ops/bootstrap-vps.sh"
 grep -Fq 'PathExists=/etc/llm-hub-lite/firewall-reconcile.request' "$repo_root/ops/systemd/platform-firewall.path"
 grep -Fq 'deployment failed; restoring previous complete bundle' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'DEPLOY_SYNC_SCOPE=all reconcile || true' "$repo_root/ops/deploy-controller.sh"

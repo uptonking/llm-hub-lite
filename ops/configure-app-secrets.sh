@@ -11,12 +11,60 @@ umask 077
 	exit 1
 }
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-app_id="${1:-}"
+script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+control_root="${CONTROL_ROOT:-/opt/platform/control}"
+if [[ -d "$script_root/apps" && -d "$script_root/config/cluster" ]]; then
+	root="$script_root"
+else
+	root="${REPO_ROOT:-$control_root/current}"
+fi
 config_root="${CONFIG_ROOT:-/etc/llm-hub-lite}"
+app_env="${APP_ENV:-/opt/apps/llm-hub-lite/shared/.env.prod}"
+bundle_file="${SHARED_SECRET_BUNDLE_FILE:-$config_root/shared-secrets.env}"
+node_file="${NODE_CONFIG_FILE:-$config_root/node.env}"
+cluster_policy="${CLUSTER_POLICY_FILE:-$root/config/cluster/policy.env}"
+app_id="${1:-}"
+target_node=''
+target_node_explicit=0
 reset_config=0
-planned_target=''
-usage() { printf 'usage: %s <app-id> [--target-node <node-id>] [--reset-config]\n' "$0" >&2; }
+non_interactive=0
+
+usage() {
+	printf 'usage: %s <app-id> [--target-node <node-id>] [--reset-config] [--non-interactive]\n' "$0" >&2
+}
+die() {
+	printf 'configure-app-secrets: %s\n' "$*" >&2
+	exit 1
+}
+env_value() {
+	local key="$1" file="$2" line value=''
+	[[ -f "$file" ]] || return 0
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		[[ "$line" == "$key="* ]] || continue
+		value="${line#*=}"
+	done <"$file"
+	printf '%s\n' "$value"
+}
+csv_has() {
+	local csv=",${1//[[:space:]]/},"
+	[[ "$csv" == *",$2,"* ]]
+}
+placeholder_value() {
+	case "$1" in
+	'' | replace-with-* | bootstrap-pending | *'<'* | *'>'* | *example.invalid* | *example.* | *your-upstash* | *account-id*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+set_key() {
+	local file="$1" key="$2" value="$3" tmp
+	install -d -m 700 "$(dirname "$file")"
+	tmp="$(mktemp "$(dirname "$file")/.env.XXXXXX")"
+	[[ -f "$file" ]] && sed "/^${key}=/d" "$file" >"$tmp"
+	printf '%s=%s\n' "$key" "$value" >>"$tmp"
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$file"
+}
+
 [[ -n "$app_id" ]] || {
 	usage
 	exit 2
@@ -24,17 +72,22 @@ usage() { printf 'usage: %s <app-id> [--target-node <node-id>] [--reset-config]\
 shift
 while (($#)); do
 	case "$1" in
-	--reset-config)
-		reset_config=1
-		shift
-		;;
 	--target-node)
 		[[ $# -ge 2 && -n "$2" ]] || {
 			usage
 			exit 2
 		}
-		planned_target="$2"
+		target_node="$2"
+		target_node_explicit=1
 		shift 2
+		;;
+	--reset-config)
+		reset_config=1
+		shift
+		;;
+	--non-interactive)
+		non_interactive=1
+		shift
 		;;
 	*)
 		usage
@@ -42,178 +95,161 @@ while (($#)); do
 		;;
 	esac
 done
-manifest="$root/apps/$app_id/manifest.env"
-[[ -r "$manifest" ]] || {
-	printf 'missing app manifest: %s\n' "$manifest" >&2
-	exit 1
-}
-value() { sed -n "s/^$1=//p" "$manifest" | tail -n1; }
-policy_rel="$(value POLICY_FILE)"
-runtime_rel="$(value RUNTIME_ENV_FILE)"
-target_key="$(value TARGET_NODE_KEY)"
-secret_keys="$(value SECRET_KEYS)"
-secret_min_lengths="$(value SECRET_MIN_LENGTHS)"
-[[ "$(value PLACEMENT)" == single-follower ]] || {
-	printf '%s does not declare singleton placement\n' "$app_id" >&2
-	exit 1
-}
-[[ -n "$runtime_rel" && -n "$target_key" && -n "$secret_keys" ]] || {
-	printf '%s manifest must declare RUNTIME_ENV_FILE, TARGET_NODE_KEY, and SECRET_KEYS\n' "$app_id" >&2
-	exit 1
-}
-[[ "$target_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || {
-	printf 'invalid TARGET_NODE_KEY\n' >&2
-	exit 1
-}
-[[ "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || {
-	printf 'invalid runtime env path\n' >&2
-	exit 1
-}
-[[ "$policy_rel" != /* && "$policy_rel" != *..* && "$policy_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || {
-	printf 'invalid policy path\n' >&2
-	exit 1
-}
-policy="$root/config/$policy_rel"
-node_file="${NODE_CONFIG_FILE:-$config_root/node.env}"
-[[ -r "$policy" && -r "$node_file" ]] || {
-	printf 'missing app policy or node configuration\n' >&2
-	exit 1
-}
-node="$(sed -n 's/^NODE_ID=//p' "$node_file" | tail -n1)"
-[[ "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" != false ]] || {
-	printf '%s is disabled in %s\n' "$app_id" "$policy_rel" >&2
-	exit 1
-}
-target="$(sed -n "s/^$target_key=//p" "$policy" | tail -n1)"
-if [[ -n "$planned_target" ]]; then
-	cluster_policy="${CLUSTER_POLICY_FILE:-$root/config/cluster/policy.env}"
-	[[ -r "$cluster_policy" ]] || {
-		printf 'missing cluster policy: %s\n' "$cluster_policy" >&2
-		exit 1
-	}
-	leader="$(sed -n 's/^LEADER_NODE_ID=//p' "$cluster_policy" | tail -n1)"
-	node_ids="$(sed -n 's/^NODE_IDS=//p' "$cluster_policy" | tail -n1)"
-	[[ "$planned_target" =~ ^[a-z][a-z0-9-]*$ ]] || {
-		printf 'invalid planned target node: %s\n' "$planned_target" >&2
-		exit 1
-	}
-	[[ "$planned_target" != "$leader" ]] || {
-		printf 'planned target must be a follower\n' >&2
-		exit 1
-	}
-	case ",$node_ids," in
-	*,"$planned_target",*) ;;
-	*)
-		printf 'planned target is absent from NODE_IDS: %s\n' "$planned_target" >&2
-		exit 1
-		;;
-	esac
-	target="$planned_target"
-fi
-[[ "$node" == "$target" ]] || {
-	if [[ -n "$planned_target" ]]; then
-		printf 'this node (%s) is not the requested planned target (%s)\n' "$node" "$target" >&2
-	else
-		printf 'this node (%s) is not the configured target (%s)\n' "$node" "$target" >&2
-	fi
-	exit 1
-}
 
-runtime="$config_root/$runtime_rel"
-install -d -m 700 "$(dirname "$runtime")"
-runtime_tmp="$(mktemp "$(dirname "$runtime")/.runtime.XXXXXX")"
-trap 'rm -f -- "$runtime_tmp"' EXIT
-[[ -f "$runtime" ]] && cp "$runtime" "$runtime_tmp"
+[[ "$app_id" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid application ID: $app_id"
+manifest="$root/apps/$app_id/manifest.env"
+[[ -r "$manifest" ]] || die "missing app manifest: $manifest"
+[[ "$(env_value MANIFEST_VERSION "$manifest")" == 5 ]] || die "unsupported application manifest version: $app_id"
+[[ "$(env_value APP_ID "$manifest")" == "$app_id" ]] || die "manifest APP_ID mismatch: $app_id"
+[[ "$(env_value PLACEMENT "$manifest")" == consumer ]] || die "$app_id is not a consumer application"
+
+policy_rel="$(env_value POLICY_FILE "$manifest")"
+[[ "$policy_rel" == "cluster/apps/$app_id.policy" ]] || die "invalid application policy path: $policy_rel"
+policy="$root/config/$policy_rel"
+[[ -r "$policy" && -r "$node_file" && -r "$cluster_policy" ]] || die 'missing application policy, node configuration, or cluster policy'
+[[ "$(env_value ENABLED "$policy")" == true ]] || die "$app_id is disabled by cluster policy"
+
+local_node="$(env_value NODE_ID "$node_file")"
+leader_node="$(env_value LEADER_NODE_ID "$cluster_policy")"
+node_ids="$(env_value NODE_IDS "$cluster_policy")"
+[[ "$local_node" =~ ^[a-z][a-z0-9-]*$ ]] || die 'local node configuration has an invalid NODE_ID'
+[[ "$leader_node" =~ ^[a-z][a-z0-9-]*$ ]] || die 'cluster policy has an invalid LEADER_NODE_ID'
+csv_has "$node_ids" "$local_node" || die "local node is absent from NODE_IDS: $local_node"
+
+target_node="${target_node:-$local_node}"
+[[ "$target_node" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid target node: $target_node"
+csv_has "$node_ids" "$target_node" || die "target node is absent from NODE_IDS: $target_node"
+if ((target_node_explicit)); then
+	[[ "$target_node" != "$leader_node" ]] || die "explicit target must be a follower: $target_node"
+	[[ "$target_node" == "$local_node" ]] || die "this node ($local_node) is not the requested explicit target ($target_node)"
+fi
+target_descriptor="$root/config/cluster/nodes/$target_node.env"
+[[ -r "$target_descriptor" ]] || die "target node descriptor is missing: $target_node"
+[[ "$(env_value NODE_ID "$target_descriptor")" == "$target_node" ]] || die "target descriptor NODE_ID mismatch: $target_node"
+[[ "$(env_value NODE_STATE "$target_descriptor")" == active ]] || die "target node is not active: $target_node"
+
+nodes="$(env_value NODES "$policy")"
+if [[ "$local_node" != "$leader_node" ]]; then
+	((target_node_explicit)) || csv_has "$nodes" "$local_node" || die "$app_id is not placed on this follower: $local_node"
+elif [[ -z "$(env_value CLUSTER_SECRET_KEYS "$manifest")" ]]; then
+	die "$app_id has no Leader-owned cluster secrets"
+fi
+
+cluster_keys="$(env_value CLUSTER_SECRET_KEYS "$manifest")"
+node_keys="$(env_value NODE_SECRET_KEYS "$manifest")"
+generated_keys="$(env_value GENERATED_SECRET_KEYS "$manifest")"
+min_rules="$(env_value SECRET_MIN_LENGTHS "$manifest")"
+runtime_rel="$(env_value RUNTIME_ENV_FILE "$manifest")"
+if [[ -n "$node_keys" ]]; then
+	[[ -n "$runtime_rel" && "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die 'node secrets require a safe RUNTIME_ENV_FILE'
+fi
+runtime_file=''
+[[ -z "$runtime_rel" ]] || runtime_file="$config_root/$runtime_rel"
+
 secret_min_length() {
-	local wanted="$1" rule key min_length
+	local wanted="$1" rule key length
 	while IFS= read -r rule; do
 		[[ -n "$rule" ]] || continue
 		key="${rule%%:*}"
-		min_length="${rule#*:}"
-		[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$min_length" =~ ^[1-9][0-9]*$ ]] || {
-			printf 'invalid SECRET_MIN_LENGTHS entry: %s\n' "$rule" >&2
-			exit 1
-		}
+		length="${rule#*:}"
+		[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$length" =~ ^[1-9][0-9]*$ ]] || die "invalid SECRET_MIN_LENGTHS entry: $rule"
 		if [[ "$key" == "$wanted" ]]; then
-			printf '%s\n' "$min_length"
+			printf '%s\n' "$length"
 			return 0
 		fi
-	done < <(printf '%s\n' "$secret_min_lengths" | tr ',' '\n')
+	done < <(printf '%s\n' "$min_rules" | tr ',' '\n')
 	printf '1\n'
 }
-valid_secret_value() {
-	local key="$1" value="$2" min_length="${3:-1}"
-	[[ -n "$value" ]] || {
-		printf '%s is required\n' "$key" >&2
-		return 1
-	}
-	[[ "$min_length" =~ ^[1-9][0-9]*$ ]] || {
-		printf 'invalid minimum length for %s: %s\n' "$key" "$min_length" >&2
+validate_secret() {
+	local key="$1" value="$2" min_length="$3"
+	placeholder_value "$value" && {
+		printf '%s is required and cannot be a placeholder\n' "$key" >&2
 		return 1
 	}
 	if ((${#value} < min_length)); then
 		printf '%s must contain at least %s characters\n' "$key" "$min_length" >&2
 		return 1
 	fi
-	# Avoid a Bash here-string: its implicit newline would reject every value.
 	if printf '%s' "$value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then
-		printf '%s contains control characters; provide a clean replacement\n' "$key" >&2
+		printf '%s contains control characters\n' "$key" >&2
 		return 1
 	fi
 }
-while IFS= read -r key; do
-	[[ -n "$key" ]] || continue
-	[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || {
-		printf 'invalid secret key in manifest: %s\n' "$key" >&2
-		exit 1
-	}
-	secret_value="${!key:-}"
-	min_length="$(secret_min_length "$key")"
-	if [[ -z "$secret_value" && -f "$runtime" ]]; then
-		secret_value="$(sed -n "s/^${key}=//p" "$runtime" | tail -n1)"
+existing_secret() {
+	local key="$1" destination="$2" value
+	value="$(env_value "$key" "$destination")"
+	if [[ -z "$value" && "$destination" == "$app_env" ]]; then
+		value="$(env_value "$key" "$bundle_file")"
 	fi
-	while :; do
-		if [[ -n "$secret_value" ]]; then
-			if valid_secret_value "$key" "$secret_value" "$min_length"; then break; fi
-			[[ -t 0 ]] || {
-				printf '%s is invalid; provide a clean replacement through the environment\n' "$key" >&2
-				exit 1
-			}
-			secret_value=''
-		fi
-		if ! read -r -s -p "$key: " secret_value; then
-			printf '%s input was not received\n' "$key" >&2
-			exit 1
+	printf '%s\n' "$value"
+}
+resolve_secret() {
+	local key="$1" destination="$2" value min_length
+	min_length="$(secret_min_length "$key")"
+	value="${!key:-}"
+	if [[ -z "$value" ]]; then
+		value="$(existing_secret "$key" "$destination")"
+	fi
+	if ((non_interactive == 0)) && placeholder_value "$value" && csv_has "$generated_keys" "$key"; then
+		value="$(openssl rand -hex 32)"
+	fi
+	while ! validate_secret "$key" "$value" "$min_length"; do
+		((non_interactive == 0)) || die "$key must be supplied by a protected Woodpecker secret"
+		[[ -t 0 ]] || die "$key is missing or invalid; rerun interactively or provide it through the environment"
+		if ! read -r -s -p "$app_id $key: " value; then
+			die "$key input was not received"
 		fi
 		printf '\n'
-		if valid_secret_value "$key" "$secret_value" "$min_length"; then break; fi
-		printf 'Please enter %s again.\n' "$key" >&2
 	done
-	tmp_key="$(mktemp "$(dirname "$runtime")/.key.XXXXXX")"
-	sed "/^${key}=/d" "$runtime_tmp" >"$tmp_key"
-	printf '%s=%s\n' "$key" "$secret_value" >>"$tmp_key"
-	mv -f "$tmp_key" "$runtime_tmp"
-done < <(printf '%s\n' "$secret_keys" | tr ',' '\n')
+	printf '%s\n' "$value"
+}
+validate_key_list() {
+	local keys="$1" key
+	while IFS= read -r key; do
+		[[ -n "$key" ]] || continue
+		[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid secret key in manifest: $key"
+	done < <(printf '%s\n' "$keys" | tr ',' '\n')
+}
+write_secrets() {
+	local keys="$1" destination="$2" persist_bundle="${3:-0}" key value
+	[[ -n "$keys" ]] || return 0
+	while IFS= read -r key; do
+		[[ -n "$key" ]] || continue
+		value="$(resolve_secret "$key" "$destination")"
+		set_key "$destination" "$key" "$value"
+		((persist_bundle == 0)) || set_key "$bundle_file" "$key" "$value"
+	done < <(printf '%s\n' "$keys" | tr ',' '\n')
+}
 
-chmod 600 "$runtime_tmp"
-mv -f "$runtime_tmp" "$runtime"
-trap - EXIT
-if [[ -n "$planned_target" ]]; then
-	printf 'Wrote %s with mode 600 for %s on planned target %s; cluster policy was not changed.\n' "$runtime" "$app_id" "$planned_target"
+validate_key_list "$cluster_keys"
+validate_key_list "$node_keys"
+validate_key_list "$generated_keys"
+while IFS= read -r generated_key; do
+	[[ -n "$generated_key" ]] || continue
+	csv_has "$cluster_keys,$node_keys" "$generated_key" || die "generated secret is not declared as a cluster or node secret: $generated_key"
+done < <(printf '%s\n' "$generated_keys" | tr ',' '\n')
+
+if [[ "$local_node" == "$leader_node" ]]; then
+	write_secrets "$cluster_keys" "$app_env" 1
+	printf 'Reconciled Leader-owned cluster secrets for %s.\n' "$app_id"
 else
-	printf 'Wrote %s with mode 600 for %s.\n' "$runtime" "$app_id"
+	write_secrets "$cluster_keys" "$app_env"
+	write_secrets "$node_keys" "$runtime_file"
+	printf 'Reconciled application secrets for %s on %s.\n' "$app_id" "$local_node"
+	if ((target_node_explicit)) && ! csv_has "$nodes" "$local_node"; then
+		printf 'Application secrets were prepared; cluster policy was not changed.\n'
+	fi
 fi
+
 if ((reset_config)); then
-	app_env="${APP_ENV:-/opt/apps/llm-hub-lite/shared/.env.prod}"
-	data_root="$(sed -n 's/^DATA_ROOT=//p' "$app_env" 2>/dev/null | tail -n1)"
+	[[ "$local_node" != "$leader_node" ]] || die '--reset-config is valid only on a selected follower'
+	data_root="$(env_value DATA_ROOT "$app_env")"
 	data_root="${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}"
-	data_rel="$(value DATA_ROOT_REL)"
-	marker_rel="$(value CONFIG_RESET_MARKER_REL)"
+	data_rel="$(env_value DATA_ROOT_REL "$manifest")"
+	marker_rel="$(env_value CONFIG_RESET_MARKER_REL "$manifest")"
 	marker_rel="${marker_rel:-.reset-config}"
-	[[ "$data_rel" != /* && "$data_rel" != *..* && "$data_rel" =~ ^[A-Za-z0-9._/-]+$ && "$marker_rel" != /* && "$marker_rel" != *..* && "$marker_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || {
-		printf 'invalid data or reset marker path\n' >&2
-		exit 1
-	}
+	[[ "$data_rel" != /* && "$data_rel" != *..* && "$data_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die 'invalid DATA_ROOT_REL'
+	[[ "$marker_rel" != /* && "$marker_rel" != *..* && "$marker_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die 'invalid CONFIG_RESET_MARKER_REL'
 	marker="$data_root/$data_rel/$marker_rel"
 	install -d -m 700 "$(dirname "$marker")"
 	: >"$marker"

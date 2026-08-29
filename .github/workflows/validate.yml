@@ -6,9 +6,13 @@ on:
       - main
 permissions:
   contents: read
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  validate:
+  static:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -20,32 +24,62 @@ jobs:
         run: shellcheck stack.sh ops/*.sh ops/tests/*.sh compose/foundation/observer-log-proxy-entrypoint.sh
       - name: Check IP privacy
         run: ops/tests/ip-privacy-test.sh
-      - name: Run deployment controller tests
-        run: ops/tests/controller-test.sh
-      - name: Run bootstrap policy tests
-        run: ops/tests/bootstrap-policy-test.sh
+      - name: Run fast test suites
+        run: ops/tests/run-all.sh fast
+  deployment-matrix:
+    # This suite creates Git worktrees and exercises rollback transactions; run
+    # it on its own runner so it cannot contend with platformctl's matrix.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Run deployment rollback tests
         run: ops/tests/deployment-rollback-test.sh
+  platformctl-matrix:
+    # platformctl validation is intentionally serialized inside the test, but
+    # isolated from deployment tests to reduce CI wall-clock time.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Run platform controller tests
         run: ops/tests/platformctl-test.sh
-      - name: Run Observer collector integration tests
-        run: |
-          ops/tests/observer-log-proxy-test.sh
-          ops/tests/observer-vector-test.sh
-      - name: Run stack and backup tests
-        run: |
-          ops/tests/stack-test.sh
-          ops/tests/backup-test.sh
-          ops/tests/clean-vps-test.sh
-          ops/tests/workflow-generator-test.sh
-          ops/tests/enroll-beszel-test.sh
-          ops/tests/firewall-test.sh
-          ops/tests/platform-submit-test.sh
-          ops/tests/git-auth-test.sh
-          ops/tests/observer-ingest-test.sh
-          ops/tests/restore-test.sh
-          ops/tests/secret-validation-test.sh
-          ops/tests/cursorapi-release-test.sh
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEW_API_SITE: https://newapi.example.invalid
+      AICHOROUTER_SITE: https://aichorouter.example.invalid
+      CPAPI_SITE: https://cpapi.example.invalid
+      CURSORAPI_SITE: https://cursorapi.example.invalid
+      LIBRECHAT_SITE: https://chat.example.invalid
+      LIBRECHAT_ADMIN_SITE: https://chat-admin.example.invalid
+      PIGEON_SITE: https://pigeon.example.invalid
+      AICHOROUTER_SESSION_SECRET: ci-aichorouter-session-secret
+      AICHOROUTER_CRYPTO_SECRET: ci-aichorouter-crypto-secret
+      CPAPI_API_KEY: ci-cpapi-api-key
+      CPAPI_MANAGEMENT_KEY: ci-cpapi-management-key
+      CURSORAPI_CURSOR_API_KEY: ci-cursor-account-key
+      CURSORAPI_BRIDGE_API_KEY: ci-cursor-bridge-key
+      NEW_API_CRYPTO_SECRET: ci-new-api-crypto-secret
+      NEW_API_SESSION_SECRET: ci-new-api-session-secret
+      NEW_API_SQL_DSN: postgres://ci:ci@example.invalid/ci
+      LIBRECHAT_ADMIN_PANEL_SESSION_SECRET: ci-librechat-admin-secret
+      LIBRECHAT_AWS_ACCESS_KEY_ID: ci-access-key
+      LIBRECHAT_AWS_SECRET_ACCESS_KEY: ci-secret-key
+      LIBRECHAT_AWS_BUCKET_NAME: ci-bucket
+      LIBRECHAT_AWS_ENDPOINT_URL: https://storage.example.invalid
+      LIBRECHAT_JWT_SECRET: ci-librechat-jwt-secret
+      LIBRECHAT_JWT_REFRESH_SECRET: ci-librechat-refresh-secret
+      LIBRECHAT_MONGO_URI: mongodb://ci:ci@example.invalid:27017/ci
+      LIBRECHAT_REDIS_URI: rediss://default:ci@example.invalid:6379
+      PIGEON_SECRET_KEY: ci-pigeon-secret-key
+      PIGEON_LOGIN_PASSWORD: ci-pigeon-login-password
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate Compose model
         run: |
           docker compose --env-file .env.prod.example --env-file ops/images.foundation.prod.env -f compose/foundation/caddy.yml config --quiet

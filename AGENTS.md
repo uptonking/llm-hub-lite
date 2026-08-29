@@ -16,7 +16,7 @@ Legacy New API remains retained and disabled by policy.
 
 - Foundation Compose projects: `compose/foundation/`.
 - Cluster inventory and policy: `config/cluster/`.
-- Declarative applications: `apps/<id>/manifest.env`,  `compose.yml`, and role
+- Declarative applications: `apps/<id>/manifest.env`, `compose.yml`, and role
   route templates.
 - Generated runtime Caddy configuration: `/opt/apps/llm-hub-lite/shared/runtime/config`.
 - Persistent app data: `/opt/apps/llm-hub-lite/shared/data/prod`.
@@ -34,11 +34,13 @@ Legacy New API remains retained and disabled by policy.
 
 Production images stay digest-pinned in `ops/images.foundation.prod.env` and
 `ops/images.apps.prod.env` . Caddy remains mandatory and exposes 80, 443/TCP,
-and 443/UDP on the external `platform_edge` network. Role placement and
-intentional service disablement are committed in `config/cluster/policy.env`
-and `config/cluster/apps/*.policy`;
-there are no per-service disable environment variables.
+and 443/UDP on the external `platform_edge` network.
+Role placement and intentional service disablement are committed in
+`config/cluster/policy.env` and `config/cluster/apps/*.policy`; logical
+Follower inventory is managed with `ops/configure-cluster-node.sh`: new nodes
+enter `joining`, are bootstrapped for foundation only, and become
+consumer-eligible only after an explicit `active` policy change.
 
 ## Validation
 
-Run `bash -n stack.sh ops/*.sh ops/tests/*.sh` and all scripts under `ops/tests/` . Validate every Compose project and the generated Caddy configuration before committing. Keep Bash 3.2 compatibility for local macOS execution.
+Run `bash -n stack.sh ops/*.sh ops/tests/*.sh` and `ops/tests/run-all.sh fast` for the local loop; run `ops/tests/run-all.sh full` before release. Validate every Compose project and the generated Caddy configuration before committing. Keep Bash 3.2 compatibility for local macOS execution.

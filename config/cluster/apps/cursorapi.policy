@@ -1,2 +1,2 @@
 ENABLED=true
-CURSORAPI_TARGET_NODE_ID=worker-1
+NODES=worker-1

@@ -1,1 +1,4 @@
 ENABLED=true
+NODES=worker-1,worker-2
+MONGO_BACKUP_ENABLED=false
+MONGO_BACKUP_NODE_ID=worker-1

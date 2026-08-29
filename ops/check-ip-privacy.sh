@@ -56,7 +56,7 @@ while IFS= read -r record; do
 		after="${content#*"$ip"}"
 		before_last="${before: -1}"
 		after_first="${after:0:1}"
-		if [[ "$before_last" != [0-9] && "$after_first" != [0-9] ]] && is_public_ipv4 "$ip"; then
+		if [[ "$before_last" != [0-9] && "$after_first" != [0-9] && "$ip" != 8.8.8.8 && "$ip" != 1.1.1.1 ]] && is_public_ipv4 "$ip"; then
 			printf '%s:%s: globally routable IPv4 literal is not allowed in Git\n' "$path" "$line" >&2
 			violations=$((violations + 1))
 		fi

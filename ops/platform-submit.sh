@@ -3,14 +3,27 @@ set -Eeuo pipefail
 
 mode="${1:-}"
 sha="${2:-}"
-[[ "$mode" =~ ^(deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|singleton-stage|singleton-switch|singleton-stop)$ ]] || {
-	printf 'usage: platform-submit {deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|singleton-stage|singleton-switch|singleton-stop} <sha-or-previous>\n' >&2
+[[ "$mode" =~ ^(deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|consumer-stage|consumer-publish|consumer-stop|node-retire)$ ]] || {
+	printf 'usage: platform-submit {deploy|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback} <sha-or-previous>\n' >&2
 	exit 2
 }
 [[ -n "$sha" ]] || {
 	printf 'missing target\n' >&2
 	exit 2
 }
+
+retire_delay=''
+if [[ "$mode" == node-retire ]]; then
+	retire_delay="${NODE_RETIRE_DELAY_SECONDS:-30}"
+	[[ "$retire_delay" =~ ^[0-9]+$ ]] || {
+		printf 'NODE_RETIRE_DELAY_SECONDS must be an integer between 0 and 300\n' >&2
+		exit 2
+	}
+	((retire_delay <= 300)) || {
+		printf 'NODE_RETIRE_DELAY_SECONDS must be an integer between 0 and 300\n' >&2
+		exit 2
+	}
+fi
 
 platform_env_file="${PLATFORM_ENV_FILE:-/etc/llm-hub-lite/platform.env}"
 configured_image="$(sed -n 's/^PLATFORM_RUNNER_IMAGE=//p' "$platform_env_file" 2>/dev/null | tail -n1 || true)"
@@ -40,8 +53,10 @@ docker run -d --name "$job" \
 	-v /run/lock/llm-hub-lite:/run/lock/llm-hub-lite \
 	-v /etc/llm-hub-lite:/etc/llm-hub-lite \
 	-e DEPLOY_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" \
-	-e SINGLETON_APP_ID="${SINGLETON_APP_ID:-}" \
-	-e PLATFORM_ONLY_APP_ID="${SINGLETON_APP_ID:-}" \
+	-e CONSUMER_APP_ID="${CONSUMER_APP_ID:-}" \
+	-e SINGLETON_FINAL_STOP="${SINGLETON_FINAL_STOP:-0}" \
+	-e PLATFORM_ONLY_APP_ID="${CONSUMER_APP_ID:-}" \
+	-e ALLOW_WOODPECKER_SELF_DISABLE="${ALLOW_WOODPECKER_SELF_DISABLE:-0}" \
 	-e DEPLOY_WORKFLOW="${CI_WORKFLOW_NAME:-${CI_WORKFLOW:-unknown}}" \
 	-e DEPLOY_PIPELINE="${CI_PIPELINE_NUMBER:-${CI_PIPELINE:-unknown}}" \
 	-e DEPLOY_BUILD="${CI_BUILD_NUMBER:-${CI_BUILD:-unknown}}" \
@@ -79,8 +94,8 @@ fi
 docker rm "$job" >/dev/null 2>&1 || true
 if [[ "$status" -ne 0 && -x /usr/local/bin/platformctl ]]; then
 	printf '%s\n' '--- host deployment diagnostics ---' >&2
-	if [[ -n "${SINGLETON_APP_ID:-}" ]]; then
-		/usr/local/bin/platformctl diagnose "app:${SINGLETON_APP_ID}" || true
+	if [[ -n "${CONSUMER_APP_ID:-}" ]]; then
+		/usr/local/bin/platformctl diagnose "app:${CONSUMER_APP_ID}" || true
 	else
 		/usr/local/bin/platformctl diagnose all || true
 	fi
@@ -88,5 +103,41 @@ if [[ "$status" -ne 0 && -x /usr/local/bin/platformctl ]]; then
 fi
 if [[ "$status" -eq 0 && "$mode" == cluster-reconcile ]]; then
 	touch /etc/llm-hub-lite/firewall-reconcile.request 2>/dev/null || printf '%s\n' 'warning: firewall reconciliation request could not be queued; timer will retry' >&2
+fi
+if [[ "$status" -eq 0 && "$mode" == node-retire ]]; then
+	cleanup_job='llm-hub-lite-node-retire'
+	docker rm -f "$cleanup_job" >/dev/null 2>&1 || true
+	if ! docker run -d --name "$cleanup_job" \
+		--restart on-failure:5 \
+		--label com.aichorage.platform=llm-hub-lite \
+		--label com.aichorage.application=platform \
+		--label com.aichorage.component=node-retirement \
+		--label com.aichorage.observer.ignore-logs=true \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		-v /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite \
+		-v /opt/platform:/opt/platform \
+		-v /run/lock/llm-hub-lite:/run/lock/llm-hub-lite \
+		-v /etc/llm-hub-lite:/etc/llm-hub-lite \
+		"$image" sh -c '
+			status_file=/etc/llm-hub-lite/node-retirement.status
+			delay="$1"
+			printf "state=waiting\ndelay_seconds=%s\nstarted_utc=%s\n" "$delay" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$status_file"
+			chmod 600 "$status_file"
+			sleep "$delay"
+			printf "node retirement cleanup starting after %s seconds\n" "$delay"
+			/opt/platform/control/current/ops/platformctl.sh retire-node
+			result=$?
+			if [ "$result" -eq 0 ]; then
+				printf "state=completed\ncompleted_utc=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$status_file"
+			else
+				printf "state=failed\nexit_status=%s\nfailed_utc=%s\n" "$result" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$status_file"
+			fi
+			chmod 600 "$status_file"
+			exit "$result"
+		' sh "$retire_delay" >/dev/null; then
+		printf 'unable to schedule deferred node retirement cleanup\n' >&2
+		exit 1
+	fi
+	printf 'node retirement cleanup scheduled in %s seconds (container %s; inspect failures with docker logs %s)\n' "$retire_delay" "$cleanup_job" "$cleanup_job"
 fi
 exit "$status"

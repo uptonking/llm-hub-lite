@@ -134,9 +134,18 @@ manual_backups="$(grep -c ' backup --compression ' "$tmp/restic.log" || true)"
 	exit 1
 }
 
-mkdir -p "$tmp/control/current/config/cluster/nodes"
+mkdir -p "$tmp/control/current/apps/newapi" "$tmp/control/current/config/cluster/apps" "$tmp/control/current/config/cluster/nodes"
 cat >"$tmp/control/current/config/cluster/policy.env" <<'EOF'
 NODE_IDS=leader,worker-1
+EOF
+cat >"$tmp/control/current/apps/newapi/manifest.env" <<'EOF'
+POLICY_FILE=cluster/apps/newapi.policy
+DATA_ROOT_REL=new-api
+SQLITE_PATHS=
+EOF
+cat >"$tmp/control/current/config/cluster/apps/newapi.policy" <<'EOF'
+ENABLED=true
+NODES=leader,worker-1
 NEW_API_BACKUP_NODE_ID=leader
 EOF
 cat >"$tmp/config/node.env" <<'EOF'
@@ -172,5 +181,69 @@ EOF
 	printf 'non-owner node invoked pg_dump\n' >&2
 	exit 1
 }
+
+# A malformed New API policy must fail closed like an explicitly disabled one;
+# the standalone backup timer may run before a controller reconciliation has
+# rejected the bad release.
+sed 's/^ENABLED=.*/ENABLED=typo/' \
+	"$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/control/current/config/cluster/apps/newapi.policy.tmp"
+mv "$tmp/control/current/config/cluster/apps/newapi.policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
+cat >"$tmp/config/node.env" <<'EOF'
+NODE_ID=leader
+EOF
+: >"$PG_DUMP_CALL_LOG"
+"$repo_root/ops/backup-platform.sh" snapshot postgres-malformed-policy-test
+[[ ! -s "$PG_DUMP_CALL_LOG" ]] || {
+	printf 'malformed New API policy unexpectedly invoked pg_dump\n' >&2
+	exit 1
+}
+
+mkdir -p "$tmp/control/current/apps/librechat"
+cat >"$tmp/control/current/apps/librechat/manifest.env" <<'EOF'
+POLICY_FILE=cluster/apps/librechat.policy
+DATA_ROOT_REL=librechat
+SQLITE_PATHS=
+EOF
+cat >"$tmp/control/current/config/cluster/apps/librechat.policy" <<'EOF'
+ENABLED=true
+NODES=leader,worker-1
+MONGO_BACKUP_ENABLED=true
+MONGO_BACKUP_NODE_ID=worker-1
+EOF
+cat >"$tmp/bin/mongodump" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"${MONGODUMP_CALL_LOG:?}"
+for argument do
+  case "$argument" in
+    --archive=*) : >"${argument#--archive=}" ;;
+  esac
+done
+EOF
+chmod +x "$tmp/bin/mongodump"
+export MONGODUMP_CALL_LOG="$tmp/mongodump.log" LIBRECHAT_MONGO_URI=mongodb+srv://backup.example/LibreChat
+cat >"$tmp/config/node.env" <<'EOF'
+NODE_ID=worker-1
+EOF
+: >"$MONGODUMP_CALL_LOG"
+"$repo_root/ops/backup-platform.sh" snapshot mongo-owner-test
+grep -q -- '--uri mongodb+srv://backup.example/LibreChat --gzip --archive=' "$MONGODUMP_CALL_LOG"
+
+cat >"$tmp/config/node.env" <<'EOF'
+NODE_ID=leader
+EOF
+: >"$MONGODUMP_CALL_LOG"
+"$repo_root/ops/backup-platform.sh" snapshot mongo-non-owner-test
+[[ ! -s "$MONGODUMP_CALL_LOG" ]] || {
+	printf 'non-owner node invoked mongodump\n' >&2
+	exit 1
+}
+
+sed 's/^MONGO_BACKUP_NODE_ID=.*/MONGO_BACKUP_NODE_ID=missing-node/' \
+	"$tmp/control/current/config/cluster/apps/librechat.policy" >"$tmp/control/current/config/cluster/apps/librechat.policy.tmp"
+mv "$tmp/control/current/config/cluster/apps/librechat.policy.tmp" "$tmp/control/current/config/cluster/apps/librechat.policy"
+if "$repo_root/ops/backup-platform.sh" snapshot mongo-invalid-owner-test >/dev/null 2>&1; then
+	printf 'LibreChat backup accepted an owner outside app placement\n' >&2
+	exit 1
+fi
 
 printf 'backup tests passed\n'

@@ -49,36 +49,66 @@ installed on the VPS and reused by all backup timers. Prefer a separate remote
 repository or backend prefix for each stable node ID. Shared repositories are
 supported: snapshots and retention are scoped by the `node:<NODE_ID>` tag.
 
-Service disablement is committed in each app's `config/cluster/apps/*.policy`
+Service enablement and placement are committed policy. Foundation services use
+`config/cluster/foundation/*.policy`; consumer applications use
+`config/cluster/apps/*.policy`, where `ENABLED` is explicit and `NODES` is the
+ordered list of stable follower IDs. There are no per-service `*_DISABLE`
+environment switches. Caddy is the mandatory exception: its foundation
+manifest declares `MANDATORY=true`, it runs on every node, and validation
+rejects any attempt to disable it.
 
-file; there are no
-per-service `*_DISABLE` switches. Foundation placement is policy-controlled;
-consumer placement is declared by `PLACEMENT=follower` or
-`PLACEMENT=single-follower` in each v3 app manifest. A follower app is deployed
-on every follower; a single-follower app is deployed only on the follower named
-by its manifest `TARGET_NODE_KEY` , with the value stored in the app policy file
-declared by `POLICY_FILE` (for example `config/cluster/apps/aichorouter.policy` ).
+Add logical Followers with the repository helper instead of assembling a node
+descriptor by hand:
+
+```bash
+DOMAIN_NAME=aichorage.de ops/configure-cluster-node.sh add worker-3
+git diff -- config/cluster .woodpecker
+```
+
+The helper appends `worker-3` to `NODE_IDS`, creates it in `joining` state,
+derives every origin hostname from the application manifests, and regenerates
+the node-labelled Woodpecker workflows. It never accepts or commits a VPS IP.
+The optional `NODE_ORIGIN_PREFIX` changes only the DNS prefix; by default
+`worker-3` becomes `worker3`. Missing arguments are prompted on a terminal, and
+`CLUSTER_NODE_ASSUME_YES=1` supports a reviewed non-interactive repository
+change. The helper rejects a prefix that would reuse an origin hostname already
+assigned to another node. Node state changes use the same tool and reject unsafe
+transitions or a drain while an app policy still targets the node.
+
+Every application manifest uses version 5 with `PLACEMENT=consumer` and an
+`UPSTREAM_MODE` of `singleton`, `active-active`, or `active-passive`. Placement
+comes only from the policy's `NODES`; applications are never implicitly placed
+on every follower. A singleton requires exactly one active follower, while an
+active-active application accepts one or more ordered followers. This keeps
+logical placement independent of physical VPS addresses: changing which host
+owns `worker-1` changes root-only runtime identity and DNS, not app policy.
 When a consumer is active, the Leader can generate the initial shared random
 secrets once, while every Follower must receive the same values from the
 root-only bundle or explicit environment variables. A non-interactive
 bootstrap fails closed instead of inventing per-node credentials. Disabled
 consumers do not require their database or application secrets.
-To add a consumer, add an app descriptor under `apps/<id>/` , its two route
-templates, Compose file, and digest-pinned image key. No second placement list
-is required. The next normal push deploys it to every follower and adds its
-load-balanced route on the Leader. For a stateful service that does not need
-HA, use `PLACEMENT=single-follower` , declare `ROUTE_GROUPS` , `SECRET_KEYS` , and
-`MOVE_MODE=fresh` , and provide a dedicated origin field in every follower
-descriptor. Generated stage/switch/stop workflows deploy the selected target,
-switch the Leader after a health check, and stop old containers while retaining
-their data and runtime secrets. A target move starts with a fresh data
-directory; any previous local state is archived for manual recovery. The
-controller records an in-progress target transition under
+Non-secret defaults live in `apps/<id>/config.env`; durable per-node tuning
+overrides live in `config/cluster/overrides/<node-id>/<app-id>.env`. Secrets
+remain in root-only files under `/etc/llm-hub-lite` and are never committed.
+
+To add a consumer, add `apps/<id>/manifest.env`, `config.env`, its Compose and
+route templates, a policy under `config/cluster/apps/`, and digest-pinned image
+keys. The workflow generator derives all stage, publish, stop, and singleton
+finalizer jobs from that contract. `PUBLIC_ENDPOINTS` maps each public URL key
+to a DNS label; both Caddy and Compose derive the full URL from that declaration
+and `DOMAIN_NAME`. Shared credentials belong in `CLUSTER_SECRET_KEYS`, while
+host-local credentials belong in `NODE_SECRET_KEYS`. For a stateful singleton,
+declare its node secret keys,
+`MOVE_MODE=fresh`, and its state paths. A target move stages the selected
+follower, publishes the Leader route after health checks, then stops containers
+on unselected followers while retaining old data and runtime secrets. The new
+target starts with a fresh data directory; previous local state is archived for
+manual recovery. The controller records an in-progress transition under
 `/etc/llm-hub-lite/singleton-state` so an overlapping normal application
 workflow cannot accidentally reuse stale SQLite data; the marker is removed
 after the staged target is prepared. The journal records the old and new
 targets, release SHA, archive path, and phase ( `prepared` , `origin-healthy` ,
-`switched` , or `failed` ). A failed stage leaves the old Leader route serving
+`switched` , `completed` , or `failed` ). A failed stage leaves the old Leader route serving
 and preserves the journal/archive for an idempotent retry; do not delete the
 journal until the target has been verified or deliberately rolled back.
 
@@ -86,8 +116,9 @@ Legacy New API remains as a dormant manifest and is disabled by the committed
 policy. CPAPI and Cursor API Proxy are enabled singleton consumers at
 `cpapi.aichorage.de` and `cursorapi.aichorage.de`; both are unrelated to the
 legacy New API. Pigeon (OutlookEmail) remains packaged for a
-future opt-in but is disabled by committed policy and has no default workflow,
-route, container, or secret prompt. OpenObserve
+future opt-in but is disabled by committed policy and has no target stage,
+route, container, or secret prompt. Its generated publish/stop jobs are
+cleanup-only so an earlier deployment can be retired safely. OpenObserve
 is an enabled Leader foundation service at `observer.aichorage.de`. LibreChat is
 enabled on Followers and is published at
 `chat.aichorage.de` and `chat-admin.aichorage.de` . It uses MongoDB Atlas and
@@ -142,20 +173,23 @@ The publisher refuses to replace an existing release tag, exports the exact Git
 commit into a clean temporary context, runs type checking and all upstream
 tests with at most two workers, builds only `linux/amd64`, pushes SBOM and
 provenance metadata, and verifies anonymous pull access. Commit the printed
-immutable `tag@sha256:digest` in `ops/images.apps.prod.env`. That digest change,
-not the image build, enters the normal singleton deployment workflow on push.
+immutable `tag@sha256:digest` in `ops/images.apps.prod.env`. That shared manifest
+change, not the image build, triggers the generated consumer workflows on push;
+keep it in a dedicated commit because Woodpecker path filters cannot select an
+individual assignment inside the shared file.
 A new GHCR package must be made public once in its package settings; later
 publications verify that state but never try to change package visibility
 through an API.
 
 When introducing Cursorapi to an already-running cluster, push the reviewed
-commit, run the manual `foundation-upgrade-leader` chain for that exact commit,
-and wait for both follower foundation upgrades. Provision the two Cursorapi
-secrets on its selected follower, then retry the generated
-`singleton-stage-cursorapi` pipeline for the same commit. Its dependent switch
-and stop workflows publish the route only after origin health succeeds. The
-first automatic singleton attempt may fail before the foundation chain because
-the installed controller does not yet know the new app; this is a fail-closed
+control-plane commit, run the manual `foundation-upgrade-leader` chain for that
+exact commit, and wait for both follower foundation upgrades. Provision its two
+secrets on the selected follower, then retry
+`consumer-stage-cursorapi-<node>`. `consumer-publish-cursorapi` publishes the
+route only after origin health succeeds, and the generated
+`consumer-stop-cursorapi-<old-node>` jobs retire stale placements. The first
+automatic consumer attempt may fail before the foundation chain because the
+installed controller does not yet know the new app; this is a fail-closed
 ordering guard, not a reason to rerun bootstrap.
 
 Pigeon is the dormant single-node OutlookEmail package for
@@ -179,12 +213,13 @@ the initial login password. Generate the encryption/session key with
 
 Pigeon retains `worker-2` as its future target in
 `config/cluster/apps/pigeon.policy`, but `ENABLED=false` keeps it out of runtime
-placement and Woodpecker generation. To opt in later, select the target with
-`ops/configure-single-follower.sh pigeon`, set `ENABLED=true`, regenerate the
-Woodpecker workflows, run all validation, and deploy that reviewed control-plane
-change before provisioning secrets. Singleton data remains local: moving
-Pigeon does not copy it, and the previous target directory is retained as a
-timestamped archive.
+placement. To opt in later, select the target with
+`ops/configure-app-placement.sh pigeon <node-id>`, set `ENABLED=true`, regenerate
+the Woodpecker workflows, run all validation, and deploy that reviewed
+control-plane change before provisioning secrets. Disabled consumers retain a
+publish/stop reconciliation chain but have no target stage. Singleton data
+remains local: moving Pigeon does not copy it, and the previous target directory
+is retained as a timestamped archive.
 
 The default profile gives Aichorouter `0.9` CPU, `768m` container memory, one
 Go runtime thread ( `GOMAXPROCS=1` ), and a `500MiB` Go heap limit. This leaves
@@ -192,16 +227,15 @@ headroom for the Go runtime and SQLite while avoiding the 503 overloads caused
 by the previous 384 MiB cap. SQLite is limited to one idle and four open
 connections; relay pools, request body buffers, stream buffers, and downloads
 are bounded, while the optional memory cache, error log, and batch updater remain
-disabled. These defaults are set in `.env.prod` ; override the `AICHOROUTER_*`
-values there only when measured
-load requires it. Keep `AICHOROUTER_GOMEMLIMIT` below the container memory limit
-and leave at least enough headroom for the Go runtime and SQLite pages.
-An already-bootstrapped host keeps its explicit `.env.prod` values for
-operator overrides; updating `.env.prod.example` does not rewrite that file.
-For an existing target follower, update the four Aichorouter profile keys in
-`/opt/apps/llm-hub-lite/shared/.env.prod`, then use `platformctl recreate` so
-Compose applies the new limits and environment. A plain `platformctl restart`
-only restarts the old container definition.
+disabled. These defaults are committed in `apps/aichorouter/config.env`. Put a
+durable node-specific override in
+`config/cluster/overrides/<node-id>/aichorouter.env`; reserve root-only runtime
+files for secrets. Keep `AICHOROUTER_GOMEMLIMIT` below the container memory
+limit and leave enough headroom for the Go runtime and SQLite pages. A committed
+default or override is applied by its consumer workflow. For an emergency local
+override, update the host's runtime environment and use `platformctl recreate`
+so Compose applies the new limits; `platformctl restart` only restarts the old
+container definition and does not apply changed Compose configuration.
 
 If a previous interactive paste stored an invalid control byte in the session
 secret, replace it on the target follower and recreate only Aichorouter:
@@ -218,7 +252,7 @@ keep the existing `AICHOROUTER_CRYPTO_SECRET` unless it is also being rotated.
 Select its follower interactively before committing a policy change:
 
 ```bash
-ops/configure-single-follower.sh aichorouter
+ops/configure-app-placement.sh aichorouter worker-1
 git diff -- config/cluster/apps/aichorouter.policy
 git add config/cluster/apps/aichorouter.policy && git commit -m 'target aichorouter follower' && git push
 ```
@@ -331,14 +365,19 @@ reconciliation, validates the organization/stream path, and keeps the root
 credential on the Leader; Followers receive only the write-only collector
 token.
 
-On the selected followers, provision the enabled singleton services' root-only
-secrets once:
+Provision each enabled singleton's root-only secrets once with its manual
+Woodpecker workflow. For the default placement, run:
 
 ```bash
-sudo /opt/platform/control/current/ops/configure-app-secrets.sh aichorouter
-sudo /opt/platform/control/current/ops/configure-app-secrets.sh cpapi
-sudo /opt/platform/control/current/ops/configure-app-secrets.sh cursorapi
+consumer-secrets-aichorouter-worker-1
+consumer-secrets-cpapi-worker-1
+consumer-secrets-cursorapi-worker-1
 ```
+
+These workflow names are selected in the Woodpecker UI, not executed in a
+shell. They use protected repository secrets and avoid an SSH maintenance
+session. Direct `configure-app-secrets.sh` execution is reserved for initial
+bootstrap or repair when Woodpecker is unavailable.
 
 CPAPI exposes an unauthenticated `/healthz` endpoint that returns `{"status":"ok"}` .
 Its main container also has a native liveness check for the persisted config
@@ -354,9 +393,10 @@ curl -fsS https://worker1-cursorapi-origin.aichorage.de/healthz
 curl -fsS https://cursorapi.aichorage.de/healthz
 ```
 
-The helper reads `SECRET_KEYS` , `RUNTIME_ENV_FILE` , and `POLICY_FILE` from the
-manifest, so a future singleton can use the same command without adding a new
-script branch. Moving a singleton does not copy secrets or data to the new
+The helper reads `CLUSTER_SECRET_KEYS`, `NODE_SECRET_KEYS`,
+`RUNTIME_ENV_FILE`, and `POLICY_FILE` from the manifest, so a future consumer
+can use the same command without adding a new script branch. Moving a singleton
+does not copy node-local secrets or data to the new
 Follower. The stage job creates a fresh `DATA_ROOT/DATA_ROOT_REL` directory and
 retains any previous directory as `*.retained.<UTC timestamp>` ; the stop jobs
 remove only old containers. After verifying the new deployment, manual cleanup
@@ -365,16 +405,19 @@ directory, then remove that exact directory and the old runtime file under
 `/etc/llm-hub-lite` when it is no longer needed.
 
 For an enabled singleton target move, provision the future follower before
-committing the policy change. The explicit target option validates that the
-node is a known Follower and writes credentials locally without modifying
-cluster policy. For example, to move Cursorapi to `worker-2`:
+committing the policy change. Secret values remain outside Git, while generated
+manual Woodpecker workflows deliver protected repository secrets to an active
+Follower without modifying cluster policy. Then update placement from the
+operator checkout. For example, to move Cursorapi to `worker-2`:
+
+First run the manual `consumer-secrets-cursorapi-worker-2` workflow in
+Woodpecker. It uses protected repository secrets and validates the target node
+without an SSH session. Then commit the placement and generated workflow
+changes:
 
 ```bash
-ssh root@<worker-2-host-or-ip> \
-  '/usr/local/bin/configure-app-secrets cursorapi --target-node worker-2'
-
-ops/configure-single-follower.sh cursorapi
-ops/generate-woodpecker-workflows.sh
+ops/configure-app-placement.sh cursorapi worker-2
+ops/generate-woodpecker-workflows.sh generate
 ops/generate-woodpecker-workflows.sh --check
 git diff -- config/cluster/apps/cursorapi.policy .woodpecker/
 git add config/cluster/apps/cursorapi.policy .woodpecker/
@@ -382,22 +425,24 @@ git commit -m 'move cursorapi to worker-2'
 git push origin main
 ```
 
-Wait for `singleton-stage-cursorapi`, `singleton-switch-cursorapi`, and both
-stop workflows in that order, then verify the selected origin and public
-`/healthz`. The switch snapshots the installed Leader route and checks the
-manifest's expected health response at both endpoints. If publication or the
-public smoke fails, it atomically restores the old route, reloads Caddy, keeps
-the previous-target marker, and returns failure, so Woodpecker does not stop
-the old target. A failed rollback reload leaves a `*.route-backup.caddy` or
-`*.route-was-missing` file under `/etc/llm-hub-lite/singleton-state`; resolve
-and verify the Caddy route before removing that artifact and retrying.
+Wait for `consumer-stage-cursorapi-worker-2`,
+`consumer-publish-cursorapi`, and the generated stop job for each unselected
+follower, followed by `consumer-finalize-cursorapi-worker-2`, in that order. The
+finalizer retains the active service and closes its node-local transition journal
+only after the route and stale-node steps succeed. The publish job snapshots the installed Leader route
+and checks the manifest's expected health response at the origin and public
+endpoint. If publication or the public smoke fails, it atomically restores the
+old route, reloads Caddy, keeps the previous-target marker, and returns failure,
+so Woodpecker does not stop the old target. A failed rollback reload leaves a
+`*.route-backup.caddy` or `*.route-was-missing` file under
+`/etc/llm-hub-lite/singleton-state`; resolve and verify the Caddy route before
+removing that artifact and retrying.
 
-The generated Woodpecker singleton workflow stages the new image/configuration
-on that follower, verifies its origin health, switches the Leader route, then
-stops old singleton containers in stable node order. Data and runtime secrets
-are retained. Normal application workflows set `DEPLOY_SKIP_SINGLETONS=1` and
-leave configured singleton containers untouched; they only reconcile normal
-follower applications such as LibreChat.
+The same generated consumer contract handles active-active applications. It
+stages each configured node in `NODES` order, publishes the complete healthy
+upstream set on the Leader, and stops the project on unselected followers.
+Singleton-specific state journaling remains an internal controller mechanism;
+operators use only the generic consumer workflows.
 
 CPAPI's checked-in configuration seed is reconciled by hash at container start.
 Provider/auth state under its runtime directory is retained. To rotate the
@@ -421,10 +466,10 @@ and low swappiness when no swap is already active. Override
 `LOW_MEMORY_SWAP_ENABLED` , `LOW_MEMORY_SWAPFILE` , `LOW_MEMORY_SWAP_SIZE` , or
 `LOW_MEMORY_SWAP_SWAPPINESS` before bootstrap if the provider supplies swap or
 uses a different storage policy. Swap is a pressure buffer, not a substitute
-for external MongoDB, Redis, and R2. Keep `LIBRECHAT_MONGO_BACKUP_NODE_ID`
-
-fixed to one Follower; only that node performs the optional `mongodump` export,
-avoiding duplicate Atlas backups.
+for external MongoDB, Redis, and R2. Keep `MONGO_BACKUP_NODE_ID` in
+`config/cluster/apps/librechat.policy` fixed to one selected Follower; only that
+node performs the optional `mongodump` export, avoiding duplicate Atlas
+backups.
 
 ## Local checks
 
@@ -434,7 +479,14 @@ cp .env.dev.example .env.dev
 ./stack.sh dev up
 ```
 
+`stack.sh dev` uses each app's committed `config.env` as a baseline and lets
+`.env.dev` override local, non-secret tuning. Digest-pinned image manifests and
+the selected node descriptor remain authoritative, so local settings cannot
+silently replace production image or topology identity.
+
 ## 🚀 First deployment
+
+See the concise operator runbook: [docs/first-deployment.md](docs/first-deployment.md).
 
 - Leader:
     - Caddy
@@ -609,7 +661,12 @@ from existing runtime configuration or the shared bundle, then prompted for.
 Use the Upstash Redis TLS connection string beginning with `rediss://` ; the
 plaintext `redis://` form cannot connect to Upstash's TLS endpoint and is
 rejected during bootstrap validation.
-Each bootstrap confirms the role derived from the committed inventory.
+When `NODE_ID` is omitted on an interactive first deployment, bootstrap first
+asks whether the VPS is the Leader or a Follower. Choosing Leader selects the
+committed `LEADER_NODE_ID`; choosing Follower asks for one of the committed
+logical Follower IDs. Supplying `NODE_ID` remains the unambiguous
+non-interactive interface. In both cases bootstrap confirms the role derived
+from committed policy; it never stores a second `NODE_ROLE` setting.
 Bootstrap prefetches only images active for that node role (Caddy and the
 foundation services on a Leader; consumer images on Followers) and retries
 transient registry failures before aborting.
@@ -656,6 +713,37 @@ only the ingestion username/token are copied in `shared-secrets.env` to
 Followers. The CPAPI management panel is enabled and protected by its
 management key.
 
+### Add or replace a VPS
+
+A new node uses a two-commit enrollment so it cannot receive consumers before
+its foundation is healthy:
+
+1. Run `DOMAIN_NAME=aichorage.de ops/configure-cluster-node.sh add worker-3`,
+   validate the generated diff, commit, and push. The node remains `joining`.
+2. Create DNS-only origin records from
+   `config/cluster/nodes/worker-3.env`, all pointing to the new VPS. Public app
+   records continue to point only to the Leader. Copy the Leader's root-only
+   shared-secret and Beszel enrollment bundles through the same protected
+   one-time channel used for the first two Followers.
+3. Copy the current bootstrap script to the new VPS and run it once with
+   `NODE_ID=worker-3`. Caddy, the Woodpecker worker, Beszel agent, and Observer
+   collector start; consumers remain absent because the node is still joining.
+4. Verify `platformctl health` and the Woodpecker agent, then run
+   `ops/configure-cluster-node.sh state worker-3 active`, commit, and push.
+   Woodpecker now creates the node's secret workflows and makes it eligible for
+   explicit consumer placement.
+5. Put the node in an app's ordered `NODES` using
+   `ops/configure-app-placement.sh`, review, commit, and push. The generated
+   stage/publish/stop chain performs the deployment without SSH.
+
+To remove a host, first move every consumer out of its app policies and push
+that change. Transition `active -> draining`, verify the stop workflows, then
+transition `draining -> retired` and run the generated
+`node-retire-<node-id>` workflow before decommissioning the VPS. To replace a
+VPS without changing logical placement, ensure the old host is stopped, update
+its origin DNS records to the replacement IP, and bootstrap the replacement
+with the same stable `NODE_ID`; IP addresses never enter Git.
+
 After bootstrapping the Leader, copy the root-only
 `/etc/llm-hub-lite/beszel-enrollment.env` bundle to each follower (or pass its
 base64 form as `BESZEL_ENROLLMENT_BUNDLE_B64` during follower bootstrap). The
@@ -683,8 +771,9 @@ curl -fsS https://cursorapi.<domain>/healthz
 ```
 
 Then enable the repository in Woodpecker and confirm that the generated
-`deploy-*` workflows are visible. SSH is no longer part of routine delivery;
-keep it only as a recovery channel.
+`consumer-stage-*`, `consumer-publish-*`, `consumer-stop-*`, and singleton
+`consumer-finalize-*` workflows are visible. SSH is no longer part of routine
+delivery; keep it only as an initial-bootstrap and recovery channel.
 
 The following values must be identical on every New API replica: Neon
 `NEW_API_SQL_DSN` , `NEW_API_SESSION_SECRET` , and `NEW_API_CRYPTO_SECRET` .
@@ -750,29 +839,30 @@ is private maintenance: update `LEADER_PUBLIC_IP` in the root-only
 cutover. No address change belongs in Git. Verify each origin with
 `curl --resolve <origin>:443:<new-ip> https://<origin>/...` .
 
-Leader promotion is deliberately manual because Woodpecker Server and Beszel
-Hub are SQLite controllers. Freeze deployments, restore the latest verified
-remote Restic snapshot on the candidate, set `LEADER_NODE_ID` in the policy,
-and move `NEW_API_MIGRATION_NODE_ID` and `NEW_API_BACKUP_NODE_ID` to follower
-IDs if either currently points at the
-candidate. During the maintenance window, set the candidate's public address
-as `LEADER_PUBLIC_IP` in every node's root-only runtime configuration and in
-the candidate's shared bundle. Run `cluster-reconcile` ,
-verify with `curl --resolve` , demote the old Leader, and only then change
-public Cloudflare DNS. The recovery point is the last successful remote
-backup; there is no automatic controller failover. Restores preserve the
+Leader promotion is deliberately manual because Woodpecker Server, Beszel Hub,
+and OpenObserve are local-state controllers. Freeze deployments, restore the
+latest verified remote Restic snapshot on the candidate, set `LEADER_NODE_ID`
+in the committed cluster policy, and update any New API ownership fields in
+`config/cluster/apps/newapi.policy` so they still name Followers. During the
+maintenance window, set the candidate's public address as `LEADER_PUBLIC_IP` in
+every node's root-only runtime configuration and in the candidate's shared
+bundle. Apply the reviewed foundation release and reconcile each node, verify
+with `curl --resolve`, demote the old Leader, and only then change public
+Cloudflare DNS. There is intentionally no generated `cluster-reconcile-*`
+workflow for this recovery operation. The recovery point is the last successful
+remote backup; there is no automatic controller failover. Restores preserve the
 target node's `/etc/llm-hub-lite/node.env` by default, preventing a snapshot
 from silently changing stable identity or address. Set `RESTORE_IDENTITY=1`
-
 only for an intentional, reviewed controller promotion.
 
 New API is the consumer HA exception: every replica uses the same Neon
-PostgreSQL DSN, `SESSION_SECRET` , and `CRYPTO_SECRET` . The workflow generator
-creates an `app-upgrade-<follower-id>` manual workflow for every follower. Run
-the migration follower first, wait for health and smoke checks, then upgrade
-the remaining followers; never upgrade two replicas concurrently. The node
-named by `NEW_API_BACKUP_NODE_ID` is the only node that runs `pg_dump` ; every
-node still backs up its local runtime and SQLite state.
+PostgreSQL DSN, `SESSION_SECRET`, and `CRYPTO_SECRET`. If it is enabled, its
+generic consumer stages follow the ordered policy `NODES`; keep the migration
+owner first so it becomes healthy before the other replicas. Never deploy two
+replicas concurrently. `NEW_API_MIGRATION_NODE_ID` and
+`NEW_API_BACKUP_NODE_ID` live in `config/cluster/apps/newapi.policy`, and both
+must name selected followers. Only the backup owner runs `pg_dump`; every node
+still backs up its local runtime and SQLite state.
 
 CPAPI is a separate singleton consumer at `cpapi.aichorage.de` , unrelated to
 the retained legacy New API. Its target follower is stored in the CPAPI app
@@ -809,10 +899,11 @@ warning thresholds only.
 LibreChat accounts and conversations live in MongoDB Atlas, while shared cache
 and stream state lives in Upstash. Local Restic snapshots include LibreChat
 logs, runtime configuration, and the shared secret bundle, but do not
-automatically back up Atlas, Upstash, or R2. Set
-`LIBRECHAT_MONGO_BACKUP_ENABLED=true` and install `mongodump` on the backup
-owner to include an Atlas archive; verify that archive before treating it as
-a disaster-recovery copy.
+automatically back up Atlas, Upstash, or R2. Set `MONGO_BACKUP_ENABLED=true`
+and `MONGO_BACKUP_NODE_ID=<selected-follower>` in
+`config/cluster/apps/librechat.policy`, then install `mongodump` on that owner
+to include an Atlas archive. Verify the archive before treating it as a
+disaster-recovery copy.
 
 ## Daily delivery
 
@@ -829,125 +920,93 @@ git push origin main
 For a committed Docker Compose, manifest, route, or application configuration
 change, this push is the deployment action. Woodpecker selects the appropriate
 ordered workflow and recreates only the affected projects after validation. Do
-not rerun the two bootstrap SSH commands for a routine update. If a change is
-only a local runtime override, run `platformctl recreate` on the affected node;
-if it changes bootstrap or host policy, use the documented manual foundation or
-cluster workflow.
+not rerun bootstrap SSH commands for a routine update. Bootstrap remains a
+first-deployment and repair tool with a wider restart scope.
 
-Use the workflow that matches the changed paths. A normal LibreChat or legacy
-New API source/configuration change is handled by the generated `deploy-*`
-chain. Aichorouter, CPAPI, and Cursorapi changes are handled by their generated
-`singleton-stage-*` -> `singleton-switch-*` -> `singleton-stop-*` chain.
-Disabled singleton applications have no generated workflows.
-When a singleton is disabled, its policy path moves into the automatic
-cluster-reconciliation workflow so every node removes stale containers and the
-Leader removes its stale route. Enabled singleton policies remain exclusively
-owned by their health-gated stage/switch/stop chain. Cluster reconciliation is
-strictly limited to committed cluster policy, node inventory, generated
-workflows, and their documentation; a commit containing foundation, application,
-image-manifest, or controller changes is rejected and must use the reviewed
-foundation workflow first.
-Observer changes are foundation changes and use the reviewed
-`foundation-upgrade-*` chain. Image digest changes are run through the generated manual
-`app-upgrade-worker-1` and `app-upgrade-worker-2` workflows, in order, for
-active-active consumer images. A singleton image change follows that
-singleton's stage/switch/stop chain. Do not start an app-upgrade for an
-unchanged image manifest.
+For planned restarts, VPS reboots, and controller recovery, follow
+[docs/restart-recover.md](docs/restart-recover.md).
 
-For a local runtime-only change, edit the target node's root-owned
-`/opt/apps/llm-hub-lite/shared/.env.prod` or the app secret file under
-`/etc/llm-hub-lite/`, then apply it without pulling an image:
+All consumers use one generated workflow contract:
 
-```bash
-ssh root@<target-follower> 'platformctl recreate app:/opt/platform/control/current/apps/aichorouter && platformctl health'
-```
+1. `consumer-stage-<app>-<node>` deploys each selected node in policy `NODES`
+   order and requires local health before the next stage can start.
+2. `consumer-publish-<app>` runs on the Leader, builds the upstream set from
+   the selected healthy nodes, reloads Caddy, and performs the public smoke.
+3. `consumer-stop-<app>-<node>` stops stale instances on every unselected
+   follower only after publication succeeds.
+4. For an enabled singleton, `consumer-finalize-<app>-<node>` runs on the
+   selected follower after all stale-node stops and closes the matching release
+   journal without stopping the active service.
 
-The same command applies to `cpapi` or `cursorapi` by replacing the application
-name in the path. Observer runtime values live in
-`/opt/platform/foundation/env/observer.env`; use `platformctl recreate
-observer-controller` and `platformctl recreate observer-collector` after an
-environment-file or collector configuration edit. Use `platformctl restart`
-when only a process restart is needed. These are intentionally local
-maintenance operations; put durable Compose/default changes in Git so the next
-release remains reproducible.
+Enabled apps also receive independent manual
+`consumer-secrets-<app>-<node>` workflows for the Leader and every active
+Follower that needs their declared keys. Run the future Follower's workflow
+before changing singleton placement. Routine deployments and placement changes
+then remain Git push driven; SSH is reserved for initial bootstrap and repair.
 
-Push consumer application changes to `main` . Woodpecker validates the exact commit, creates a verified
-backup, updates the Leader controller bundle, reconciles every follower node,
-reloads Caddy only after health checks pass, and runs public smoke tests.  Foundation changes, image upgrades, and runner upgrades remain explicit reviewed workflows.
+For a singleton, this is a health-gated target transition. For active-active,
+all selected replicas are staged before their complete upstream set is
+published. A failed stage rolls back only that node and stops the dependency
+chain; a failed publish restores the prior route and does not stop old targets.
+Disabled consumers generate no stage jobs: their publish job removes the route,
+then their stop jobs retire the project from every follower. This makes both
+enablement and placement changes convergent without a second reconciliation
+workflow.
 
-The automatic push workflows are intentionally limited to enabled
-non-singleton app paths under `apps/<id>/` , their policy files under
-`config/cluster/apps/` , and the non-cluster Caddy route/config files. Singleton
-app changes use their generated stage/switch/stop workflow chain instead;
-they are excluded from the normal rollout to prevent concurrent deployments.
-Changes under `ops/` ,
-`compose/foundation/` , foundation image manifests, or the deployment runner do
-not start a consumer rollout. Keep those control-plane changes in a separate
-commit from consumer changes: after pushing them, run the generated manual
-`foundation-upgrade-leader` workflow and let its dependencies update the
-Followers before resuming normal delivery. A commit that mixes a control-plane
-path with an app path is intentionally rejected by the deployment scope check.
-When a reviewed release combines control-plane changes with disabling a
-singleton, push it, run `foundation-upgrade-leader` for that exact commit and
-let its Follower dependencies finish, then retry that commit's
-`cluster-reconcile-leader` pipeline. The first automatic reconciliation may
-stop at the installed-controller safety guard; after the foundation chain, the
-retry uses the new controller to remove the disabled app's stale route and
-containers on all nodes.
-App image manifest changes for active-active consumers use the generated manual
-`app-upgrade-<follower-id>` workflows instead of the normal source deployment;
-singleton image changes use the singleton chain described above. If an image
-digest and source change must ship together, use the workflow for that app and
-do not rely on the normal deploy job.
+Consumer workflows accept app source, app policy, node inventory, committed
+per-node overrides, route configuration, and the application image manifest.
+An image digest change therefore uses the same reviewed consumer chain; there
+is no separate generated `app-upgrade-*` family. Keep unrelated app changes in
+separate commits so a shared image-manifest change does not trigger unnecessary
+consumer rollouts.
+
+Foundation/controller changes under `ops/`, `compose/foundation/`, foundation
+policies, or the foundation image manifest use the generated manual
+`foundation-upgrade-leader` workflow. Its dependencies update the remaining
+nodes in inventory order. Runner changes use the separate manual
+`runner-upgrade-leader` chain. The scope guards reject a consumer job that also
+contains control-plane or foundation files; split mixed changes and apply the
+foundation commit before pushing dependent consumer changes.
+
+Observer is a foundation service, so Observer controller, collector, and
+retention changes use `foundation-upgrade-*`. Consumer defaults belong in
+`apps/<id>/config.env`; committed host-specific tuning belongs in
+`config/cluster/overrides/<node-id>/<app-id>.env`. Both flow through Git and the
+consumer workflow. Root-only app secrets and emergency runtime overrides are
+the exception. Changing those requires an approved host maintenance session,
+followed by `platformctl recreate` and `platformctl health`; do not turn that
+break-glass procedure into the daily deployment path. Use `platformctl restart`
+only when no Compose or environment definition changed.
+
+Each node fetches the same exact commit and keeps independent current, previous,
+and rollback pointers. Workflows are serialized through the shared deployment
+concurrency group. If a node is offline or unhealthy, recover it and retry the
+same Woodpecker build; no SSH fan-out is required for routine delivery.
 
 ### Enabling Pigeon later
 
 Pigeon is disabled by default. Enabling it is a reviewed control-plane change:
 
 1. Create the selected Follower's DNS-only origin, run
-   `ops/configure-single-follower.sh pigeon`, and set `ENABLED=true` in the app
+   `ops/configure-app-placement.sh pigeon <node-id>`, and set `ENABLED=true` in the app
    policy.
 2. Run `ops/generate-woodpecker-workflows.sh generate`, repository validation,
    and pre-commit, then commit the policy and generated workflows together.
-3. Push the commit and run the reviewed `foundation-upgrade-leader` chain so
-   every node installs the policy and workflows without publishing Pigeon.
-4. Provision Pigeon secrets once on its selected target with
-   `configure-app-secrets.sh pigeon`, then run the generated Pigeon singleton
-   stage/switch/stop chain. The public route switches only after origin health
-   succeeds.
-
-The automatic consumer path is ordered `Leader -> worker-1 -> worker-2` . Each
-node fetches the same full commit over HTTPS and keeps its own release and
-rollback pointers. A failed node rolls back locally and stops the dependency
-chain, so a later Follower is not updated against an unverified predecessor.
-Consumer source, manifests, and application Compose files under `apps/` are
-included in this path. Non-cluster committed runtime configuration under
-`config/` (including Caddy and route files) is also rendered and reloaded by
-this path. The committed cluster policy and node inventory under
-`config/cluster/policy.env` , `config/cluster/nodes/` , and non-singleton app
-policies under `config/cluster/apps/` use the separate `cluster-reconcile`
-
-path. Foundation Compose
-files, foundation images, deployment scripts, and runner images remain explicit
-reviewed workflows; they are deliberately rejected by an ordinary consumer
-deployment. Singleton source or target-policy changes use their own generated
-stage/switch/stop chain; the stage validates the selected target directly and
-does not wait for an unrelated cluster-reconcile pipeline.
-
-The rollout is ordered rather than a distributed transaction. If a node is
-offline or fails health checks, its deployment rolls back locally and the
-dependency chain stops before the next node. Retry the same Woodpecker build
-after recovery; no SSH fan-out is required.
+3. Push the control-plane commit and run the reviewed
+   `foundation-upgrade-leader` chain so every node installs the new workflows.
+4. Run the generated manual `consumer-secrets-pigeon-<node-id>` workflow, then
+   push a consumer-scoped commit or retry the Pigeon consumer chain for that
+   release. Publication occurs only after target health succeeds. Use direct
+   `configure-app-secrets.sh pigeon` only as a repair fallback.
 
 ## Woodpecker troubleshooting
 
 Mutating workflows share the `llm-hub-lite-deployment` concurrency group. This
 is intentional: every deployment can update release pointers and generated
-Caddy configuration, so a normal deploy, singleton transition, cluster
-reconciliation, image upgrade, foundation upgrade, runner upgrade, or rollback
-must finish before another one starts. A queued build is not stuck; wait for
-the earlier mutating workflow or cancel the obsolete build and rerun the newest
-commit.
+Caddy configuration, so a consumer stage/publish/stop transition, foundation
+upgrade, runner upgrade, or rollback must finish before another one starts. A
+queued build is not stuck; wait for the earlier mutating workflow or cancel the
+obsolete build and rerun the newest commit.
 
 The `platform-submit` step streams the deployment runner log into the
 Woodpecker step while it runs. The first useful line is the deployment metadata
@@ -956,12 +1015,13 @@ scope rejection then lists every changed path, which makes a mixed commit easy
 to correct. `.env.prod.example` and `.env.dev.example` are templates and may be
 committed with application changes; they never overwrite a host's live
 `/opt/apps/llm-hub-lite/shared/.env.prod`. Foundation files, runner code, and
-image manifests still require their reviewed workflows.
+foundation image manifests still require their reviewed manual workflows;
+application image manifests use the affected generated consumer workflows.
 
 When a pipeline fails, copy the complete failed step log, including the
-`--- host deployment diagnostics ---` block printed at the end. For a singleton
-failure, the block is limited to that app; for a normal or foundation failure,
-it covers the local foundation and active consumer projects. The diagnostics
+`--- host deployment diagnostics ---` block printed at the end. For a consumer
+failure, the block is limited to that app; for a foundation failure, it covers
+the local foundation and active consumer projects. The diagnostics
 include the current/previous release pointers, maintenance marker, Compose
 state, container exit/OOM/restart counts, and recent healthcheck output. Do not
 paste `/etc/llm-hub-lite/*.env` files or any secret values.
@@ -1009,6 +1069,11 @@ runner upgrades run Leader first, then Followers; rollback runs Followers
 before the Leader. This keeps image and configuration changes consistent
 without SSH fan-out.
 
+Workflow generation is transactional. `ops/generate-woodpecker-workflows.sh`
+renders and dependency-checks the complete generated set in a temporary sibling
+tree, then applies it as one operation; a failed render or copy restores the
+previous generated workflows and image locks.
+
 Useful commands on a node:
 
 ```sh
@@ -1045,7 +1110,7 @@ RESTORE_SOURCE=remote RESTORE_NODE_ID=leader platformctl restore extract latest
 platformctl recreate <project>
 ```
 
-Docker restart policies, live-restore, `platform-recovery.service` , and the recovery timer make reboot recovery idempotent.
+Docker restart policies, live-restore, `platform-recovery.service` , and the recovery timer make reboot recovery idempotent. Recovery starts and verifies foundation projects first; if a consumer cannot start, be stopped, or become healthy, `platformctl recover` still publishes the last valid routes but exits nonzero so systemd records the failure and the retry timer attempts recovery again. Recovery uses the root-only `/etc/llm-hub-lite/validation.stamp` to skip repeated external Compose/Caddy validation when all committed and host-local inputs are unchanged; use `platformctl recover --full` after changing Docker or Compose itself. Periodic health checks skip cleanly while a deployment lock is held, while manual health and diagnostics wait briefly for a consistent snapshot.
 Production snapshots require an initialized and verified remote Restic repository. Restic snapshots include runtime configuration, Caddy certificates, Woodpecker/Beszel SQLite online backups, release pointers, and application data without deleting live data. The scheduled timer wakes every 15 minutes for reboot recovery, but `reason=scheduled` snapshots are throttled to one per hour by `RESTIC_SCHEDULE_INTERVAL=3600`; manual, pre-deployment, post-bootstrap, and recovery snapshots remain immediate. Restic uses a persistent mode-700 cache, one reader, portable `auto` compression, `--skip-if-unchanged` when supported, and low CPU/I/O priority (`nice`/`ionice`) to reduce contention with consumer services. Older Restic clients that cannot use a newer requested compression mode automatically fall back to `auto`; clients without `--skip-if-unchanged` continue without that optional optimization. Override these `RESTIC_*` settings in the root-only `.env.prod` only after measuring the impact.
 If a bootstrap reports `invalid compression mode`, the installed Restic client is older than the configured mode. Copy the current `ops/bootstrap-vps.sh` to the host and rerun bootstrap; it normalizes the mode to a supported value and persists it in `.env.prod`. The error occurs before a snapshot is written, so do not delete or reinitialize the remote repository. Verify the repair with `platformctl backup snapshot manual`; inspect remote snapshots with the configured Restic credentials or use `RESTORE_SOURCE=remote platformctl restore extract latest` when a restore test is appropriate.
 Local-only snapshots are available only when the explicit production backup gate is disabled for beta/development use.

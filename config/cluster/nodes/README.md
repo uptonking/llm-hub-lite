@@ -24,6 +24,23 @@ change. Bootstrap stores the private `LEADER_PUBLIC_IP` value in each node's
 `/etc/llm-hub-lite/node.env`; Follower firewall reconciliation reads only that
 runtime value.
 
+Create a Follower with
+`DOMAIN_NAME=<base-domain> ops/configure-cluster-node.sh add <node-id>`. The
+helper derives origin keys from each manifest's `PUBLIC_ENDPOINTS` and
+`ROUTE_GROUPS`, applies manifest `NODE_DEFAULTS`, appends `NODE_IDS`, and
+regenerates Woodpecker workflows. New nodes always start as `joining`, which
+allows one-time foundation bootstrap but makes them ineligible for consumers.
+After foundation health is verified, use
+`ops/configure-cluster-node.sh state <node-id> active` and commit the generated
+diff. Draining requires all app policies to be evacuated first; retirement is
+allowed only from `draining`. Run the generated retirement workflow before
+decommissioning the physical VPS.
+
+Origin records in a Follower descriptor are DNS names, not physical identity.
+They may be repointed when a VPS IP changes. Stop the old host before
+bootstrapping its replacement with the same `NODE_ID`, so duplicate
+Woodpecker/Beszel agents cannot run concurrently.
+
 `NEW_API_NODE_TYPE` is deliberately node-local and is read only from this
 descriptor, never from the shared `.env`. The policy's
 `NEW_API_MIGRATION_NODE_ID` must point to exactly one follower whose descriptor

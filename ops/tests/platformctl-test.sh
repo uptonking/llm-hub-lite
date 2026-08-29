@@ -1,11 +1,43 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+lock_key="${repo_root//[^A-Za-z0-9]/_}"
+test_lock_dir="${TMPDIR:-/tmp}/llm-hub-lite-${lock_key}-platformctl-test.lock"
+acquire_test_lock() {
+	local owner
+	if mkdir "$test_lock_dir" 2>/dev/null; then
+		printf '%s\n' "$$" >"$test_lock_dir/pid"
+		return
+	fi
+	owner="$(cat "$test_lock_dir/pid" 2>/dev/null || true)"
+	if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+		printf 'platformctl test is already running (pid %s); refusing a concurrent run\n' "$owner" >&2
+		exit 2
+	fi
+	rm -f -- "$test_lock_dir/pid" 2>/dev/null || true
+	rmdir "$test_lock_dir" 2>/dev/null || {
+		printf 'unable to clear stale platformctl test lock: %s\n' "$test_lock_dir" >&2
+		exit 2
+	}
+	mkdir "$test_lock_dir" || {
+		printf 'unable to acquire platformctl test lock: %s\n' "$test_lock_dir" >&2
+		exit 2
+	}
+	printf '%s\n' "$$" >"$test_lock_dir/pid"
+}
+release_test_lock() {
+	rm -f -- "$test_lock_dir/pid" 2>/dev/null || true
+	rmdir "$test_lock_dir" 2>/dev/null || true
+}
+acquire_test_lock
 tmp="$(mktemp -d)"
-cleanup() { rm -rf -- "$tmp"; }
+cleanup() {
+	rm -rf -- "$tmp"
+	[[ -z "${DESCRIPTOR_CACHE_DIR:-}" ]] || rm -rf -- "$DESCRIPTOR_CACHE_DIR"
+	release_test_lock
+}
 interrupted() {
 	trap - EXIT HUP INT TERM
-	pkill -TERM -P $$ 2>/dev/null || true
 	cleanup
 	exit 130
 }
@@ -16,13 +48,19 @@ trap interrupted HUP INT TERM
 export PLATFORM_WAIT_INTERVAL_SECONDS=0
 # Compose and Caddy are covered by the initial validation and sync checks;
 # route/policy matrix cases only need the local validator and renderer.
+export PLATFORM_TEST_MODE=1
 export PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1
-mkdir -p "$tmp/control/releases/test" "$tmp/foundation/env" "$tmp/app/shared" "$tmp/config" "$tmp/bin" "$tmp/locks"
+# Keep Compose service discovery enabled for the initial strict validation;
+# matrix cases switch this on only after that coverage has passed.
+export PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0
+mkdir -p "$tmp/control/releases/test" "$tmp/foundation/env" "$tmp/foundation/manifests" "$tmp/app/shared" "$tmp/config" "$tmp/bin" "$tmp/locks"
 cp -a "$repo_root/apps" "$repo_root/config" "$tmp/control/releases/test/"
 ln -s "$tmp/control/releases/test" "$tmp/control/current"
 for f in "$repo_root"/compose/foundation/*.yml; do cp "$f" "$tmp/foundation/"; done
-cp "$repo_root"/ops/foundation/*.env.example "$tmp/foundation/env/"
-cp "$repo_root/ops/foundation/observer.env.example" "$tmp/foundation/env/observer.env"
+cp "$repo_root"/compose/foundation/manifests/*.env "$tmp/foundation/manifests/"
+for source in "$repo_root"/ops/foundation/*.env.example; do
+	cp "$source" "$tmp/foundation/env/$(basename "$source" .example)"
+done
 sed -e "s#^OBSERVER_DATA_ROOT=.*#OBSERVER_DATA_ROOT=$tmp/observer#" \
 	-e 's#^OBSERVER_ROOT_USER_EMAIL=.*#OBSERVER_ROOT_USER_EMAIL=observer-admin@aichorage.test#' \
 	-e 's#^OBSERVER_ROOT_USER_PASSWORD=.*#OBSERVER_ROOT_USER_PASSWORD=test-observer-password#' \
@@ -63,6 +101,7 @@ printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
   *" ps --all -q observer-log-shipper"*) printf 'observer-log-shipper\n'; exit 0;;
   *" ps --all -q observer-controller"*) printf 'observer-controller\n'; exit 0;;
+  *" ps --all -q beszel-socket-proxy"*) printf 'beszel-socket-proxy\n'; exit 0;;
   *" ps --all -q health-probe"*)
     case "$*" in
       *"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*)
@@ -121,11 +160,17 @@ case "$*" in
     ;;
 esac
 case "$*" in
+  *"inspect --format"*aichorouter*)
+    [ "${CONSUMER_UNHEALTHY:-0}" = 1 ] && printf 'running unhealthy\n' && exit 0
+    ;;
   *"inspect --format"*observer-health-probe*)
     [ "${OBSERVER_CONTROLLER_UNHEALTHY:-0}" = 1 ] && printf 'running unhealthy\n' && exit 0
     ;;
   *"inspect --format"*observer-log-shipper*)
     [ "${OBSERVER_COLLECTOR_UNHEALTHY:-0}" = 1 ] && printf 'running unhealthy\n' && exit 0
+    ;;
+  *"inspect --format"*beszel-agent*)
+    [ "${BESZEL_AGENT_UNHEALTHY:-0}" = 1 ] && printf 'running unhealthy\n' && exit 0
     ;;
 esac
 case "$1 $2" in "network inspect") exit 0;; "inspect --format") printf 'running healthy\n';; "run --rm") exit 0;; esac
@@ -168,10 +213,10 @@ case "$url" in
 esac
 EOF
 chmod +x "$tmp/bin"/*
-export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
+export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" FOUNDATION_MANIFEST_ROOT="$tmp/foundation/manifests" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
 export COMPOSE_CALL_LOG="$tmp/compose.log" DOCKER_CALL_LOG="$tmp/docker.log" CURL_CALL_LOG="$tmp/curl.log"
-foundation_env_function="$(sed -n '/^foundation_env() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
-foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUNDATION_ENV_ROOT=/foundation bash -c '
+foundation_env_function="$(sed -n '/^env_value() {/,/^}/p; /^foundation_manifest_file() {/,/^}/p; /^foundation_manifest_value() {/,/^}/p; /^foundation_env() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
+foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUNDATION_ENV_ROOT=/foundation FOUNDATION_MANIFEST_ROOT="$tmp/foundation/manifests" bash -c '
 	eval "$FOUNDATION_ENV_FUNCTION"
 	die() { return 1; }
 	foundation_env caddy
@@ -183,12 +228,230 @@ foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUN
 	exit 1
 }
 PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=0 bash "$repo_root/ops/platformctl.sh" validate
+[[ -s "$tmp/config/validation.stamp" ]] || {
+	printf 'successful validation did not write a validation stamp\n' >&2
+	exit 1
+}
+grep -q '^SCHEMA=1$' "$tmp/config/validation.stamp"
+grep -q '^RELEASE_SHA=test$' "$tmp/config/validation.stamp"
+# All subsequent cases use the same fixture and mocked Compose implementation.
+# Avoid repeating the per-app `config --services` subprocess while retaining
+# the strict pass above as the contract test for descriptor/service wiring.
+export PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=1
+# Most matrix cases assert policy and lifecycle behavior, not regenerated
+# routes. Keep route rendering enabled only for the focused route assertions
+# below; this avoids repeatedly rebuilding the same Caddy candidate on macOS.
+export PLATFORM_TEST_SKIP_RENDER=1
+export PLATFORM_TEST_FAST_VALIDATE=1
+export PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=1
+# Load platformctl's functions once for the repeated Observer environment
+# matrix. Each validation still runs in a subshell (so `die` cannot terminate
+# this harness), but avoids reparsing a 2,000-line script for every value on
+# macOS. The production entrypoint remains unchanged because this mode is
+# explicitly library-only and never dispatches a command.
+PLATFORMCTL_LIBRARY=1 source "$repo_root/ops/platformctl.sh"
+unset PLATFORMCTL_LIBRARY
+trap cleanup EXIT
+trap interrupted HUP INT TERM
+
+# A reboot recovery with unchanged inputs should use the stamp and skip the
+# external Compose/Caddy validation phase. Test the exact reuse path directly;
+# invoking a complete recovery here would repeat the expensive lifecycle
+# matrix below and make the regression test needlessly slow on macOS.
+if ! validation_stamp_matches; then
+	printf 'validation stamp did not match unchanged fixture\n' >&2
+	exit 1
+fi
+: >"$tmp/compose.log"
+PLATFORM_RECOVERY_STAMP_MATCH=1 VALIDATE_SKIP_EXTERNAL=1 VALIDATE_STAGE_ONLY=1 \
+	PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1 validate
+if grep -Fq ' config --quiet' "$tmp/compose.log"; then
+	printf 'matching validation stamp did not skip external Compose validation\n' >&2
+	exit 1
+fi
+
+# Validation-only matrix cases can share the controller functions loaded above.
+# Keep an EXIT trap inside the subshell because a failed render would otherwise
+# leave its private staging directory behind. Do not call platformctl's full
+# cleanup_candidate here: it also removes the shared descriptor cache, while
+# each command substitution intentionally has its own shell state.
+cleanup_validation_candidate() {
+	local candidate="${RUNTIME_CONFIG_CANDIDATE:-}"
+	if [[ -n "$candidate" && "$candidate" == "$RUNTIME_ROOT"/.config.staging.* && -d "$candidate" ]]; then
+		rm -rf -- "$candidate"
+	fi
+}
+platform_validate_library() {
+	local descriptor="$1" render="$2" external="$3" compose_inspect="$4" fast="$5" only_app="${6:-}" route_app
+	route_app="${7-$descriptor}"
+	# shellcheck disable=SC2030 # assignments are intentional within the subshell below
+	(
+		PLATFORM_TEST_ONLY_DESCRIPTOR="$descriptor"
+		# Focused descriptor cases only assert that application's generated route.
+		# The initial unscoped validation and the final route assertions cover the
+		# complete consumer matrix; avoiding unrelated route rendering keeps this
+		# Bash 3.2 fixture bounded on macOS without changing production behavior.
+		if [[ "$route_app" == all ]]; then
+			PLATFORM_ONLY_ROUTE_APP_ID=''
+		else
+			PLATFORM_ONLY_ROUTE_APP_ID="$route_app"
+		fi
+		PLATFORM_TEST_SKIP_RENDER="$render"
+		PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="$external"
+		PLATFORM_TEST_SKIP_COMPOSE_INSPECTION="$compose_inspect"
+		PLATFORM_TEST_FAST_VALIDATE="$fast"
+		PLATFORM_ONLY_APP_ID="$only_app"
+		# The helper is frequently called from an `if output=$(...)` assertion.
+		# Bash suppresses inherited errexit in that context, including inside nested
+		# command substitutions used by render_template. Re-enable it explicitly so
+		# validation failures cannot be converted into a false success.
+		set -Eeuo pipefail
+		trap cleanup_validation_candidate EXIT
+		validate
+	)
+}
+# shellcheck disable=SC2031 # reads env set inside the subshell above; defaults keep it safe
+platform_validate_fast() {
+	platform_validate_library "${PLATFORM_TEST_ONLY_DESCRIPTOR:-}" 1 \
+		"${PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION:-1}" \
+		"${PLATFORM_TEST_SKIP_COMPOSE_INSPECTION:-1}" \
+		"${PLATFORM_TEST_FAST_VALIDATE:-1}" "${PLATFORM_ONLY_APP_ID:-}"
+}
+
+# Public endpoint declarations are the single source for both Caddy routes and
+# Compose URL variables. Reject malformed, duplicate, missing, and unused
+# mappings before a release can mutate runtime state.
+aichorouter_manifest="$tmp/control/current/apps/aichorouter/manifest.env"
+cp "$aichorouter_manifest" "$tmp/aichorouter.manifest.original"
+assert_invalid_public_endpoints() {
+	local replacement="$1" expected="$2" output
+	sed "s#^PUBLIC_ENDPOINTS=.*#PUBLIC_ENDPOINTS=$replacement#" "$tmp/aichorouter.manifest.original" >"$aichorouter_manifest"
+	if output="$(PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_library aichorouter 1 1 0 1 2>&1)"; then
+		printf 'cluster validation accepted invalid public endpoints: %s\n' "$replacement" >&2
+		exit 1
+	fi
+	grep -Fq "$expected" <<<"$output"
+}
+assert_invalid_public_endpoints 'bad_key|aichorouter' 'invalid PUBLIC_ENDPOINTS'
+assert_invalid_public_endpoints 'AICHOROUTER_SITE|aichorouter-' 'invalid PUBLIC_ENDPOINTS'
+assert_invalid_public_endpoints 'AICHOROUTER_SITE|aichorouter;OTHER_SITE|aichorouter' 'duplicate PUBLIC_ENDPOINTS host'
+assert_invalid_public_endpoints 'OTHER_SITE|aichorouter' 'ROUTE_GROUPS public key is absent from PUBLIC_ENDPOINTS'
+assert_invalid_public_endpoints 'AICHOROUTER_SITE|aichorouter;OTHER_SITE|other' 'PUBLIC_ENDPOINTS key is absent from ROUTE_GROUPS'
+mv "$tmp/aichorouter.manifest.original" "$aichorouter_manifest"
+
+# Origin records are DNS-only routing identities. Reject hand-edited IP
+# literals and malformed/uppercase names before Caddy can publish them.
+worker_node="$tmp/control/current/config/cluster/nodes/worker-1.env"
+cp "$worker_node" "$tmp/worker-1.node.original"
+assert_invalid_origin_host() {
+	local replacement="$1" expected="$2" output
+	sed "s#^NODE_AICHOROUTER_ORIGIN_HOST=.*#NODE_AICHOROUTER_ORIGIN_HOST=$replacement#" \
+		"$tmp/worker-1.node.original" >"$worker_node"
+	if output="$(PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_library aichorouter 1 1 0 1 2>&1)"; then
+		printf 'cluster validation accepted invalid origin hostname: %s\n' "$replacement" >&2
+		exit 1
+	fi
+	grep -Fq "$expected" <<<"$output"
+}
+assert_invalid_origin_host '192.0.2.1' 'invalid origin host NODE_AICHOROUTER_ORIGIN_HOST for worker-1'
+assert_invalid_origin_host 'Worker1-aichorouter-origin.example.invalid' 'invalid origin host NODE_AICHOROUTER_ORIGIN_HOST for worker-1'
+mv "$tmp/worker-1.node.original" "$worker_node"
+
+# Node-local defaults are explicit, single-line values and may not overwrite
+# identity or role fields used by bootstrap and workflow routing.
+newapi_manifest="$tmp/control/current/apps/newapi/manifest.env"
+cp "$newapi_manifest" "$tmp/newapi.manifest.original"
+assert_invalid_node_defaults() {
+	local replacement="$1" expected="$2" output
+	sed "s#^NODE_DEFAULTS=.*#NODE_DEFAULTS=$replacement#" "$tmp/newapi.manifest.original" >"$newapi_manifest"
+	if output="$(platform_validate_library newapi 1 1 0 1 2>&1)"; then
+		printf 'cluster validation accepted invalid NODE_DEFAULTS: %s\n' "$replacement" >&2
+		exit 1
+	fi
+	grep -Fq "$expected" <<<"$output"
+}
+assert_invalid_node_defaults 'NODE_ID|newapi' 'NODE_DEFAULTS uses a reserved key'
+assert_invalid_node_defaults 'NEW_API_NODE_TYPE|slave|unexpected' 'invalid NODE_DEFAULTS entry'
+mv "$tmp/newapi.manifest.original" "$newapi_manifest"
+
+# LibreChat backup ownership is committed alongside placement. Invalid booleans
+# and owners outside NODES must fail validation before deployment mutates the
+# running release.
+librechat_policy="$tmp/control/current/config/cluster/apps/librechat.policy"
+cp "$librechat_policy" "$tmp/librechat.policy.original"
+assert_invalid_librechat_policy() {
+	local expression="$1" expected="$2" output
+	sed -E "$expression" "$tmp/librechat.policy.original" >"$librechat_policy"
+	if output="$(platform_validate_library librechat 1 1 0 1 2>&1)"; then
+		printf 'cluster validation accepted invalid LibreChat backup policy\n' >&2
+		exit 1
+	fi
+	grep -Fq "$expected" <<<"$output"
+}
+assert_invalid_librechat_policy \
+	's/^MONGO_BACKUP_ENABLED=.*/MONGO_BACKUP_ENABLED=perhaps/' \
+	'LibreChat MONGO_BACKUP_ENABLED must be true or false'
+assert_invalid_librechat_policy \
+	's/^MONGO_BACKUP_NODE_ID=.*/MONGO_BACKUP_NODE_ID=leader/' \
+	'LibreChat MONGO_BACKUP_NODE_ID is absent from NODES'
+mv "$tmp/librechat.policy.original" "$librechat_policy"
+
+# A draining follower can remain in inventory while work is evacuated, but the
+# node that owns routing and the control plane must always be active.
+cp "$tmp/control/current/config/cluster/nodes/leader.env" "$tmp/leader.env.original"
+sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$tmp/leader.env.original" >"$tmp/control/current/config/cluster/nodes/leader.env"
+if output="$(PLATFORM_TEST_FAST_VALIDATE=0 PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_fast 2>&1)"; then
+	printf 'cluster validation accepted a draining Leader\n' >&2
+	exit 1
+fi
+grep -Fq 'designated Leader node must be active: leader' <<<"$output"
+mv "$tmp/leader.env.original" "$tmp/control/current/config/cluster/nodes/leader.env"
+
+# The render shortcut is test-only and must never be accepted in production
+# validation mode.
+if output="$(PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=0 PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_SKIP_RENDER=1 bash "$repo_root/ops/platformctl.sh" validate 2>&1)"; then
+	printf 'validation accepted PLATFORM_TEST_SKIP_RENDER without external-validation test mode\n' >&2
+	exit 1
+fi
+grep -Fq 'PLATFORM_TEST_SKIP_RENDER requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1' <<<"$output"
+if output="$(PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=0 PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_TEST_FAST_VALIDATE=1 bash "$repo_root/ops/platformctl.sh" validate 2>&1)"; then
+	printf 'validation accepted PLATFORM_TEST_FAST_VALIDATE without external-validation test mode\n' >&2
+	exit 1
+fi
+grep -Fq 'PLATFORM_TEST_FAST_VALIDATE requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1' <<<"$output"
+if output="$(PLATFORMCTL_LIBRARY=1 PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=0 PLATFORM_TEST_SKIP_SYNC_VALIDATION=0 PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_TEST_FAST_VALIDATE=0 PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 bash "$repo_root/ops/platformctl.sh" status 2>&1)"; then
+	printf 'platformctl library mode was accepted outside test validation mode\n' >&2
+	exit 1
+fi
+grep -Fq 'PLATFORMCTL_LIBRARY requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1' <<<"$output"
+if output="$(PLATFORM_TEST_MODE=0 PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1 PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 bash "$repo_root/ops/platformctl.sh" status 2>&1)"; then
+	printf 'external validation skip was accepted outside explicit test mode\n' >&2
+	exit 1
+fi
+grep -Fq 'test-only validation controls require PLATFORM_TEST_MODE=1' <<<"$output"
+
+# Caddy is the mandatory ingress substrate on every node. Removing or
+# weakening its manifest must invalidate the release instead of silently
+# producing a platform with no ingress owner.
+cp "$tmp/foundation/manifests/caddy.env" "$tmp/caddy.env.original"
+sed 's/^MANDATORY=.*/MANDATORY=false/' "$tmp/caddy.env.original" >"$tmp/foundation/manifests/caddy.env"
+if output="$(PLATFORM_TEST_FAST_VALIDATE=0 PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_fast 2>&1)"; then
+	printf 'foundation validation accepted a non-mandatory Caddy manifest\n' >&2
+	exit 1
+fi
+grep -Fq 'Caddy foundation manifest must declare MANDATORY=true' <<<"$output"
+mv "$tmp/caddy.env.original" "$tmp/foundation/manifests/caddy.env"
+
 : >"$tmp/compose.log"
 PLATFORM_RECREATE_FOUNDATION=1 bash "$repo_root/ops/platformctl.sh" sync foundation >/dev/null
 grep -Fq -- '--force-recreate --wait' "$tmp/compose.log"
+# The first sync above proves the production path validates before mutation.
+# Later sync cases exercise reconciliation branches against the same fixture;
+# avoid repeating the complete validator for each mocked Compose call.
+export PLATFORM_TEST_SKIP_SYNC_VALIDATION=1
 
 observer_validation() {
-	bash "$repo_root/ops/platformctl.sh" validate-observer
+	(validate_observer_env)
 }
 set_observer_value() {
 	local key="$1" value="$2"
@@ -252,7 +515,7 @@ mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 mkdir -p "$tmp/observer/data" "$tmp/observer/collector-buffer"
 printf 'observer-data\n' >"$tmp/observer/data/log.txt"
 printf 'collector-buffer\n' >"$tmp/observer/collector-buffer/buffer"
-bash "$repo_root/ops/platformctl.sh" validate
+platform_validate_library observer 0 1 1 1
 grep -Fq 'foundation.example.invalid' "$tmp/app/shared/runtime/config/Caddyfile" "$tmp/app/shared/runtime/config/foundation-routes.d/observer.caddy"
 grep -Fq 'foundation-ingest.example.invalid' "$tmp/app/shared/runtime/config/foundation-routes.d/observer.caddy"
 if grep -Fq 'stale-app.example.invalid' "$tmp/app/shared/runtime/config/foundation-routes.d/observer.caddy"; then
@@ -287,9 +550,50 @@ if grep -Fq 'test-observer-password' <<<"$leader_diagnose" || grep -Fq 'o2oi_' <
 	printf 'Observer diagnostics exposed a credential\n' >&2
 	exit 1
 fi
-smoke_success="$(FAIL_FLOCK=1 OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 bash "$repo_root/ops/platformctl.sh" observer-smoke 2>&1)"
+# The smoke implementation takes a short read lock for its local snapshot and
+# releases it before network retries. This fixture already runs with the
+# deployment lock logically held, so bypass the mocked flock binary here and
+# exercise the query/heartbeat behavior itself.
+smoke_success="$(PLATFORM_LOCK_HELD=1 FAIL_FLOCK=1 OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 bash "$repo_root/ops/platformctl.sh" observer-smoke 2>&1)"
 grep -Fq 'attempts=1 timeout=120s' <<<"$smoke_success"
 grep -Fq -- '--max-time 10' "$tmp/docker.log"
+# Observer ingestion only expects heartbeats from nodes that are active and
+# eligible for the collector component. Joining, draining, and retired nodes
+# remain in inventory for lifecycle work, but must not make the smoke fail.
+cp "$tmp/control/current/config/cluster/nodes/worker-1.env" "$tmp/worker-1.state-original"
+cp "$tmp/control/current/config/cluster/nodes/worker-2.env" "$tmp/worker-2.state-original"
+sed 's/^NODE_STATE=.*/NODE_STATE=joining/' "$tmp/worker-1.state-original" >"$tmp/control/current/config/cluster/nodes/worker-1.env"
+sed 's/^NODE_STATE=.*/NODE_STATE=retired/' "$tmp/worker-2.state-original" >"$tmp/control/current/config/cluster/nodes/worker-2.env"
+observer_filtered="$(PLATFORM_LOCK_HELD=1 FAIL_FLOCK=1 OBSERVER_SMOKE_ATTEMPTS=1 OBSERVER_SMOKE_RETRY_DELAY=0 bash "$repo_root/ops/platformctl.sh" observer-smoke 2>&1)"
+grep -Fq 'expected_nodes=leader' <<<"$observer_filtered"
+grep -Fq 'nodes=leader' <<<"$observer_filtered"
+mv "$tmp/worker-1.state-original" "$tmp/control/current/config/cluster/nodes/worker-1.env"
+mv "$tmp/worker-2.state-original" "$tmp/control/current/config/cluster/nodes/worker-2.env"
+# Route validation must reject an inactive upstream instead of silently
+# publishing an endpoint that points at a node being drained.
+cp "$tmp/control/current/config/cluster/nodes/worker-2.env" "$tmp/worker-2.state-original"
+sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$tmp/worker-2.state-original" >"$tmp/control/current/config/cluster/nodes/worker-2.env"
+if output="$(platform_validate_fast 2>&1)"; then
+	printf 'route validation accepted an inactive consumer upstream\n' >&2
+	exit 1
+fi
+grep -Fq 'consumer app target is not active: worker-2' <<<"$output"
+mv "$tmp/worker-2.state-original" "$tmp/control/current/config/cluster/nodes/worker-2.env"
+# Leader-side origin smoke skips inactive origins, but must fail closed when no
+# eligible active follower remains to check.
+cp "$tmp/control/current/config/cluster/nodes/worker-1.env" "$tmp/worker-1.state-original"
+cp "$tmp/control/current/config/cluster/nodes/worker-2.env" "$tmp/worker-2.state-original"
+sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$tmp/worker-2.state-original" >"$tmp/control/current/config/cluster/nodes/worker-2.env"
+consumer_partial="$(bash "$repo_root/ops/platformctl.sh" consumer-origin-smoke librechat 2>&1)"
+grep -Fq 'skipping inactive or non-follower target librechat/worker-2' <<<"$consumer_partial"
+sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$tmp/worker-1.state-original" >"$tmp/control/current/config/cluster/nodes/worker-1.env"
+if output="$(bash "$repo_root/ops/platformctl.sh" consumer-origin-smoke librechat 2>&1)"; then
+	printf 'origin smoke accepted a placement with no eligible active origins\n' >&2
+	exit 1
+fi
+grep -Fq 'consumer has no origins to check: librechat' <<<"$output"
+mv "$tmp/worker-1.state-original" "$tmp/control/current/config/cluster/nodes/worker-1.env"
+mv "$tmp/worker-2.state-original" "$tmp/control/current/config/cluster/nodes/worker-2.env"
 if observer_smoke_failure="$(OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=2 OBSERVER_SMOKE_RETRY_DELAY=0 \
 	bash "$repo_root/ops/platformctl.sh" observer-smoke 2>&1)"; then
 	printf 'Observer smoke check accepted a missing collector heartbeat\n' >&2
@@ -305,6 +609,27 @@ if OBSERVER_COLLECTOR_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" health >/
 	printf 'Observer collector health sidecar failure was accepted\n' >&2
 	exit 1
 fi
+# A fresh follower has no Beszel enrollment credentials yet. Its socket proxy
+# is the only readiness target until the Leader provisions both files; an
+# unhealthy agent must not block that bootstrap window. Once enrolled, the
+# agent healthcheck is mandatory again.
+cp "$tmp/config/node.env" "$tmp/node.env.before-beszel-enrollment"
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+sed -e "s#^BESZEL_KEY_FILE=.*#BESZEL_KEY_FILE=$tmp/missing-beszel-key#" \
+	-e "s#^BESZEL_TOKEN_FILE=.*#BESZEL_TOKEN_FILE=$tmp/missing-beszel-token#" \
+	"$tmp/foundation/env/beszel.env" >"$tmp/foundation/env/beszel.env.tmp"
+mv "$tmp/foundation/env/beszel.env.tmp" "$tmp/foundation/env/beszel.env"
+if ! BESZEL_AGENT_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" health >/dev/null 2>&1; then
+	printf 'unenrolled Beszel worker was blocked by agent health\n' >&2
+	exit 1
+fi
+printf 'enrolled-key\n' >"$tmp/missing-beszel-key"
+printf 'enrolled-token\n' >"$tmp/missing-beszel-token"
+if BESZEL_AGENT_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" health >/dev/null 2>&1; then
+	printf 'enrolled Beszel worker ignored agent health failure\n' >&2
+	exit 1
+fi
+cp "$tmp/node.env.before-beszel-enrollment" "$tmp/config/node.env"
 cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
 worker_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 if grep -Fq '[observer-storage]' <<<"$worker_diagnose"; then
@@ -326,8 +651,10 @@ grep -Fq 'WARNING: Observer durable data' <<<"$leader_warning_diagnose"
 cp "$tmp/compose.log" "$tmp/compose-all.log"
 : >"$tmp/compose.log"
 cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
-PLATFORM_ONLY_APP_ID=cpapi bash "$repo_root/ops/platformctl.sh" validate
+PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_ONLY_DESCRIPTOR=cpapi PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_ONLY_APP_ID=cpapi PLATFORM_ONLY_ROUTE_APP_ID=cpapi bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'app-cpapi' "$tmp/compose.log"
+grep -Fxq 'CPAPI_SITE=http://cpapi.localhost' "$tmp/app/shared/runtime/app-env/cpapi.env"
+grep -Fq -- "--env-file $tmp/app/shared/runtime/app-env/cpapi.env" "$tmp/compose.log"
 if grep -Fq 'app-librechat' "$tmp/compose.log"; then
 	printf 'singleton app scope reconciled an unrelated consumer\n' >&2
 	exit 1
@@ -340,7 +667,7 @@ rm -f "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" "$tmp/config/pigeon
 sed '/^PIGEON_IMAGE=/d' "$tmp/config/images.apps.prod.env" >"$tmp/config/images.apps.prod.env.tmp"
 mv "$tmp/config/images.apps.prod.env.tmp" "$tmp/config/images.apps.prod.env"
 cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
-PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate
+PLATFORM_SKIP_SINGLETONS=1 platform_validate_library cpapi 0 1 0 1
 cmp -s "$tmp/cpapi-route.original" "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
 [[ ! -e "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" ]]
 cp "$repo_root/ops/images.apps.prod.env" "$tmp/config/images.apps.prod.env"
@@ -351,14 +678,14 @@ EOF
 : >"$tmp/compose.log"
 sed 's/^ENABLED=.*/ENABLED=true/' "$tmp/control/current/config/cluster/apps/pigeon.policy" >"$tmp/control/current/config/cluster/apps/pigeon.policy.tmp"
 mv "$tmp/control/current/config/cluster/apps/pigeon.policy.tmp" "$tmp/control/current/config/cluster/apps/pigeon.policy"
-PLATFORM_ONLY_APP_ID=pigeon bash "$repo_root/ops/platformctl.sh" validate
+PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_ONLY_DESCRIPTOR=pigeon PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_ONLY_APP_ID=pigeon PLATFORM_ONLY_ROUTE_APP_ID=pigeon bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'app-pigeon' "$tmp/compose.log"
 grep -Fq 'reverse_proxy pigeon:5000' "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy"
 cp "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" "$tmp/pigeon-route.original"
-PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate
+PLATFORM_SKIP_SINGLETONS=1 platform_validate_library pigeon 0 1 0 1
 cmp -s "$tmp/pigeon-route.original" "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy"
 cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
-bash "$repo_root/ops/platformctl.sh" validate
+platform_validate_library cpapi 0 1 0 1 '' all
 cp "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy" "$tmp/cpapi-route.before-disabled-reconcile"
 sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/pigeon.policy" >"$tmp/control/current/config/cluster/apps/pigeon.policy.tmp"
 mv "$tmp/control/current/config/cluster/apps/pigeon.policy.tmp" "$tmp/control/current/config/cluster/apps/pigeon.policy"
@@ -412,12 +739,24 @@ if grep -Fq 'header_up Host {http.request.host}' "$tmp/app/shared/runtime/config
 	exit 1
 fi
 
+# A stale singleton transition marker must fail closed. In particular, a
+# previous target may not be the Leader (or any other inactive/non-follower),
+# even when the committed singleton placement itself is valid.
+mkdir -p "$tmp/config/singleton-state"
+printf 'leader\n' >"$tmp/config/singleton-state/cpapi.previous-target"
+if output="$(platform_validate_library cpapi 0 1 0 1 2>&1)"; then
+	printf 'route validation accepted an invalid singleton previous target\n' >&2
+	exit 1
+fi
+grep -Fq 'singleton previous target is not an active follower: leader' <<<"$output"
+rm -f "$tmp/config/singleton-state/cpapi.previous-target"
+
 # A singleton target switch is a route transaction. Keep the old route and the
 # previous-target marker until both the new origin and public path return the
 # manifest's expected health body.
 cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.original"
 cp "$tmp/app/shared/runtime/config/routes.d/librechat.caddy" "$tmp/librechat-route.before-switch"
-sed 's/^CPAPI_TARGET_NODE_ID=.*/CPAPI_TARGET_NODE_ID=worker-2/' "$tmp/cpapi-policy.original" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
+sed 's/^NODES=.*/NODES=worker-2/' "$tmp/cpapi-policy.original" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
 mkdir -p "$tmp/config/singleton-state"
 printf 'worker-1\n' >"$tmp/config/singleton-state/cpapi.previous-target"
 if CURL_BAD_BODY_URL=http://cpapi.localhost/healthz \
@@ -446,6 +785,23 @@ cmp -s "$tmp/librechat-route.before-switch" "$tmp/app/shared/runtime/config/rout
 [[ ! -e "$tmp/config/singleton-state/cpapi.previous-target" ]]
 grep -qx 'PHASE=switched' "$tmp/config/singleton-state/cpapi.transition.env"
 
+# Publication completes the Leader's route transaction. The final generated job
+# runs on the selected target and closes that target's matching local journal.
+cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
+cat >"$tmp/config/singleton-state/cpapi.transition.env" <<'EOF'
+VERSION=1
+APP_ID=cpapi
+OLD_TARGET=worker-1
+NEW_TARGET=worker-2
+RELEASE_SHA=test
+ARCHIVE_PATH=
+PHASE=origin-healthy
+EOF
+SINGLETON_FINAL_STOP=1 SINGLETON_RELEASE_SHA=test bash "$repo_root/ops/platformctl.sh" consumer-stop cpapi
+grep -qx 'PHASE=completed' "$tmp/config/singleton-state/cpapi.transition.env"
+grep -Eq '^COMPLETED_UTC=[0-9]{4}-' "$tmp/config/singleton-state/cpapi.transition.env"
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+
 cp "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy" "$tmp/config/singleton-state/cpapi.route-backup.caddy"
 if output="$(bash "$repo_root/ops/platformctl.sh" singleton-switch cpapi 2>&1)"; then
 	printf 'singleton switch ignored unresolved rollback state\n' >&2
@@ -470,6 +826,30 @@ grep -qx 'PHASE=failed' "$tmp/config/singleton-state/cursorapi.transition.env"
 [[ ! -e "$tmp/config/singleton-state/cursorapi.route-backup.caddy" ]]
 [[ ! -e "$tmp/config/singleton-state/cursorapi.route-was-missing" ]]
 
+# Generic publication failures after route synchronization must restore the
+# prior route too. Public URLs are derived from PUBLIC_ENDPOINTS and DOMAIN_NAME,
+# so fail the public smoke after the generated route has been installed.
+cp "$tmp/app/shared/runtime/config/routes.d/librechat.caddy" "$tmp/librechat-route.before-public-failure"
+if output="$(CURL_FAIL_URL=http://chat.localhost/health bash "$repo_root/ops/platformctl.sh" consumer-publish librechat 2>&1)"; then
+	printf 'consumer publication accepted a failed public smoke\n' >&2
+	exit 1
+fi
+grep -Fq 'consumer public smoke failed: http://chat.localhost/health' <<<"$output"
+cmp -s "$tmp/librechat-route.before-public-failure" "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+
+# A follower that is draining cannot claim a local consumer origin is healthy;
+# direct smoke invocations must enforce the same lifecycle gate as reconcile.
+cp "$tmp/control/current/config/cluster/nodes/worker-1.env" "$tmp/worker-1.state-original"
+sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$tmp/worker-1.state-original" >"$tmp/control/current/config/cluster/nodes/worker-1.env"
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+if output="$(bash "$repo_root/ops/platformctl.sh" consumer-origin-smoke librechat 2>&1)"; then
+	printf 'draining follower origin smoke was incorrectly accepted\n' >&2
+	exit 1
+fi
+grep -Fq 'consumer origin smoke requires an active follower: librechat/worker-1' <<<"$output"
+mv "$tmp/worker-1.state-original" "$tmp/control/current/config/cluster/nodes/worker-1.env"
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+
 # Restore committed placement, then prove follower reconciliation preserves the
 # active-active LibreChat project while selecting singletons only on their one
 # configured follower.
@@ -480,6 +860,12 @@ bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
 for project in app-librechat app-aichorouter app-cpapi app-cursorapi; do
 	grep -Fq "$project" "$tmp/compose.log"
 done
+# A consumer that remains unhealthy after startup must make recovery fail so
+# systemd's OnFailure retry path can run. Foundation startup remains complete.
+if CONSUMER_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" recover >/dev/null 2>&1; then
+	printf 'consumer recovery failure was incorrectly reported as success\n' >&2
+	exit 1
+fi
 cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
 : >"$tmp/compose.log"
 bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
@@ -491,14 +877,14 @@ for project in app-aichorouter app-cpapi app-cursorapi; do
 	fi
 done
 cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
-bash "$repo_root/ops/platformctl.sh" validate
-grep -Fq 'worker1-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
-grep -Fq 'worker2-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+# The final Leader render below covers both active-active upstreams. Avoid a
+# duplicate render here; the preceding worker sync assertions already prove
+# node-local placement and health behavior.
 
 bash "$repo_root/ops/platformctl.sh" status --json | jq -e '.node == "leader" and .role == "leader"' >/dev/null
 sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
 mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
-bash "$repo_root/ops/platformctl.sh" validate
+platform_validate_library newapi 0 1 0 1
 [[ ! -e "$tmp/app/shared/runtime/config/routes.d/newapi.caddy" ]]
 sed 's/^ENABLED=.*/ENABLED=true/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
 mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
@@ -509,40 +895,44 @@ AICHOROUTER_CRYPTO_SECRET=test-crypto
 AICHOROUTER_NODE_NAME=aichorouter-test
 EOF
 cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
-if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+if PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_fast >/dev/null 2>&1; then
 	printf 'production LibreChat placeholder was accepted\n' >&2
 	exit 1
 fi
 cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
-bash "$repo_root/ops/platformctl.sh" validate
+platform_validate_library librechat 0 1 0 1
 grep -Fq 'librechat-client:80' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 bash "$repo_root/ops/platformctl.sh" smoke "app:$tmp/control/current/apps/librechat"
 # Re-establish the Leader's installed route before simulating a target-policy
 # change. Earlier checks intentionally reuse this fixture as a Follower and
 # therefore replace its staged Caddy route with the Follower template.
 cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
-bash "$repo_root/ops/platformctl.sh" validate
+platform_validate_library librechat 0 1 0 1 '' all
+grep -Fq 'worker1-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+grep -Fq 'worker2-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.skip-test"
-sed 's/^CPAPI_TARGET_NODE_ID=.*/CPAPI_TARGET_NODE_ID=worker-2/' "$tmp/cpapi-policy.skip-test" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
+sed 's/^NODES=.*/NODES=worker-2/' "$tmp/cpapi-policy.skip-test" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
 mkdir -p "$tmp/config/singleton-state"
 printf 'worker-1\n' >"$tmp/config/singleton-state/cpapi.previous-target"
-PLATFORM_SKIP_SINGLETONS=1 bash "$repo_root/ops/platformctl.sh" validate
+PLATFORM_SKIP_SINGLETONS=1 platform_validate_library cpapi 0 1 0 1
 grep -Fq 'reverse_proxy https://worker1-cpapi-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
 cp "$tmp/cpapi-policy.skip-test" "$tmp/control/current/config/cluster/apps/cpapi.policy"
-policy_backup="$tmp/policy.original"
-cp "$tmp/control/current/config/cluster/policy.env" "$policy_backup"
-{
-	sed -E '/^(NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' "$policy_backup"
-} >"$tmp/control/current/config/cluster/policy.env"
+newapi_policy_backup="$tmp/newapi-policy.original"
+cp "$tmp/control/current/config/cluster/apps/newapi.policy" "$newapi_policy_backup"
+sed -E '/^(NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' "$newapi_policy_backup" \
+	>"$tmp/control/current/config/cluster/apps/newapi.policy"
 sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
 mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
 sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/cpapi.policy" >"$tmp/policy.tmp"
 mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/cpapi.policy"
-bash "$repo_root/ops/platformctl.sh" validate
-mv "$policy_backup" "$tmp/control/current/config/cluster/policy.env"
+if ! validation_output="$(platform_validate_library '' 0 1 0 1 2>&1)"; then
+	printf '%s\n' "$validation_output" >&2
+	exit 1
+fi
+mv "$newapi_policy_backup" "$tmp/control/current/config/cluster/apps/newapi.policy"
 awk -F= '{if ($1 == "NODE_ID") print "NODE_ID=rogue"; else print}' "$tmp/config/node.env" >"$tmp/node.tmp"
 mv "$tmp/node.tmp" "$tmp/config/node.env"
-if bash "$repo_root/ops/platformctl.sh" validate >/dev/null 2>&1; then
+if PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_fast >/dev/null 2>&1; then
 	printf 'runtime node identity mismatch was accepted\n' >&2
 	exit 1
 fi

@@ -6,5 +6,6 @@ Requires=platform.target
 [Service]
 Type=oneshot
 TimeoutStartSec=420
+Environment=PLATFORM_HEALTH_NONBLOCKING=1
 ExecStart=/usr/local/bin/platformctl health
 ExecStart=/usr/local/bin/platformctl observer-smoke

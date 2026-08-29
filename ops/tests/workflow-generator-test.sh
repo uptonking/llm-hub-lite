@@ -3,123 +3,197 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf -- "$tmp"' EXIT
 
-cp "$repo_root/config/cluster/policy.env" "$tmp/policy.env"
+make_fixture() {
+	local name="$1" root
+	root="$tmp/$name"
+	mkdir -p "$root/ops"
+	cp "$repo_root/ops/generate-woodpecker-workflows.sh" "$root/ops/"
+	cp -R "$repo_root/apps" "$root/apps"
+	cp -R "$repo_root/config" "$root/config"
+	cp "$repo_root/ops/images.apps.prod.env" "$root/ops/"
+	printf '%s\n' "$root"
+}
+generate_fixture() {
+	local root="$1"
+	WOODPECKER_WORKFLOW_ROOT="$root/workflows" "$root/ops/generate-woodpecker-workflows.sh" generate
+}
+expect_invalid() {
+	local root="$1" expected="$2"
+	if generate_fixture "$root" >"$root/error.log" 2>&1; then
+		printf 'workflow generator accepted invalid fixture: %s\n' "$expected" >&2
+		exit 1
+	fi
+	grep -Fq "$expected" "$root/error.log"
+}
 
-# Disabled consumers must not require their migration, primary, or backup
-# policy fields. The remaining deployment workflows are still generated.
-sed -E '/^(NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' \
-	"$tmp/policy.env" >"$tmp/policy-disabled.env"
-CLUSTER_POLICY_FILE="$tmp/policy-disabled.env" WOODPECKER_WORKFLOW_ROOT="$tmp/disabled" \
-	"$repo_root/ops/generate-woodpecker-workflows.sh" generate
+base="$(make_fixture base)"
+generate_fixture "$base"
 
-if rg -n $'\t' "$tmp"/*.yml >/dev/null 2>&1; then
+if rg -n $'\t' "$base/workflows"/*.yml >/dev/null 2>&1; then
 	printf 'generated workflows must not contain tab indentation\n' >&2
 	exit 1
 fi
-if grep -R -Eq '^[[:space:]]+role:' "$tmp/disabled"; then
-	printf 'generated workflows must select stable node labels, not stale role labels\n' >&2
-	exit 1
-fi
-[[ -f "$tmp/disabled/deploy-worker-1.yml" && -f "$tmp/disabled/deploy-worker-2.yml" ]]
-[[ -f "$tmp/disabled/foundation-upgrade-worker-2.yml" && -f "$tmp/disabled/runner-upgrade-worker-2.yml" && -f "$tmp/disabled/rollback-leader.yml" ]]
-[[ -f "$tmp/disabled/singleton-stage-aichorouter.yml" && -f "$tmp/disabled/singleton-switch-aichorouter.yml" ]]
-[[ -f "$tmp/disabled/singleton-stage-cpapi.yml" && -f "$tmp/disabled/singleton-switch-cpapi.yml" ]]
-[[ -f "$tmp/disabled/singleton-stage-cursorapi.yml" && -f "$tmp/disabled/singleton-switch-cursorapi.yml" ]]
-[[ -f "$tmp/disabled/singleton-stop-cursorapi-worker-1.yml" && -f "$tmp/disabled/singleton-stop-cursorapi-worker-2.yml" ]]
-[[ ! -e "$tmp/disabled/singleton-stage-pigeon.yml" && ! -e "$tmp/disabled/singleton-switch-pigeon.yml" ]]
-[[ ! -e "$tmp/disabled/singleton-stop-pigeon-worker-1.yml" && ! -e "$tmp/disabled/singleton-stop-pigeon-worker-2.yml" ]]
-[[ ! -e "$tmp/disabled/singleton-stage-observer.yml" && ! -e "$tmp/disabled/singleton-switch-observer.yml" ]]
-grep -Fq 'DEPLOY_SKIP_SINGLETONS=1 /usr/local/bin/platform-submit foundation-upgrade' "$tmp/disabled/foundation-upgrade-leader.yml"
-grep -Fq $'depends_on:\n  - foundation-upgrade-leader' "$tmp/disabled/foundation-upgrade-worker-1.yml"
-grep -Fq $'depends_on:\n  - cluster-reconcile-leader' "$tmp/disabled/cluster-reconcile-worker-1.yml"
-grep -Fq '/var/run/docker.sock:/var/run/docker.sock' "$tmp/disabled/deploy-smoke.yml"
-grep -Fq '/run/lock/llm-hub-lite:/run/lock/llm-hub-lite' "$tmp/disabled/deploy-smoke.yml"
-grep -Fq '        - apps/librechat/**' "$tmp/disabled/deploy-leader.yml"
-grep -Fq '        - config/Caddyfile' "$tmp/disabled/deploy-leader.yml"
-grep -Fq '        - config/foundation-routes.d/**' "$tmp/disabled/deploy-leader.yml"
-if grep -Fq '        - apps/aichorouter/**' "$tmp/disabled/deploy-leader.yml"; then
-	printf 'singleton app source must not trigger normal deployment workflow\n' >&2
-	exit 1
-fi
-grep -Fq '        - config/routes.d/**' "$tmp/disabled/deploy-leader.yml"
-grep -Fq '        - config/cluster/apps/librechat.policy' "$tmp/disabled/cluster-reconcile-leader.yml"
-grep -Fq '        - config/cluster/apps/pigeon.policy' "$tmp/disabled/cluster-reconcile-leader.yml"
-if grep -Fq '        - config/cluster/apps/aichorouter.policy' "$tmp/disabled/cluster-reconcile-leader.yml"; then
-	printf 'enabled singleton policy must remain owned by its dedicated workflow\n' >&2
-	exit 1
-fi
-grep -Fq "grep -Fq 'verify_cluster_scope()' /opt/platform/control/current/ops/deploy-controller.sh" "$tmp/disabled/cluster-reconcile-leader.yml"
-# Foundation upgrades are explicitly manual and intentionally have no path
-# filter; the workflow is used for reviewed control-plane changes.
-if grep -Fq '        - config/cluster/apps/librechat.policy' "$tmp/disabled/deploy-leader.yml"; then
-	printf 'non-singleton policy must not trigger normal deployment\n' >&2
-	exit 1
-fi
-grep -Fq '        - ops/images.apps.prod.env' "$tmp/disabled/singleton-stage-aichorouter.yml"
-if grep -Fq '        - config/Caddyfile' "$tmp/disabled/singleton-stage-aichorouter.yml" || grep -Fq '        - config/routes.d/**' "$tmp/disabled/singleton-stage-aichorouter.yml"; then
-	printf 'singleton workflows must not own shared Caddy configuration paths\n' >&2
-	exit 1
-fi
-if grep -Fq 'config/cluster/apps/aichorouter.policy' "$tmp/disabled/deploy-smoke.yml"; then
-	printf 'singleton-only app policy must not trigger aggregate normal smoke workflow\n' >&2
-	exit 1
-fi
-if grep -Fq 'singleton-stop-' "$tmp/disabled/deploy-smoke.yml"; then
-	printf 'aggregate normal smoke workflow must not depend on singleton stop jobs\n' >&2
-	exit 1
-fi
-if grep -Fq '        - ops/**' "$tmp/disabled/deploy-leader.yml" || grep -Fq '        - compose/foundation/**' "$tmp/disabled/deploy-leader.yml"; then
-	printf 'automatic deploy workflow must not include control-plane paths\n' >&2
-	exit 1
-fi
-if grep -R -E 'group: llm-hub-lite-(production|cluster-reconcile|singleton-|app-upgrade|foundation-upgrade|runner-upgrade)' "$tmp/disabled" >/dev/null 2>&1; then
-	printf 'mutating workflows must use the shared deployment concurrency group\n' >&2
-	exit 1
-fi
-if ! grep -R -Fq 'group: llm-hub-lite-deployment' "$tmp/disabled"; then
-	printf 'generated workflows are missing the shared deployment concurrency group\n' >&2
+if grep -R -Eq '^[[:space:]]+role:' "$base/workflows"; then
+	printf 'generated workflows must select stable node labels\n' >&2
 	exit 1
 fi
 
-# A disabled singleton keeps its manifest valid and can be opted in later.
-# Exercise that path in an isolated generator checkout so this test never
-# mutates the working tree's committed policy.
-mkdir -p "$tmp/opt-in/ops"
-cp "$repo_root/ops/generate-woodpecker-workflows.sh" "$tmp/opt-in/ops/"
-cp -R "$repo_root/apps" "$tmp/opt-in/apps"
-cp -R "$repo_root/config" "$tmp/opt-in/config"
-sed 's/^ENABLED=.*/ENABLED=true/' "$tmp/opt-in/config/cluster/apps/pigeon.policy" >"$tmp/opt-in/config/cluster/apps/pigeon.policy.tmp"
-mv "$tmp/opt-in/config/cluster/apps/pigeon.policy.tmp" "$tmp/opt-in/config/cluster/apps/pigeon.policy"
-WOODPECKER_WORKFLOW_ROOT="$tmp/opt-in/workflows" "$tmp/opt-in/ops/generate-woodpecker-workflows.sh" generate
-[[ -f "$tmp/opt-in/workflows/singleton-stage-pigeon.yml" && -f "$tmp/opt-in/workflows/singleton-switch-pigeon.yml" ]]
-[[ -f "$tmp/opt-in/workflows/singleton-stop-pigeon-worker-1.yml" && -f "$tmp/opt-in/workflows/singleton-stop-pigeon-worker-2.yml" ]]
-if grep -Fq '        - config/cluster/apps/pigeon.policy' "$tmp/opt-in/workflows/cluster-reconcile-leader.yml"; then
-	printf 'enabled Pigeon policy remained in aggregate cluster reconciliation\n' >&2
+for file in \
+	consumer-stage-aichorouter-worker-1.yml consumer-publish-aichorouter.yml consumer-stop-aichorouter-worker-2.yml \
+	consumer-finalize-aichorouter-worker-1.yml \
+	consumer-stage-librechat-worker-1.yml consumer-stage-librechat-worker-2.yml consumer-publish-librechat.yml \
+	consumer-publish-newapi.yml consumer-stop-newapi-worker-1.yml consumer-stop-newapi-worker-2.yml \
+	foundation-upgrade-leader.yml foundation-upgrade-worker-1.yml foundation-upgrade-worker-2.yml \
+	runner-upgrade-leader.yml rollback-leader.yml; do
+	[[ -f "$base/workflows/$file" ]] || {
+		printf 'missing generated workflow: %s\n' "$file" >&2
+		exit 1
+	}
+done
+[[ ! -e "$base/workflows/consumer-stage-newapi-worker-1.yml" ]]
+[[ ! -e "$base/workflows/consumer-stage-pigeon-worker-2.yml" ]]
+[[ ! -e "$base/workflows/consumer-stop-librechat-worker-1.yml" ]]
+grep -Fq $'depends_on:\n  - consumer-stage-librechat-worker-1' "$base/workflows/consumer-stage-librechat-worker-2.yml"
+grep -Fq $'depends_on:\n  - consumer-stage-librechat-worker-2' "$base/workflows/consumer-publish-librechat.yml"
+grep -Fq $'depends_on:\n  - consumer-stage-aichorouter-worker-1' "$base/workflows/consumer-publish-aichorouter.yml"
+grep -Fq $'depends_on:\n  - consumer-publish-aichorouter' "$base/workflows/consumer-stop-aichorouter-worker-2.yml"
+grep -Fq $'depends_on:\n  - consumer-stop-aichorouter-worker-2' "$base/workflows/consumer-finalize-aichorouter-worker-1.yml"
+grep -Fq 'SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=aichorouter' "$base/workflows/consumer-finalize-aichorouter-worker-1.yml"
+if grep -Fq 'SINGLETON_FINAL_STOP=1' "$base/workflows/consumer-stop-aichorouter-worker-2.yml"; then
+	printf 'stale-node stop must not finalize the selected target journal\n' >&2
+	exit 1
+fi
+grep -Fq $'depends_on:\n  - consumer-stop-newapi-worker-1' "$base/workflows/consumer-stop-newapi-worker-2.yml"
+grep -Fq 'CONSUMER_APP_ID=librechat /usr/local/bin/platform-submit consumer-stage' "$base/workflows/consumer-stage-librechat-worker-1.yml"
+for app in aichorouter cpapi cursorapi; do
+	[[ -f "$base/workflows/consumer-secrets-$app-worker-1.yml" ]] || {
+		printf 'missing selected-node secret workflow: %s\n' "$app/worker-1" >&2
+		exit 1
+	}
+	[[ ! -e "$base/workflows/consumer-secrets-$app-worker-2.yml" ]] || {
+		printf 'singleton app received an unselected node secret workflow: %s/worker-2\n' "$app" >&2
+		exit 1
+	}
+done
+[[ ! -e "$base/workflows/consumer-secrets-librechat-leader.yml" ]]
+[[ -f "$base/workflows/consumer-secrets-librechat-worker-1.yml" ]]
+[[ -f "$base/workflows/consumer-secrets-librechat-worker-2.yml" ]]
+if grep -q '^depends_on:' "$base/workflows/consumer-secrets-cpapi-worker-1.yml"; then
+	printf 'manual consumer secret workflow must be independently runnable\n' >&2
+	exit 1
+fi
+grep -Fq 'group: llm-hub-lite-deployment' "$base/workflows/consumer-publish-cpapi.yml"
+if find "$base/workflows" -type f \( -name 'deploy-*' -o -name 'cluster-reconcile-*' -o -name 'app-upgrade-*' -o -name 'singleton-*' \) | grep -q .; then
+	printf 'obsolete workflow family was generated\n' >&2
+	exit 1
+fi
+WOODPECKER_WORKFLOW_ROOT="$base/workflows" "$base/ops/generate-woodpecker-workflows.sh" --check
+
+# Rendering is staged before the live generated set is touched. An invalid
+# policy therefore leaves both an existing workflow and image lock unchanged.
+transactional="$(make_fixture transactional)"
+generate_fixture "$transactional"
+cp "$transactional/workflows/consumer-publish-cpapi.yml" "$transactional/workflow.before"
+cp "$transactional/apps/cpapi/images.lock.env" "$transactional/lock.before"
+sed 's/^NODES=.*/NODES=worker-1,worker-2/' "$transactional/config/cluster/apps/cpapi.policy" >"$transactional/cpapi.policy"
+mv "$transactional/cpapi.policy" "$transactional/config/cluster/apps/cpapi.policy"
+if generate_fixture "$transactional" >"$transactional/transaction.error" 2>&1; then
+	printf 'workflow generator accepted an invalid transactional fixture\n' >&2
+	exit 1
+fi
+cmp -s "$transactional/workflow.before" "$transactional/workflows/consumer-publish-cpapi.yml"
+cmp -s "$transactional/lock.before" "$transactional/apps/cpapi/images.lock.env"
+
+opt_in="$(make_fixture opt-in)"
+sed 's/^ENABLED=.*/ENABLED=true/' "$opt_in/config/cluster/apps/pigeon.policy" >"$opt_in/pigeon.policy"
+mv "$opt_in/pigeon.policy" "$opt_in/config/cluster/apps/pigeon.policy"
+generate_fixture "$opt_in"
+[[ -f "$opt_in/workflows/consumer-stage-pigeon-worker-2.yml" ]]
+[[ -f "$opt_in/workflows/consumer-publish-pigeon.yml" ]]
+[[ -f "$opt_in/workflows/consumer-stop-pigeon-worker-1.yml" ]]
+[[ ! -e "$opt_in/workflows/consumer-stop-pigeon-worker-2.yml" ]]
+[[ -f "$opt_in/workflows/consumer-finalize-pigeon-worker-2.yml" ]]
+
+multi_singleton="$(make_fixture multi-singleton)"
+sed 's/^NODES=.*/NODES=worker-1,worker-2/' "$multi_singleton/config/cluster/apps/cpapi.policy" >"$multi_singleton/cpapi.policy"
+mv "$multi_singleton/cpapi.policy" "$multi_singleton/config/cluster/apps/cpapi.policy"
+expect_invalid "$multi_singleton" 'singleton application must target exactly one follower: cpapi'
+
+duplicate="$(make_fixture duplicate)"
+sed 's/^NODES=.*/NODES=worker-1,worker-1/' "$duplicate/config/cluster/apps/librechat.policy" >"$duplicate/librechat.policy"
+mv "$duplicate/librechat.policy" "$duplicate/config/cluster/apps/librechat.policy"
+expect_invalid "$duplicate" 'duplicate consumer node: librechat/worker-1'
+
+leader_target="$(make_fixture leader-target)"
+sed 's/^NODES=.*/NODES=leader/' "$leader_target/config/cluster/apps/cpapi.policy" >"$leader_target/cpapi.policy"
+mv "$leader_target/cpapi.policy" "$leader_target/config/cluster/apps/cpapi.policy"
+expect_invalid "$leader_target" 'consumer node must be an active follower: cpapi/leader'
+
+draining="$(make_fixture draining)"
+sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$draining/config/cluster/nodes/worker-1.env" >"$draining/worker-1.env"
+mv "$draining/worker-1.env" "$draining/config/cluster/nodes/worker-1.env"
+expect_invalid "$draining" 'consumer node must be an active follower: aichorouter/worker-1'
+
+draining_leader="$(make_fixture draining-leader)"
+sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$draining_leader/config/cluster/nodes/leader.env" >"$draining_leader/leader.env"
+mv "$draining_leader/leader.env" "$draining_leader/config/cluster/nodes/leader.env"
+expect_invalid "$draining_leader" 'designated Leader node must be active: leader'
+
+# Draining followers remain cleanup and rollback targets, but must not receive
+# new secret-provisioning workflows. Evacuate all committed placement first so
+# the fixture models a valid draining transition.
+draining_secrets="$(make_fixture draining-secrets)"
+sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$draining_secrets/config/cluster/nodes/worker-2.env" >"$draining_secrets/worker-2.env"
+mv "$draining_secrets/worker-2.env" "$draining_secrets/config/cluster/nodes/worker-2.env"
+sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/librechat.policy" >"$draining_secrets/librechat.policy"
+mv "$draining_secrets/librechat.policy" "$draining_secrets/config/cluster/apps/librechat.policy"
+sed -e 's/^NODES=.*/NODES=worker-1/' -e 's/^NEW_API_BACKUP_NODE_ID=.*/NEW_API_BACKUP_NODE_ID=worker-1/' \
+	"$draining_secrets/config/cluster/apps/newapi.policy" >"$draining_secrets/newapi.policy"
+mv "$draining_secrets/newapi.policy" "$draining_secrets/config/cluster/apps/newapi.policy"
+sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/pigeon.policy" >"$draining_secrets/pigeon.policy"
+mv "$draining_secrets/pigeon.policy" "$draining_secrets/config/cluster/apps/pigeon.policy"
+generate_fixture "$draining_secrets"
+[[ -f "$draining_secrets/workflows/consumer-stop-aichorouter-worker-2.yml" ]]
+if find "$draining_secrets/workflows" -name 'consumer-secrets-*-worker-2.yml' | grep -q .; then
+	printf 'draining follower received a secret-provisioning workflow\n' >&2
 	exit 1
 fi
 
-cp "$repo_root/config/cluster/apps/newapi.policy" "$tmp/newapi.policy.original"
-sed 's/^ENABLED=.*/ENABLED=true/' "$tmp/newapi.policy.original" >"$repo_root/config/cluster/apps/newapi.policy"
-trap 'cp "$tmp/newapi.policy.original" "$repo_root/config/cluster/apps/newapi.policy"; rm -rf "$tmp"' EXIT
-sed -e 's/^NEW_API_BACKUP_NODE_ID=.*/NEW_API_BACKUP_NODE_ID=missing/' "$tmp/policy.env" >"$tmp/policy-invalid.env"
-if CLUSTER_POLICY_FILE="$tmp/policy-invalid.env" WOODPECKER_WORKFLOW_ROOT="$tmp/invalid" \
-	"$repo_root/ops/generate-woodpecker-workflows.sh" generate >/dev/null 2>&1; then
-	printf 'invalid backup node was accepted\n' >&2
-	exit 1
-fi
+# Joining and draining nodes are lifecycle targets only. They must not receive
+# new foundation or runner upgrades; draining nodes do receive the explicit
+# consumer stop jobs needed to evacuate already-running placements.
+for lifecycle_state in joining draining; do
+	evacuating="$(make_fixture "evacuating-$lifecycle_state")"
+	sed "s/^NODE_STATE=.*/NODE_STATE=$lifecycle_state/" "$evacuating/config/cluster/nodes/worker-2.env" >"$evacuating/worker-2.env"
+	mv "$evacuating/worker-2.env" "$evacuating/config/cluster/nodes/worker-2.env"
+	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/librechat.policy" >"$evacuating/librechat.policy"
+	mv "$evacuating/librechat.policy" "$evacuating/config/cluster/apps/librechat.policy"
+	sed -e 's/^NODES=.*/NODES=worker-1/' -e 's/^NEW_API_MIGRATION_NODE_ID=.*/NEW_API_MIGRATION_NODE_ID=worker-1/' -e 's/^NEW_API_BACKUP_NODE_ID=.*/NEW_API_BACKUP_NODE_ID=worker-1/' \
+		"$evacuating/config/cluster/apps/newapi.policy" >"$evacuating/newapi.policy"
+	mv "$evacuating/newapi.policy" "$evacuating/config/cluster/apps/newapi.policy"
+	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/pigeon.policy" >"$evacuating/pigeon.policy"
+	mv "$evacuating/pigeon.policy" "$evacuating/config/cluster/apps/pigeon.policy"
+	generate_fixture "$evacuating"
+	[[ ! -e "$evacuating/workflows/foundation-upgrade-worker-2.yml" ]]
+	[[ ! -e "$evacuating/workflows/runner-upgrade-worker-2.yml" ]]
+	if [[ "$lifecycle_state" == draining ]]; then
+		[[ -f "$evacuating/workflows/consumer-stop-librechat-worker-2.yml" ]]
+	else
+		[[ ! -e "$evacuating/workflows/consumer-stop-librechat-worker-2.yml" ]]
+	fi
+done
 
-sed 's/^NEW_API_NODE_TYPE=slave$/NEW_API_NODE_TYPE=master/' \
-	"$repo_root/config/cluster/nodes/worker-2.env" >"$tmp/worker-2-master.env"
-cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/worker-2.original.env"
-cp "$tmp/worker-2-master.env" "$repo_root/config/cluster/nodes/worker-2.env"
-cp "$tmp/policy.env" "$tmp/policy-multi.env"
-trap 'cp "$tmp/worker-2.original.env" "$repo_root/config/cluster/nodes/worker-2.env"; cp "$tmp/newapi.policy.original" "$repo_root/config/cluster/apps/newapi.policy"; rm -rf "$tmp"' EXIT
-if CLUSTER_POLICY_FILE="$tmp/policy-multi.env" "$repo_root/ops/generate-woodpecker-workflows.sh" generate >/dev/null 2>&1; then
-	printf 'multiple New API masters were accepted\n' >&2
-	exit 1
-fi
-cp "$tmp/worker-2.original.env" "$repo_root/config/cluster/nodes/worker-2.env"
+bad_owner="$(make_fixture bad-owner)"
+sed -e 's/^ENABLED=.*/ENABLED=true/' -e 's/^NEW_API_BACKUP_NODE_ID=.*/NEW_API_BACKUP_NODE_ID=leader/' \
+	"$bad_owner/config/cluster/apps/newapi.policy" >"$bad_owner/newapi.policy"
+mv "$bad_owner/newapi.policy" "$bad_owner/config/cluster/apps/newapi.policy"
+expect_invalid "$bad_owner" 'NEW_API_BACKUP_NODE_ID is absent from New API NODES: leader'
+
+bad_manifest="$(make_fixture bad-manifest)"
+sed 's/^MANIFEST_VERSION=.*/MANIFEST_VERSION=3/' "$bad_manifest/apps/cpapi/manifest.env" >"$bad_manifest/manifest.env"
+mv "$bad_manifest/manifest.env" "$bad_manifest/apps/cpapi/manifest.env"
+expect_invalid "$bad_manifest" 'unsupported application manifest version'
 
 printf 'workflow generator tests passed\n'

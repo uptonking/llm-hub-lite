@@ -26,4 +26,21 @@ grep -Fq -- 'llm-hub-lite/deploy-runner:0.4.0' "$tmp/docker.log"
 grep -Fq -- '/usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro' "$tmp/docker.log"
 grep -Fq -- 'logs -f llm-hub-lite-platform-apply-deploy-0123456789abcdef0123456789abcdef01234567' "$tmp/docker.log"
 grep -Fq -- 'PLATFORM_ONLY_APP_ID=' "$tmp/docker.log"
+
+: >"$tmp/docker.log"
+NODE_RETIRE_DELAY_SECONDS=0 bash "$repo_root/ops/platform-submit.sh" node-retire "0123456789abcdef0123456789abcdef01234567"
+grep -Fq -- 'run -d --name llm-hub-lite-node-retire --restart on-failure:5' "$tmp/docker.log"
+grep -Fq -- '/opt/platform/control/current/ops/platformctl.sh retire-node' "$tmp/docker.log"
+grep -Fq -- 'sh 0' "$tmp/docker.log"
+
+: >"$tmp/docker.log"
+if output="$(NODE_RETIRE_DELAY_SECONDS=301 bash "$repo_root/ops/platform-submit.sh" node-retire "0123456789abcdef0123456789abcdef01234567" 2>&1)"; then
+	printf 'platform-submit accepted an excessive retirement delay\n' >&2
+	exit 1
+fi
+grep -Fq 'NODE_RETIRE_DELAY_SECONDS must be an integer between 0 and 300' <<<"$output"
+if grep -Fq 'run -d --name llm-hub-lite-platform-apply' "$tmp/docker.log"; then
+	printf 'invalid retirement delay started a deployment runner\n' >&2
+	exit 1
+fi
 printf 'platform-submit tests passed\n'

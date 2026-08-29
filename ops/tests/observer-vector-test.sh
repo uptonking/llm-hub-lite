@@ -6,12 +6,17 @@ image="$(sed -n 's/^OBSERVER_LOG_SHIPPER_IMAGE=//p' "$repo_root/ops/images.found
 tmp="$(mktemp -d)"
 network="observer-vector-test-$$"
 receiver="observer-vector-receiver-$$"
+timeout_seconds="${OBSERVER_VECTOR_TEST_TIMEOUT_SECONDS:-60}"
 cleanup() {
 	docker rm -f "$receiver" >/dev/null 2>&1 || true
 	docker network rm "$network" >/dev/null 2>&1 || true
 	rm -rf -- "$tmp"
 }
 trap cleanup EXIT
+[[ "$timeout_seconds" =~ ^[0-9]+$ && "$timeout_seconds" -ge 1 && "$timeout_seconds" -le 600 ]] || {
+	printf 'OBSERVER_VECTOR_TEST_TIMEOUT_SECONDS must be between 1 and 600 seconds\n' >&2
+	exit 1
+}
 [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] || {
 	printf 'Observer Vector image is not digest-pinned\n' >&2
 	exit 1
@@ -86,7 +91,17 @@ printf '%s\n' \
 		-e OBSERVER_LOG_STREAM=docker \
 		-v "$tmp/vector.toml:/etc/vector/vector.toml:ro" \
 		"$image" --config /etc/vector/vector.toml >/dev/null
-docker wait "$receiver" >/dev/null
+deadline=$(($(date +%s) + timeout_seconds))
+while [[ ! -s "$tmp/headers" ]]; do
+	now="$(date +%s)"
+	if ((now >= deadline)); then
+		printf 'timed out waiting for Observer Vector receiver\n' >&2
+		docker ps -a --filter "name=$receiver" >&2 || true
+		docker logs "$receiver" 2>&1 | tail -n 80 >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
 grep -Fqi 'content-encoding: gzip' "$tmp/headers"
 docker run --rm --entrypoint gzip -v "$tmp:/capture:ro" "$image" -dc /capture/body.gz >"$tmp/body.json"
 jq -e 'type == "array" and length == 2 and all(.[]; type == "object")' "$tmp/body.json" >/dev/null
