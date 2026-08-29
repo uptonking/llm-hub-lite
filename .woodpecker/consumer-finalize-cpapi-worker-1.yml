@@ -13,7 +13,7 @@ when:
         - apps/cpapi/images.lock.env
 
 depends_on:
-  - consumer-stop-cpapi-worker-2
+  - consumer-stop-cpapi-worker-3
 
 labels:
   node: worker-1

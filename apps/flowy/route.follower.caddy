@@ -1,0 +1,6 @@
+{$NODE_FLOWY_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy flowy:80 {
+    flush_interval -1
+  }
+}

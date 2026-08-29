@@ -7,8 +7,9 @@ Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, LibreC
 The committed inventory is in `config/cluster/` . The current Leader has stable
 node ID `leader` ; it runs Caddy, Woodpecker server/controller, a trusted
 deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node
-IDs `worker-1` and `worker-2` ; they run Caddy, Woodpecker workers, Beszel
-agents, and LibreChat. The IDs are stable labels; the role is selected only by
+IDs `worker-1`, `worker-2`, and active `worker-3` ; they run
+Caddy, Woodpecker workers, Beszel agents, and consumer applications. The IDs
+are stable labels; the role is selected only by
 `LEADER_NODE_ID` in the policy.
 
 Caddy is installed on every node. Public DNS names point to the Leader. The
@@ -61,11 +62,11 @@ Add logical Followers with the repository helper instead of assembling a node
 descriptor by hand:
 
 ```bash
-DOMAIN_NAME=aichorage.de ops/configure-cluster-node.sh add worker-3
+DOMAIN_NAME=aichorage.de ops/configure-cluster-node.sh add worker-4
 git diff -- config/cluster .woodpecker
 ```
 
-The helper appends `worker-3` to `NODE_IDS`, creates it in `joining` state,
+The helper appends the requested node to `NODE_IDS`, creates it in `joining` state,
 derives every origin hostname from the application manifests, and regenerates
 the node-labelled Woodpecker workflows. It never accepts or commits a VPS IP.
 The optional `NODE_ORIGIN_PREFIX` changes only the DNS prefix; by default
@@ -142,6 +143,20 @@ memory-capped and has no host-published port; all public traffic enters through
 the Leader's Caddy route. SQLite is intentionally local and is not replicated,
 so a target move is intentionally a fresh local deployment. Previous local
 state is retained in an archive directory until manually removed.
+
+Flowy is the Activepieces singleton at `flowy.aichorage.de`, enabled on the
+active `worker-3` follower by default. Change `NODES` in
+`config/cluster/apps/flowy.policy` to move it to another active follower, then
+regenerate the reviewed workflows. Flowy uses one `WORKER_AND_APP` process with
+PGlite under `data/prod/flowy/config/pglite`, in-memory Redis, one worker, sandbox
+code-only execution, official piece synchronization, and bounded memory/CPU.
+The default `FLOWY_FILE_STORAGE_LOCATION=DB` keeps files in the local PGlite
+database for a minimal single-node deployment. Cloudflare R2 is optional: set
+the mode to `S3` and provide the endpoint, bucket, region, access key, and
+secret key through protected deployment secrets. `FLOWY_ENCRYPTION_KEY` and
+`FLOWY_JWT_SECRET` are node-local. Singleton moves are fresh deployments and
+archive the prior local PGlite directory; backups stop the running Flowy
+container before copying its PGlite state.
 
 Cursorapi packages `cursor-api-proxy` and a checksum-pinned Cursor Agent into
 the repository-owned `ghcr.io/uptonking/cursor-api-proxy` image because the
@@ -727,18 +742,18 @@ management key.
 A new node uses a two-commit enrollment so it cannot receive consumers before
 its foundation is healthy:
 
-1. Run `DOMAIN_NAME=aichorage.de ops/configure-cluster-node.sh add worker-3`,
+1. Run `DOMAIN_NAME=aichorage.de ops/configure-cluster-node.sh add worker-4`,
    validate the generated diff, commit, and push. The node remains `joining`.
 2. Create DNS-only origin records from
-   `config/cluster/nodes/worker-3.env`, all pointing to the new VPS. Public app
+   `config/cluster/nodes/worker-4.env`, all pointing to the new VPS. Public app
    records continue to point only to the Leader. Copy the Leader's root-only
    shared-secret and Beszel enrollment bundles through the same protected
    one-time channel used for the first two Followers.
 3. Copy the current bootstrap script to the new VPS and run it once with
-   `NODE_ID=worker-3`. Caddy, the Woodpecker worker, Beszel agent, and Observer
+   `NODE_ID=worker-4`. Caddy, the Woodpecker worker, Beszel agent, and Observer
    collector start; consumers remain absent because the node is still joining.
 4. Verify `platformctl health` and the Woodpecker agent, then run
-   `ops/configure-cluster-node.sh state worker-3 active`, commit, and push.
+   `ops/configure-cluster-node.sh state worker-4 active`, commit, and push.
    Woodpecker now creates the node's secret workflows and makes it eligible for
    explicit consumer placement.
 5. Put the node in an app's ordered `NODES` using

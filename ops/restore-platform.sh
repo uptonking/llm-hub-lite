@@ -65,6 +65,7 @@ env_value() {
 observer_env_value() { env_value "$1" "$OBSERVER_ENV_FILE"; }
 DATA_ROOT="${DATA_ROOT:-$(env_value DATA_ROOT)}"
 DATA_ROOT="${DATA_ROOT:-$APP_ROOT/shared/data/prod}"
+DATA_ROOT="${DATA_ROOT:?DATA_ROOT is not set}"
 OBSERVER_DATA_ROOT="${OBSERVER_DATA_ROOT:-$(observer_env_value OBSERVER_DATA_ROOT)}"
 OBSERVER_DATA_ROOT="${OBSERVER_DATA_ROOT:-$PLATFORM_ROOT/observer}"
 NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
@@ -113,7 +114,7 @@ safe_observer_data_root() {
 }
 
 validate_extract() {
-	local target="$1" database count=0
+	local target="$1" database count=0 app_id data_rel pglite_rel
 	while IFS= read -r database; do
 		sqlite3 "$database" 'PRAGMA integrity_check;' | grep -qx ok || {
 			printf 'restored SQLite integrity check failed: %s\n' "$database" >&2
@@ -123,6 +124,12 @@ validate_extract() {
 	done < <(find "$target/run/llm-hub-lite/backup/sqlite" -type f \( -name '*.db' -o -name '*.sqlite' \) 2>/dev/null | sort)
 	# A newly bootstrapped instance may not have created every optional database.
 	((count > 0)) || printf 'snapshot contains no SQLite copies; continuing (optional databases may be empty)\n' >&2
+	if [[ -f "$target/run/llm-hub-lite/backup/pglite/map.tsv" ]]; then
+		while IFS=$'\t' read -r app_id data_rel pglite_rel; do
+			[[ "$app_id" =~ ^[a-z][a-z0-9-]*$ && "$data_rel" != /* && "$data_rel" != *..* && "$pglite_rel" != /* && "$pglite_rel" != *..* ]] || die 'invalid PGlite restore map'
+			[[ -d "$target/run/llm-hub-lite/backup/pglite/$app_id" ]] || die "missing PGlite artifact: $app_id"
+		done <"$target/run/llm-hub-lite/backup/pglite/map.tsv"
+	fi
 	if [[ -f "$target/run/llm-hub-lite/backup/postgres/new-api.dump" ]]; then
 		command -v pg_restore >/dev/null 2>&1 || {
 			printf 'pg_restore is required to validate the New API dump\n' >&2
@@ -147,9 +154,18 @@ extract_snapshot() {
 }
 
 install_verified_databases() {
-	local target="$1" staged database app_id relative data_rel snapshot_file
+	local target="$1" staged database app_id relative data_rel snapshot_file pglite_rel
 	staged="$target/run/llm-hub-lite/backup/sqlite"
 	install -d -m 700 "$target$PLATFORM_ROOT/woodpecker/data" "$target$PLATFORM_ROOT/beszel/hub"
+	if [[ -f "$target/run/llm-hub-lite/backup/pglite/map.tsv" ]]; then
+		while IFS=$'\t' read -r app_id data_rel pglite_rel; do
+			[[ "$app_id" =~ ^[a-z][a-z0-9-]*$ && "$data_rel" != /* && "$data_rel" != *..* && "$pglite_rel" != /* && "$pglite_rel" != *..* ]] || die 'invalid PGlite restore map'
+			[[ -d "$target/run/llm-hub-lite/backup/pglite/$app_id" ]] || die "missing PGlite artifact: $app_id"
+			install -d -m 700 "$target${DATA_ROOT:?}/$data_rel"
+			rm -rf -- "$target${DATA_ROOT:?}/$data_rel/$pglite_rel"
+			cp -a -- "$target/run/llm-hub-lite/backup/pglite/$app_id" "$target$DATA_ROOT/$data_rel/$pglite_rel"
+		done <"$target/run/llm-hub-lite/backup/pglite/map.tsv"
+	fi
 	if [[ -f "$staged/map.tsv" ]]; then
 		while IFS=$'\t' read -r app_id data_rel relative snapshot_file; do
 			[[ -n "$app_id" && -n "$data_rel" && -n "$relative" && -n "$snapshot_file" ]] || die 'invalid application database restore map'

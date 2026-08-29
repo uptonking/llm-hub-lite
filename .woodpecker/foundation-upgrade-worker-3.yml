@@ -4,10 +4,10 @@ when:
     branch: main
 
 depends_on:
-  - rollback-worker-3
+  - foundation-upgrade-worker-2
 
 labels:
-  node: leader
+  node: worker-3
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
@@ -17,7 +17,7 @@ concurrency:
   group: llm-hub-lite-deployment
 
 steps:
-  rollback:
+  foundation:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -35,4 +35,4 @@ steps:
       - /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro
       - /usr/local/bin/upgrade-runner:/usr/local/bin/upgrade-runner:ro
     commands:
-      - /usr/local/bin/platform-submit rollback "${ROLLBACK_TARGET:-previous}"
+      - /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"

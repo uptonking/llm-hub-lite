@@ -165,7 +165,7 @@ target_descriptor="$root/config/cluster/nodes/$target_node.env"
 nodes="$(env_value NODES "$policy")"
 if [[ "$local_node" != "$leader_node" ]]; then
 	((target_node_explicit)) || csv_has "$nodes" "$local_node" || die "$app_id is not placed on this follower: $local_node"
-elif [[ -z "$(env_value CLUSTER_SECRET_KEYS "$manifest")" ]]; then
+elif [[ -z "$(env_value CLUSTER_SECRET_KEYS "$manifest")" && -z "$(env_value CONDITIONAL_SECRET_KEYS "$manifest")" ]]; then
 	die "$app_id has no Leader-owned cluster secrets"
 fi
 
@@ -173,12 +173,31 @@ cluster_keys="$(env_value CLUSTER_SECRET_KEYS "$manifest")"
 node_keys="$(env_value NODE_SECRET_KEYS "$manifest")"
 generated_keys="$(env_value GENERATED_SECRET_KEYS "$manifest")"
 min_rules="$(env_value SECRET_MIN_LENGTHS "$manifest")"
+config_file="$root/apps/$app_id/$(env_value CONFIG_FILE "$manifest")"
 runtime_rel="$(env_value RUNTIME_ENV_FILE "$manifest")"
 if [[ -n "$node_keys" ]]; then
 	[[ -n "$runtime_rel" && "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die 'node secrets require a safe RUNTIME_ENV_FILE'
 fi
 runtime_file=''
 [[ -z "$runtime_rel" ]] || runtime_file="$config_root/$runtime_rel"
+conditional_secret_keys() {
+	local rule selector expected keys result='' value override_file
+	override_file="$root/config/cluster/overrides/$target_node/$app_id.env"
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		selector="${rule%%=*}"
+		expected="${rule#*=}"
+		keys="${expected#*|}"
+		expected="${expected%%|*}"
+		value="$(env_value "$selector" "$runtime_file")"
+		[[ -n "$value" ]] || value="$(env_value "$selector" "$override_file")"
+		[[ -n "$value" ]] || value="$(env_value "$selector" "$config_file")"
+		[[ "$value" == "$expected" ]] || continue
+		result="${result:+$result,}$keys"
+	done < <(printf '%s\n' "$(env_value CONDITIONAL_SECRET_KEYS "$manifest")" | tr ';' '\n')
+	printf '%s\n' "$result"
+}
+conditional_keys="$(conditional_secret_keys)"
 
 secret_min_length() {
 	local wanted="$1" rule key length
@@ -262,16 +281,17 @@ write_secrets() {
 validate_key_list "$cluster_keys"
 validate_key_list "$node_keys"
 validate_key_list "$generated_keys"
+validate_key_list "$conditional_keys"
 while IFS= read -r generated_key; do
 	[[ -n "$generated_key" ]] || continue
-	csv_has "$cluster_keys,$node_keys" "$generated_key" || die "generated secret is not declared as a cluster or node secret: $generated_key"
+	csv_has "$cluster_keys,$node_keys,$conditional_keys" "$generated_key" || die "generated secret is not declared as a cluster or node secret: $generated_key"
 done < <(printf '%s\n' "$generated_keys" | tr ',' '\n')
 
 if [[ "$local_node" == "$leader_node" ]]; then
-	write_secrets "$cluster_keys" "$app_env" 1
+	write_secrets "$cluster_keys,$conditional_keys" "$app_env" 1
 	printf 'Reconciled Leader-owned cluster secrets for %s.\n' "$app_id"
 else
-	write_secrets "$cluster_keys" "$app_env"
+	write_secrets "$cluster_keys,$conditional_keys" "$app_env"
 	write_secrets "$node_keys" "$runtime_file"
 	printf 'Reconciled application secrets for %s on %s.\n' "$app_id" "$local_node"
 	if ((target_node_explicit)) && ! csv_has "$nodes" "$local_node"; then

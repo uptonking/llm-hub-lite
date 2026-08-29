@@ -1,0 +1,60 @@
+name: app-flowy
+services:
+  flowy:
+    image: ${FLOWY_IMAGE:?FLOWY_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    mem_limit: ${FLOWY_MEMORY_LIMIT:-768m}
+    cpus: ${FLOWY_CPUS:-0.75}
+    pids_limit: ${FLOWY_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: flowy
+      com.aichorage.component: app-flowy
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      AP_CONTAINER_TYPE: WORKER_AND_APP
+      AP_ENVIRONMENT: ${FLOWY_AP_ENVIRONMENT:-prod}
+      AP_FRONTEND_URL: ${FLOWY_SITE:?FLOWY_SITE must be set}
+      AP_CONFIG_PATH: ${FLOWY_CONFIG_PATH:-/data/config}
+      AP_DB_TYPE: PGLITE
+      AP_REDIS_TYPE: ${FLOWY_REDIS_TYPE:-MEMORY}
+      AP_WORKER_CONCURRENCY: ${FLOWY_WORKER_CONCURRENCY:-1}
+      AP_EXECUTION_MODE: ${FLOWY_EXECUTION_MODE:-SANDBOX_CODE_ONLY}
+      AP_REUSE_SANDBOX: ${FLOWY_REUSE_SANDBOX:-true}
+      AP_PIECES_SYNC_MODE: ${FLOWY_PIECES_SYNC_MODE:-OFFICIAL_AUTO}
+      AP_FILE_STORAGE_LOCATION: ${FLOWY_FILE_STORAGE_LOCATION:-DB}
+      AP_S3_ENDPOINT: ${FLOWY_S3_ENDPOINT:-}
+      AP_S3_BUCKET: ${FLOWY_S3_BUCKET:-}
+      AP_S3_REGION: ${FLOWY_S3_REGION:-auto}
+      AP_S3_ACCESS_KEY_ID: ${FLOWY_S3_ACCESS_KEY_ID:-}
+      AP_S3_SECRET_ACCESS_KEY: ${FLOWY_S3_SECRET_ACCESS_KEY:-}
+      AP_S3_USE_SIGNED_URLS: ${FLOWY_S3_USE_SIGNED_URLS:-true}
+      AP_ENCRYPTION_KEY: ${FLOWY_ENCRYPTION_KEY:-}
+      AP_JWT_SECRET: ${FLOWY_JWT_SECRET:-}
+      AP_WEBHOOK_TIMEOUT_SECONDS: ${FLOWY_WEBHOOK_TIMEOUT_SECONDS:-30}
+      AP_FLOW_TIMEOUT_SECONDS: ${FLOWY_FLOW_TIMEOUT_SECONDS:-600}
+      AP_EXECUTION_DATA_RETENTION_DAYS: ${FLOWY_EXECUTION_DATA_RETENTION_DAYS:-7}
+      AP_PAUSED_FLOW_TIMEOUT_DAYS: ${FLOWY_PAUSED_FLOW_TIMEOUT_DAYS:-7}
+      AP_TELEMETRY_ENABLED: ${FLOWY_TELEMETRY_ENABLED:-false}
+      AP_PREWARM_CACHE_ON_STARTUP: ${FLOWY_PREWARM_CACHE_ON_STARTUP:-false}
+      AP_DEFAULT_CONCURRENT_JOBS_LIMIT: ${FLOWY_DEFAULT_CONCURRENT_JOBS_LIMIT:-1}
+      AP_SANDBOX_MEMORY_LIMIT: ${FLOWY_SANDBOX_MEMORY_LIMIT:-262144}
+      AP_RUNS_METADATA_UPDATE_CONCURRENCY: ${FLOWY_RUNS_METADATA_UPDATE_CONCURRENCY:-1}
+      NODE_OPTIONS: ${FLOWY_NODE_OPTIONS:---max-old-space-size=512}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/flowy:/data
+    networks: [flowy_private, platform_edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:80/api/v1/health | grep -q '\"status\":\"Healthy\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+networks:
+  flowy_private:
+    name: app-flowy_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

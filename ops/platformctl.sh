@@ -890,7 +890,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys=''
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen=''
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -908,7 +908,11 @@ validate_descriptor() {
 		csv_has "$(policy_value NODE_IDS)" "$node" || die "app node is absent from inventory: $node ($d)"
 		[[ "$node" != "$(leader_node_id)" ]] || die "consumer app cannot target the Leader: $d"
 		csv_has "$seen_nodes" "$node" && die "app policy NODES contains a duplicate: $node ($d)"
-		[[ "$(env_value NODE_STATE "$CONTROL_ROOT/current/config/cluster/nodes/$node.env")" == active ]] || die "consumer app target is not active: $node ($d)"
+		# Disabled applications may reserve a joining follower for a future
+		# rollout. Enabled applications still require an active target.
+		if [[ "$enabled" == true ]]; then
+			[[ "$(env_value NODE_STATE "$CONTROL_ROOT/current/config/cluster/nodes/$node.env")" == active ]] || die "consumer app target is not active: $node ($d)"
+		fi
 		seen_nodes="${seen_nodes:+$seen_nodes,}$node"
 		node_count=$((node_count + 1))
 	done <<<"$(printf '%s\n' "$nodes" | tr ',' '\n')"
@@ -925,7 +929,7 @@ validate_descriptor() {
 		csv_has "$nodes" "$primary" || die "active-passive primary is absent from app NODES: $d"
 		;;
 	singleton)
-		for k in RUNTIME_ENV_FILE NODE_SECRET_KEYS MOVE_MODE HEALTH_SERVICE; do
+		for k in RUNTIME_ENV_FILE NODE_SECRET_KEYS MOVE_MODE; do
 			[[ -n "$(descriptor_value "$d" "$k")" ]] || die "$k is required for singleton app $d/manifest.env"
 		done
 		((node_count == 1)) || die "singleton app must target exactly one follower: $d"
@@ -967,6 +971,23 @@ validate_descriptor() {
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ && "$min_length" =~ ^[1-9][0-9]*$ ]] || die "invalid SECRET_MIN_LENGTHS entry in $d/manifest.env: $rule"
 		csv_has "$all_secret_keys" "$secret_key" || die "SECRET_MIN_LENGTHS references undeclared secret in $d/manifest.env: $secret_key"
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" SECRET_MIN_LENGTHS)" | tr ',' '\n')"
+	while IFS= read -r conditional_rule; do
+		[[ -n "$conditional_rule" ]] || continue
+		selector_key="${conditional_rule%%=*}"
+		conditional_value="${conditional_rule#*=}"
+		conditional_value="${conditional_value%%|*}"
+		conditional_keys="${conditional_rule#*|}"
+		[[ "$selector_key" =~ ^[A-Z][A-Z0-9_]*$ && -n "$conditional_value" && "$conditional_rule" == *'|'* ]] || die "invalid CONDITIONAL_SECRET_KEYS entry in $d/manifest.env: $conditional_rule"
+		csv_has "$(descriptor_value "$d" ENV_KEYS)" "$selector_key" || die "conditional selector is not declared in ENV_KEYS: $selector_key"
+		while IFS= read -r conditional_key; do
+			[[ -n "$conditional_key" ]] || continue
+			[[ "$conditional_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid conditional secret key in $d/manifest.env: $conditional_key"
+			csv_has "$all_secret_keys" "$conditional_key" && die "conditional secret must not also be unconditional: $conditional_key"
+			! csv_has "$conditional_seen" "$conditional_key" || die "duplicate conditional secret key: $conditional_key"
+			conditional_seen="${conditional_seen}${conditional_seen:+,}$conditional_key"
+			all_secret_keys="${all_secret_keys}${all_secret_keys:+,}$conditional_key"
+		done < <(printf '%s\n' "$conditional_keys" | tr ',' '\n')
+	done <<<"$(printf '%s\n' "$(descriptor_value "$d" CONDITIONAL_SECRET_KEYS)" | tr ';' '\n')"
 	[[ "$(descriptor_value "$d" COMPOSE_PROJECT)" == "app-$(basename "$d")" ]] || die "COMPOSE_PROJECT must equal app-APP_ID in $d/manifest.env"
 	alias="$(descriptor_value "$d" NETWORK_ALIAS)"
 	[[ "$alias" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid NETWORK_ALIAS in $d/manifest.env"
@@ -1032,7 +1053,8 @@ validate_descriptor() {
 		primary="$(app_policy_value "$d" MONGO_BACKUP_NODE_ID)"
 		csv_has "$nodes" "$primary" || die 'LibreChat MONGO_BACKUP_NODE_ID is absent from NODES'
 	fi
-	if [[ "$(descriptor_value "$d" STATE_MODE)" == sqlite ]]; then
+	case "$(descriptor_value "$d" STATE_MODE)" in
+	sqlite)
 		[[ -n "$(descriptor_value "$d" SQLITE_PATHS)" ]] || die "SQLite app is missing SQLITE_PATHS: $d"
 		! grep -Eiq 'REDIS_CONN_STRING|SQL_DSN|postgres|redis' "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "SQLite app must not define Redis or PostgreSQL: $d"
 		while IFS= read -r k; do
@@ -1046,7 +1068,35 @@ validate_descriptor() {
 				! placeholder_value "$(app_value "$d" "$k")" || die "production SQLite app placeholder is not allowed: $k"
 			done <<<"$(descriptor_secret_keys "$d")"
 		fi
-	fi
+		;;
+	pglite)
+		local pglite_rel
+		pglite_rel="$(descriptor_value "$d" PGLITE_PATH_REL)"
+		[[ -n "$pglite_rel" ]] || die "PGlite app is missing PGLITE_PATH_REL: $d"
+		safe_relative "$pglite_rel" || die "unsafe PGLITE_PATH_REL in $d"
+		! grep -Eiq '^[[:space:]]{2}(postgres|redis):|AP_QUEUE_MODE|AP_DEV_PIECES' "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "PGlite app must not define PostgreSQL, Redis services, AP_QUEUE_MODE, or AP_DEV_PIECES: $d"
+		grep -Fq 'AP_DB_TYPE:' "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "PGlite app must declare AP_DB_TYPE: $d"
+		grep -Fq 'AP_CONFIG_PATH:' "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "PGlite app must declare AP_CONFIG_PATH: $d"
+		if [[ "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true ]]; then
+			[[ -z "$(app_value "$d" AP_QUEUE_MODE)" && -z "$(app_value "$d" AP_DEV_PIECES)" ]] || die "PGlite production must not set legacy AP_QUEUE_MODE or AP_DEV_PIECES: $d"
+			storage="$(app_value "$d" FLOWY_FILE_STORAGE_LOCATION)"
+			case "$storage" in
+			DB) ;;
+			S3)
+				for k in FLOWY_S3_ENDPOINT FLOWY_S3_BUCKET FLOWY_S3_REGION FLOWY_S3_ACCESS_KEY_ID FLOWY_S3_SECRET_ACCESS_KEY; do
+					value="$(app_value "$d" "$k")"
+					[[ -n "$value" && "$value" != replace-with-* ]] || die "production PGlite S3 storage requires $k"
+					! placeholder_value "$value" || die "production PGlite S3 placeholder is not allowed: $k"
+				done
+				[[ "$(app_value "$d" FLOWY_S3_ENDPOINT)" =~ ^https:// ]] || die 'production Flowy S3 endpoint must use https://'
+				;;
+			*) die "PGlite file storage must be DB or S3: $d" ;;
+			esac
+		fi
+		;;
+	'' | files | ephemeral) ;;
+	*) die "unsupported STATE_MODE in $d/manifest.env" ;;
+	esac
 	if [[ "$(app_upstream_mode "$d")" == singleton && "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true ]]; then
 		while IFS= read -r k; do
 			[[ -n "$k" ]] || continue

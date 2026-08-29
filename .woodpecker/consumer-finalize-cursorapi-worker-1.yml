@@ -13,7 +13,7 @@ when:
         - apps/cursorapi/images.lock.env
 
 depends_on:
-  - consumer-stop-cursorapi-worker-2
+  - consumer-stop-cursorapi-worker-3
 
 labels:
   node: worker-1

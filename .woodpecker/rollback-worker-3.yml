@@ -4,10 +4,10 @@ when:
     branch: main
 
 depends_on:
-  - rollback-worker-3
+  - rollback-worker-2
 
 labels:
-  node: leader
+  node: worker-3
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite

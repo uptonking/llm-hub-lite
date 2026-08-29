@@ -8,8 +8,10 @@ descriptor to render Caddy routes. LibreChat and legacy New API use
 active-active health-checked upstreams. Aichorouter, CPAPI, and Cursor API
 Proxy are enabled singleton services: each target is stored in its app policy,
 and only that Follower is deployed. Pigeon retains a `worker-2` target but is disabled by
-policy, so it has no runtime placement or workflow. Singleton local state is
-intentionally not replicated. OpenObserve is a
+policy, so it has no runtime placement or workflow. Flowy (Activepieces) is an
+enabled PGlite-backed singleton on the active `worker-3` by default. Singleton
+local state is intentionally not replicated; its default DB file storage is
+local, while R2 can be enabled explicitly for durable object storage. OpenObserve is a
 Leader foundation service. Every node runs its read-only Docker socket proxy
 and Vector shipper; each shipper forwards platform-labelled container logs to
 the Leader's `observer-ingest` endpoint and keeps a bounded transient buffer

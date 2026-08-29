@@ -185,6 +185,23 @@ EOF
       - /usr/local/bin/configure-app-secrets $app$target_arg --non-interactive
 EOF
 }
+conditional_secret_keys() {
+	local manifest="$1" node="${2:-}" rule selector expected keys config_file override_file value result=''
+	config_file="$(dirname "$manifest")/$(env_value CONFIG_FILE "$manifest")"
+	override_file="$root/config/cluster/overrides/$node/$(env_value APP_ID "$manifest").env"
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		selector="${rule%%=*}"
+		expected="${rule#*=}"
+		keys="${expected#*|}"
+		expected="${expected%%|*}"
+		value="$(env_value "$selector" "$override_file")"
+		[[ -n "$value" ]] || value="$(env_value "$selector" "$config_file")"
+		[[ "$value" == "$expected" ]] || continue
+		result="${result:+$result,}$keys"
+	done < <(printf '%s\n' "$(env_value CONDITIONAL_SECRET_KEYS "$manifest")" | tr ';' '\n')
+	printf '%s\n' "$result"
+}
 
 render_consumer_stage() {
 	local app="$1" node="$2" dependency="$3" file
@@ -251,7 +268,7 @@ EOF
 }
 
 render_consumer_workflows() {
-	local manifest="$1" app placement upstream policy_file enabled nodes node previous='' publish_name seen='' count=0 undesired='' primary_key primary target cluster_keys node_keys secret_keys
+	local manifest="$1" app placement upstream policy_file enabled nodes node previous='' publish_name seen='' count=0 undesired='' primary_key primary target cluster_keys node_keys conditional_keys secret_keys
 	app="$(env_value APP_ID "$manifest")"
 	placement="$(env_value PLACEMENT "$manifest")"
 	upstream="$(env_value UPSTREAM_MODE "$manifest")"
@@ -267,7 +284,10 @@ render_consumer_workflows() {
 	while IFS= read -r node; do
 		[[ "$node" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid consumer node: $app/$node"
 		csv_has "$ids_csv" "$node" || die "consumer node is absent from NODE_IDS: $app/$node"
-		[[ "$node" != "$leader_id" && "$(env_value NODE_STATE "$root/config/cluster/nodes/$node.env")" == active ]] || die "consumer node must be an active follower: $app/$node"
+		[[ "$node" != "$leader_id" ]] || die "consumer node must be an active follower: $app/$node"
+		if [[ "$enabled" == true ]]; then
+			[[ "$(env_value NODE_STATE "$root/config/cluster/nodes/$node.env")" == active ]] || die "consumer node must be an active follower: $app/$node"
+		fi
 		! csv_has "$seen" "$node" || die "duplicate consumer node: $app/$node"
 		seen="${seen:+$seen,}$node"
 		count=$((count + 1))
@@ -316,15 +336,17 @@ render_consumer_workflows() {
 	if [[ "$enabled" == true ]]; then
 		cluster_keys="$(env_value CLUSTER_SECRET_KEYS "$manifest")"
 		node_keys="$(env_value NODE_SECRET_KEYS "$manifest")"
-		if [[ -n "$cluster_keys" ]]; then
-			render_consumer_secrets "$app" "$leader_id" '' "$cluster_keys"
+		conditional_keys="$(conditional_secret_keys "$manifest" "$leader_id")"
+		if [[ -n "$cluster_keys" || -n "$conditional_keys" ]]; then
+			render_consumer_secrets "$app" "$leader_id" '' "$cluster_keys,$conditional_keys"
 		fi
 		# Node-local secrets belong only on the nodes selected by this app's
 		# placement policy.  Cleanup workflows above still cover active nodes
 		# removed from placement, but they must not receive new credentials.
 		while IFS= read -r node; do
 			[[ -n "$node" ]] || continue
-			secret_keys="$cluster_keys"
+			conditional_keys="$(conditional_secret_keys "$manifest" "$node")"
+			secret_keys="$cluster_keys,$conditional_keys"
 			[[ -z "$node_keys" ]] || secret_keys="${secret_keys:+$secret_keys,}$node_keys"
 			[[ -n "$secret_keys" ]] || continue
 			render_consumer_secrets "$app" "$node" '' "$secret_keys"

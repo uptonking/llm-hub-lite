@@ -23,7 +23,7 @@ for woodpecker_compose in "$repo_root"/compose/foundation/woodpecker-*.yml; do
 		exit 1
 	}
 done
-for node in leader worker-1 worker-2; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
+for node in leader worker-1 worker-2 worker-3; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
 if grep -R -q '^NODE_PUBLIC_IP=' "$repo_root/config/cluster/nodes"; then
 	printf 'committed node inventory contains a public IP field\n' >&2
 	exit 1
@@ -51,7 +51,7 @@ done
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/bootstrap-vps.sh"
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/configure-app-secrets.sh"
 grep -q '^LEADER_NODE_ID=leader$' "$repo_root/config/cluster/policy.env"
-grep -q '^NODE_IDS=leader,worker-1,worker-2$' "$repo_root/config/cluster/policy.env"
+grep -q '^NODE_IDS=leader,worker-1,worker-2,worker-3$' "$repo_root/config/cluster/policy.env"
 grep -q '^REPO_SLUG=uptonking/llm-hub-lite$' "$repo_root/config/cluster/policy.env"
 grep -q '^APP_ID=cpapi$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^APP_ID=librechat$' "$repo_root/apps/librechat/manifest.env"
@@ -68,6 +68,16 @@ grep -q '^APP_ID=pigeon$' "$repo_root/apps/pigeon/manifest.env"
 grep -q '^SECRET_MIN_LENGTHS=PIGEON_SECRET_KEY:32,PIGEON_LOGIN_PASSWORD:12$' "$repo_root/apps/pigeon/manifest.env"
 grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/pigeon.policy"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cursorapi.policy"
+grep -q '^APP_ID=flowy$' "$repo_root/apps/flowy/manifest.env"
+grep -q '^STATE_MODE=pglite$' "$repo_root/apps/flowy/manifest.env"
+grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/flowy.policy"
+grep -q '^NODES=worker-3$' "$repo_root/config/cluster/apps/flowy.policy"
+grep -q '^NODE_STATE=active$' "$repo_root/config/cluster/nodes/worker-3.env"
+grep -q '^FLOWY_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^CONDITIONAL_SECRET_KEYS=FLOWY_FILE_STORAGE_LOCATION=S3|FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"
+grep -Fq 'reverse_proxy flowy:80' "$repo_root/apps/flowy/route.follower.caddy"
+grep -Fq '127.0.0.1:80/api/v1/health' "$repo_root/apps/flowy/compose.yml"
+grep -q '^FLOWY_FILE_STORAGE_LOCATION=DB$' "$repo_root/apps/flowy/config.env"
 for app in aichorouter cpapi cursorapi pigeon; do
 	grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/$app/manifest.env"
 	nodes="$(sed -n 's/^NODES=//p' "$repo_root/config/cluster/apps/$app.policy")"

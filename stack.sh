@@ -167,7 +167,15 @@ get() {
 				case "$upstream_mode" in
 				singleton)
 					target="$(app_nodes "$CURRENT_ROUTE_DESCRIPTOR")"
+					[[ "$target" != *,* && -n "$target" ]] || {
+						printf 'singleton app must target exactly one node: %s\n' "$(basename "$CURRENT_ROUTE_DESCRIPTOR")" >&2
+						return 1
+					}
 					host="$(env_value "$origin_key" "$root/config/cluster/nodes/$target.env")"
+					[[ -n "$host" && "$(env_value NODE_STATE "$root/config/cluster/nodes/$target.env")" == active && "$target" != "$leader_id" ]] || {
+						printf 'singleton target is not an active follower: %s\n' "$target" >&2
+						return 1
+					}
 					v="https://$host"
 					;;
 				active-active) v="$(cluster_upstreams "$CURRENT_ROUTE_DESCRIPTOR" "$origin_key")" ;;

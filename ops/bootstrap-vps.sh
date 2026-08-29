@@ -954,15 +954,31 @@ manifest_has_generated_secret() {
 	generated="$(sed -n 's/^GENERATED_SECRET_KEYS=//p' "$manifest" | tail -n1)"
 	csv_contains "$generated" "$key"
 }
+manifest_conditional_secret_keys() {
+	local manifest="$1" rule selector expected keys config_file result=''
+	config_file="$(dirname "$manifest")/$(sed -n 's/^CONFIG_FILE=//p' "$manifest" | tail -n1)"
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		selector="${rule%%=*}"
+		expected="${rule#*=}"
+		keys="${expected#*|}"
+		expected="${expected%%|*}"
+		[[ "$(sed -n "s/^${selector}=//p" "$config_file" | tail -n1)" == "$expected" ]] || continue
+		result="${result:+$result,}$keys"
+	done < <(sed -n 's/^CONDITIONAL_SECRET_KEYS=//p' "$manifest" | tail -n1 | tr ';' '\n')
+	printf '%s\n' "$result"
+}
 prepare_application_secrets() {
-	local manifest app_id keys runtime_rel runtime_file key min_length
+	local manifest app_id keys runtime_rel runtime_file key min_length conditional_keys
 	while IFS= read -r manifest; do
 		[[ -f "$manifest" ]] || continue
 		[[ "$(sed -n 's/^MANIFEST_VERSION=//p' "$manifest" | tail -n1)" == 5 ]] || die "unsupported application manifest version: $manifest"
 		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 		app_enabled "$app_id" || continue
+		conditional_keys="$(manifest_conditional_secret_keys "$manifest")"
 		if [[ "$NODE_ROLE" == leader ]]; then
 			keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+			keys="${keys}${conditional_keys:+${keys:+,}$conditional_keys}"
 			while IFS= read -r key; do
 				[[ -n "$key" ]] || continue
 				load_bundle_value "$key"
@@ -976,6 +992,7 @@ prepare_application_secrets() {
 		fi
 		app_active_on_node "$app_id" || continue
 		keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		keys="${keys}${conditional_keys:+${keys:+,}$conditional_keys}"
 		while IFS= read -r key; do
 			[[ -n "$key" ]] || continue
 			load_bundle_value "$key"
@@ -1087,12 +1104,14 @@ if [[ -n "$SHARED_SECRET_BUNDLE_FILE" && -s "$SHARED_SECRET_BUNDLE_FILE" && "$SH
 	SHARED_SECRET_BUNDLE_FILE="$CONFIG_ROOT/shared-secrets.env"
 fi
 persist_application_secrets() {
-	local manifest app_id keys runtime_rel runtime_file key value
+	local manifest app_id keys runtime_rel runtime_file key value conditional_keys
 	while IFS= read -r manifest; do
 		[[ -f "$manifest" ]] || continue
 		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 		app_enabled "$app_id" || continue
 		keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		conditional_keys="$(manifest_conditional_secret_keys "$manifest")"
+		keys="${keys}${conditional_keys:+${keys:+,}$conditional_keys}"
 		if [[ "$NODE_ROLE" == leader || "$(app_active_on_node "$app_id" && printf true || printf false)" == true ]]; then
 			while IFS= read -r key; do
 				[[ -n "$key" ]] || continue

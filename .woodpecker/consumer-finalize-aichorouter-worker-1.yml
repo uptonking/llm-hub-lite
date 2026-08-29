@@ -13,7 +13,7 @@ when:
         - apps/aichorouter/images.lock.env
 
 depends_on:
-  - consumer-stop-aichorouter-worker-2
+  - consumer-stop-aichorouter-worker-3
 
 labels:
   node: worker-1

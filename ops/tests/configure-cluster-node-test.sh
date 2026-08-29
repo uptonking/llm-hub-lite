@@ -12,6 +12,15 @@ make_fixture() {
 	cp "$repo_root/ops/configure-cluster-node.sh" "$repo_root/ops/generate-woodpecker-workflows.sh" "$fixture/ops/"
 	cp "$repo_root/ops/images.apps.prod.env" "$fixture/ops/"
 	cp -R "$repo_root/apps" "$repo_root/config" "$fixture/"
+	# The repository reserves worker-3; this suite exercises adding it from a
+	# three-node baseline, so remove the committed reservation in the fixture.
+	rm -f "$fixture/config/cluster/nodes/worker-3.env"
+	sed 's/,worker-3$//' "$fixture/config/cluster/policy.env" >"$fixture/config/cluster/policy.env.tmp"
+	mv "$fixture/config/cluster/policy.env.tmp" "$fixture/config/cluster/policy.env"
+	# The lifecycle fixture promotes a previously unknown node from joining;
+	# keep the committed worker-3 Flowy placement out of this reduced inventory.
+	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/flowy.policy" >"$fixture/config/cluster/apps/flowy.policy.tmp"
+	mv "$fixture/config/cluster/apps/flowy.policy.tmp" "$fixture/config/cluster/apps/flowy.policy"
 	printf '%s\n' "$fixture"
 }
 run_add() {

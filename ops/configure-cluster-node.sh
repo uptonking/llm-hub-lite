@@ -309,6 +309,7 @@ state)
 	if [[ "$requested_state" == draining || "$requested_state" == retired ]]; then
 		for app_policy in "$root"/config/cluster/apps/*.policy; do
 			[[ -f "$app_policy" ]] || continue
+			[[ "$(env_value ENABLED "$app_policy")" == true ]] || continue
 			if csv_has "$(env_value NODES "$app_policy")" "$node_id"; then
 				die "move $node_id out of app policy before $requested_state: $(basename "$app_policy")"
 			fi

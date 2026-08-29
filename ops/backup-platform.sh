@@ -15,6 +15,7 @@ REPO="${RESTIC_REPOSITORY:-/opt/backups/llm-hub-lite/repository}"
 PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-$CONFIG_ROOT/restic-password}"
 STAGE_ROOT="${BACKUP_STAGE_ROOT:-/run/llm-hub-lite/backup}"
 LOCK_FILE="${PLATFORM_LOCK_FILE:-/run/lock/llm-hub-lite/platform.lock}"
+PLATFORMCTL_SCRIPT="${PLATFORMCTL_SCRIPT:-/usr/local/bin/platformctl}"
 MIN_FREE_BYTES="${BACKUP_MIN_FREE_BYTES:-5368709120}"
 MIN_FREE_PERCENT="${BACKUP_MIN_FREE_PERCENT:-10}"
 operation="${1:-snapshot}"
@@ -325,6 +326,21 @@ backup_sqlite() {
 	return 1
 }
 
+backup_pglite() {
+	local source="$1" target="$2" tmp
+	[[ -d "$source" ]] || return 0
+	install -d -m 700 "$(dirname "$target")"
+	tmp="${target}.tmp"
+	rm -rf -- "$tmp"
+	cp -a -- "$source" "$tmp" || {
+		rm -rf -- "$tmp"
+		printf 'PGlite backup failed: %s\n' "$source" >&2
+		return 1
+	}
+	rm -rf -- "$target"
+	mv -- "$tmp" "$target"
+}
+
 backup_postgres() {
 	if ((newapi_enabled == 0)); then
 		printf 'PostgreSQL dump skipped: New API is disabled by cluster policy (node=%s)\n' "$NODE_ID"
@@ -378,10 +394,23 @@ snapshot() {
 		exit 1
 	}
 	check_space
+	local -a stopped_pglite_apps=()
+	restart_stopped_pglite() {
+		local app
+		for app in "${stopped_pglite_apps[@]-}"; do
+			[[ -n "$app" ]] || continue
+			PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" start "app:$APPS_ROOT/$app" >/dev/null 2>&1 ||
+				printf 'warning: unable to restart PGlite app after backup: %s\n' "$app" >&2
+		done
+	}
+	cleanup_snapshot() {
+		restart_stopped_pglite
+		find "$STAGE_ROOT" -mindepth 1 -delete 2>/dev/null || true
+	}
 	install -d -m 700 "$STAGE_ROOT"
 	find "$STAGE_ROOT" -mindepth 1 -delete 2>/dev/null || true
-	install -d -m 700 "$STAGE_ROOT/sqlite"
-	trap 'find "$STAGE_ROOT" -mindepth 1 -delete' EXIT
+	install -d -m 700 "$STAGE_ROOT/sqlite" "$STAGE_ROOT/pglite"
+	trap cleanup_snapshot EXIT
 
 	: >"$STAGE_ROOT/sqlite/map.tsv"
 	while IFS= read -r descriptor; do
@@ -404,7 +433,27 @@ snapshot() {
 				[[ -f "$target" ]] && printf '%s\t%s\t%s\t%s\n' "$app_id" "$data_rel" "$relative" "$(basename "$target")" >>"$STAGE_ROOT/sqlite/map.tsv"
 			else return 1; fi
 		done
+		if [[ "$(descriptor_value "$descriptor" STATE_MODE)" == pglite ]]; then
+			pglite_rel="$(descriptor_value "$descriptor" PGLITE_PATH_REL)"
+			safe_relative "$pglite_rel" || {
+				printf 'unsafe PGLITE_PATH_REL in %s\n' "$descriptor" >&2
+				return 1
+			}
+			source="$DATA_ROOT/$data_rel/$pglite_rel"
+			target="$STAGE_ROOT/pglite/$app_id"
+			project="$(descriptor_value "$descriptor" COMPOSE_PROJECT)"
+			if [[ "$NODE_ID" != leader && "$(descriptor_value "$descriptor" UPSTREAM_MODE)" == singleton && "$(env_value NODES "$CONTROL_ROOT/current/config/cluster/apps/$app_id.policy")" == "$NODE_ID" ]]; then
+				if running_ids="$(docker ps -q --filter "label=com.docker.compose.project=$project" 2>/dev/null)" && [[ -n "$running_ids" ]]; then
+					PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" stop "app:$descriptor" || return 1
+					stopped_pglite_apps+=("$app_id")
+				fi
+			fi
+			backup_pglite "$source" "$target" || return 1
+			[[ -d "$target" ]] && printf '%s\t%s\t%s\n' "$app_id" "$data_rel" "$pglite_rel" >>"$STAGE_ROOT/pglite/map.tsv"
+		fi
 	done < <(descriptor_ids)
+	restart_stopped_pglite
+	stopped_pglite_apps=()
 	backup_sqlite "$WOODPECKER_DATA_ROOT/woodpecker.sqlite" "$STAGE_ROOT/sqlite/woodpecker.sqlite"
 	# OpenObserve keeps its metadata catalog in SQLite beneath the mounted data
 	# directory.  Back it up through SQLite's online backup API rather than
@@ -433,7 +482,7 @@ snapshot() {
 		"$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel" "$CONFIG_ROOT/platform.env"
 		"$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env"
 		"$CONFIG_ROOT/images.apps.previous.env" "$CONFIG_ROOT/images.foundation.previous.env"
-		"$CONFIG_ROOT/image-history" "$CONFIG_ROOT/singleton-state" "$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/node.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token" "$CONFIG_ROOT/restic-password" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$STAGE_ROOT/sqlite" "$STAGE_ROOT/postgres" "$STAGE_ROOT/mongodb" "$STAGE_ROOT/manifest.txt"
+		"$CONFIG_ROOT/image-history" "$CONFIG_ROOT/singleton-state" "$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/node.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token" "$CONFIG_ROOT/restic-password" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$STAGE_ROOT/sqlite" "$STAGE_ROOT/pglite" "$STAGE_ROOT/postgres" "$STAGE_ROOT/mongodb" "$STAGE_ROOT/manifest.txt"
 	)
 	while IFS= read -r descriptor; do
 		runtime_rel="$(descriptor_value "$descriptor" RUNTIME_ENV_FILE)"
@@ -460,6 +509,20 @@ snapshot() {
 			return 1
 		}
 		ephemeral_excludes+=(--exclude "$DATA_ROOT/$data_rel/$ephemeral_rel")
+	done < <(descriptor_ids)
+	while IFS= read -r descriptor; do
+		[[ "$(descriptor_value "$descriptor" STATE_MODE)" == pglite ]] || continue
+		data_rel="$(descriptor_value "$descriptor" DATA_ROOT_REL)"
+		pglite_rel="$(descriptor_value "$descriptor" PGLITE_PATH_REL)"
+		safe_relative "$data_rel" || {
+			printf 'unsafe PGlite path in %s\n' "$descriptor" >&2
+			return 1
+		}
+		safe_relative "$pglite_rel" || {
+			printf 'unsafe PGlite path in %s\n' "$descriptor" >&2
+			return 1
+		}
+		ephemeral_excludes+=(--exclude "$DATA_ROOT/$data_rel/$pglite_rel")
 	done < <(descriptor_ids)
 	excludes=(
 		--exclude "$DATA_ROOT/*.db" --exclude "$DATA_ROOT/*.db-*" --exclude "$DATA_ROOT/*.sqlite" --exclude "$DATA_ROOT/*.sqlite-*"
