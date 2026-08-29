@@ -4,12 +4,12 @@ After=platform-network.service platform-firewall.service network-online.target
 Requires=platform-network.service platform-firewall.service docker.service
 Wants=network-online.target
 RequiresMountsFor=/opt/apps/llm-hub-lite /opt/platform /etc/llm-hub-lite
+OnFailure=platform-recovery-retry.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=420
-OnFailure=platform-recovery-retry.service
 ExecStart=/usr/local/bin/platformctl recover --quiet
 
 [Install]

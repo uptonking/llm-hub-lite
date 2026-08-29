@@ -79,6 +79,9 @@ LOW_MEMORY_SWAP_SIZE="${LOW_MEMORY_SWAP_SIZE:-1G}"
 LOW_MEMORY_SWAP_SWAPPINESS="${LOW_MEMORY_SWAP_SWAPPINESS:-10}"
 edge_network="${PLATFORM_EDGE_NETWORK:-platform_edge}"
 SSH_PORT="${SSH_PORT:-}"
+BOOTSTRAP_SYSTEMD_WAIT_SECONDS="${BOOTSTRAP_SYSTEMD_WAIT_SECONDS:-8}"
+BOOTSTRAP_ENDPOINT_RETRIES="${BOOTSTRAP_ENDPOINT_RETRIES:-1}"
+BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS="${BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS:-10}"
 
 die() {
 	printf 'ERROR: %s\n' "$*" >&2
@@ -95,6 +98,37 @@ bootstrap_error() {
 trap bootstrap_error ERR
 need() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
+[[ "$BOOTSTRAP_SYSTEMD_WAIT_SECONDS" =~ ^[0-9]+$ ]] || die 'BOOTSTRAP_SYSTEMD_WAIT_SECONDS must be an integer'
+((BOOTSTRAP_SYSTEMD_WAIT_SECONDS <= 60)) || die 'BOOTSTRAP_SYSTEMD_WAIT_SECONDS must be between 0 and 60 seconds'
+[[ "$BOOTSTRAP_ENDPOINT_RETRIES" =~ ^[0-9]+$ ]] || die 'BOOTSTRAP_ENDPOINT_RETRIES must be an integer'
+((BOOTSTRAP_ENDPOINT_RETRIES <= 3)) || die 'BOOTSTRAP_ENDPOINT_RETRIES must be between 0 and 3'
+[[ "$BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || die 'BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS must be an integer'
+((BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS >= 1 && BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS <= 60)) || die 'BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS must be between 1 and 60 seconds'
+start_platform_target() {
+	local wait_seconds="$1" elapsed=0 state
+	# Recovery is already performed by the foreground sync above. Queue the
+	# boot target asynchronously so an unhealthy consumer cannot hold an
+	# interactive bootstrap open for systemd's long recovery timeout.
+	if ! systemctl start --no-block platform.target; then
+		printf 'ERROR: unable to queue platform.target; inspect systemd status\n' >&2
+		systemctl status platform.target platform-network.service platform-recovery.service --no-pager -l >&2 || true
+		return 1
+	fi
+	while ((elapsed < wait_seconds)); do
+		state="$(systemctl is-active platform.target 2>/dev/null || true)"
+		case "$state" in
+		active) return 0 ;;
+		failed | inactive | deactivating)
+			printf 'WARNING: platform.target entered %s state; recovery will retry via its timer\n' "$state" >&2
+			systemctl status platform.target platform-network.service platform-recovery.service --no-pager -l >&2 || true
+			return 0
+			;;
+		esac
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	printf 'platform.target queued; recovery continues in the background\n' >&2
+}
 safe_observer_data_root() {
 	local root="$1"
 	case "$root" in
@@ -1342,12 +1376,29 @@ fi
 # bind-mounted inode (notably Vector's observer-vector.toml).
 PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all
 
+# platform-network.service and platform-recovery.service invoke platformctl
+# and need this same lock. Finish the locked backup and then release the lock
+# before starting platform.target; otherwise systemd waits for the lock until
+# its timeout even though this bootstrap has already reconciled all projects.
 systemctl enable platform.target platform-firewall.service platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer >/dev/null
-systemctl restart platform-firewall.service platform.target platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer
+# A previous interrupted bootstrap may have left dependency units in a
+# failed state. All platform projects have just passed the foreground sync,
+# so clear those stale systemd result flags without starting another recovery
+# transaction while the bootstrap lock is held.
+systemctl reset-failed platform.target platform-network.service platform-recovery.service >/dev/null 2>&1 || true
 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot post-bootstrap
 
-curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet\n' >&2
-curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet\n' >&2
+# The remaining systemd operations launch platformctl in independent
+# processes, so they must run after the bootstrap lock is closed. No later
+# bootstrap step mutates shared state or needs this descriptor.
+flock -u 9
+exec 9>&-
+unset PLATFORM_LOCK_HELD
+start_platform_target "$BOOTSTRAP_SYSTEMD_WAIT_SECONDS"
+systemctl restart platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer
+
+curl -fsS --retry "$BOOTSTRAP_ENDPOINT_RETRIES" --retry-delay 2 --retry-all-errors --connect-timeout 5 --max-time "$BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS" "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet; systemd recovery will retry\n' >&2
+curl -fsS --retry "$BOOTSTRAP_ENDPOINT_RETRIES" --retry-delay 2 --retry-all-errors --connect-timeout 5 --max-time "$BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS" "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet; systemd recovery will retry\n' >&2
 print_bootstrap_summary() {
 	local foundation consumers disabled manifest app_id display_name placement origin_key public_key public_host route_label route_index groups availability_note summary_observer_root component
 	local -a local_consumers=()

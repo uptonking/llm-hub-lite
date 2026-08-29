@@ -7,6 +7,13 @@ then recreates the shared network, applies the firewall, and runs
 before consumers. A failed consumer leaves the last valid Caddy routes in
 place and is retried by the recovery timer.
 
+The bootstrap script uses the same ordering: it holds the platform lock while
+installing and reconciling files, completes the post-bootstrap snapshot, then
+releases the lock before queuing `platform.target`. This avoids a systemd
+dependency waiting on a lock held by its parent SSH process. The target handoff
+is asynchronous and bounded; a slow recovery is reported through systemd and
+continues via the recovery/retry timers.
+
 Recovery uses a root-only validation stamp at
 `/etc/llm-hub-lite/validation.stamp`. When the current release, committed
 policies, image locks, node configuration, runtime environment, and Compose

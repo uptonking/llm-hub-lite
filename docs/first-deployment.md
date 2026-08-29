@@ -44,6 +44,17 @@ running non-interactively. Never generate shared secrets independently on
 different nodes. The Leader owns Woodpecker, Beszel Hub, and Observer;
 Followers run worker components and only consumers selected by app policy.
 
+Bootstrap performs the foreground Compose reconciliation before registering
+the reboot units. It then releases its platform lock and queues
+`platform.target` asynchronously; this final systemd handoff is intentionally
+bounded so an unhealthy consumer cannot leave the SSH session waiting for the
+full recovery timeout. A message that recovery continues in the background is
+normal. Inspect it with `systemctl status platform-recovery.service` and
+`journalctl -u platform-recovery.service -n 200 --no-pager`.
+The final public endpoint probes are warning-only and bounded to one retry by
+default; use `BOOTSTRAP_ENDPOINT_RETRIES` and
+`BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS` when a slower network needs more time.
+
 ## Verify and hand off
 
 Run these checks after all nodes have finished:

@@ -155,6 +155,26 @@ grep -Fq 'remote Restic repository is unavailable or uninitialized' "$bootstrap"
 grep -Fq 'restic snapshots --no-lock' "$bootstrap"
 grep -Fq 'print_bootstrap_summary' "$bootstrap"
 grep -Fq 'PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl sync all' "$bootstrap"
+grep -Fq 'release the lock before starting platform.target' "$bootstrap"
+grep -Fq 'flock -u 9' "$bootstrap"
+grep -Fq 'start_platform_target()' "$bootstrap"
+grep -Fq 'systemctl start --no-block platform.target' "$bootstrap"
+grep -Fq 'ERROR: unable to queue platform.target; inspect systemd status' "$bootstrap"
+grep -Fq 'platform.target queued; recovery continues in the background' "$bootstrap"
+grep -Fq 'BOOTSTRAP_SYSTEMD_WAIT_SECONDS must be between 0 and 60 seconds' "$bootstrap"
+grep -Fq 'BOOTSTRAP_ENDPOINT_RETRIES must be between 0 and 3' "$bootstrap"
+grep -Fq 'BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS must be between 1 and 60 seconds' "$bootstrap"
+grep -Fq 'systemctl reset-failed platform.target platform-network.service platform-recovery.service' "$bootstrap"
+if grep -Fq 'systemctl restart platform-firewall.service platform.target' "$bootstrap"; then
+	printf 'bootstrap uses the lock-cycling platform target restart\n' >&2
+	exit 1
+fi
+lock_release_line="$(grep -n '^flock -u 9$' "$bootstrap" | tail -n1 | cut -d: -f1)"
+target_start_line="$(grep -n '^start_platform_target ' "$bootstrap" | tail -n1 | cut -d: -f1)"
+[[ -n "$lock_release_line" && -n "$target_start_line" && "$lock_release_line" -lt "$target_start_line" ]] || {
+	printf 'bootstrap queues platform.target before releasing its lock\n' >&2
+	exit 1
+}
 grep -Fq 'OBSERVER_LOG_PROXY_STREAM_TIMEOUT=$(observer_default_value OBSERVER_LOG_PROXY_STREAM_TIMEOUT 24h)' "$bootstrap"
 grep -Fq 'for foundation_file in "$SOURCE_ROOT"/compose/foundation/*' "$bootstrap"
 grep -Fq 'for foundation_file in "$SOURCE_ROOT"/compose/foundation/manifests/*.env' "$bootstrap"
@@ -164,6 +184,12 @@ grep -Fq "printf '\\nNext tasks\\n'" "$bootstrap"
 grep -Fq "printf '\\nOperations\\n'" "$bootstrap"
 grep -Fq 'available after a Follower is healthy' "$bootstrap"
 grep -Fq 'available after its selected Follower is healthy' "$bootstrap"
+recovery_unit="$repo_root/ops/systemd/platform-recovery.service"
+grep -Fq 'OnFailure=platform-recovery-retry.service' "$recovery_unit"
+if sed -n '/^\[Service\]/,/^\[/p' "$recovery_unit" | grep -Fq 'OnFailure='; then
+	printf 'platform recovery OnFailure must be a Unit directive\n' >&2
+	exit 1
+fi
 grep -Fq 'BOOTSTRAP_ASSUME_YES' "$bootstrap"
 grep -Fq 'bootstrap confirmation was not received' "$bootstrap"
 grep -Fq "read -r -p 'Node role (leader or follower): ' requested_role" "$bootstrap"
