@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run the repository test suites with deterministic, bounded scheduling.
-# Docker-backed suites are intentionally serialized: parallel Compose mocks
-# consume more CPU on macOS and do not improve coverage for this repository.
+# Suites use isolated temporary roots; bounded parallel batches reduce local
+# and CI wall-clock time without allowing Docker-heavy tests to overwhelm a
+# developer laptop.
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -35,14 +36,78 @@ full)
 	;;
 esac
 
-printf 'test profile: %s (serialized; suites=%s)\n' "$profile" "${#tests[@]}"
+# Keep argument validation cheap and deterministic; CI/local callers can use
+# TEST_PARALLELISM=1 when diagnosing an order-sensitive failure.
+
 start_all="$(date +%s)"
-for test_name in "${tests[@]}"; do
-	test_start="$(date +%s)"
-	printf '\n>>> %s\n' "$test_name"
-	bash "$repo_root/ops/tests/$test_name.sh"
-	test_end="$(date +%s)"
-	printf '<<< %s (%ss)\n' "$test_name" "$((test_end - test_start))"
+parallelism="${TEST_PARALLELISM:-}"
+if [[ -z "$parallelism" ]]; then
+	case "$(uname -s 2>/dev/null || printf unknown)" in
+	Darwin) parallelism=2 ;;
+	*) parallelism=4 ;;
+	esac
+fi
+[[ "$parallelism" =~ ^[1-9][0-9]*$ && "$parallelism" -le 16 ]] || {
+	printf 'TEST_PARALLELISM must be an integer between 1 and 16\n' >&2
+	exit 2
+}
+printf 'test profile: %s (parallelism=%s; suites=%s)\n' "$profile" "$parallelism" "${#tests[@]}"
+
+log_root="$(mktemp -d "${TMPDIR:-/tmp}/llm-hub-lite-tests.XXXXXX")"
+# shellcheck disable=SC2329 # invoked indirectly via `trap cleanup EXIT` below
+cleanup() {
+	rm -rf -- "$log_root"
+}
+trap cleanup EXIT
+run_one() {
+	local test_name="$1" log_file="$2" start end rc
+	start="$(date +%s)"
+	if bash "$repo_root/ops/tests/$test_name.sh" >"$log_file" 2>&1; then
+		rc=0
+	else
+		rc=$?
+	fi
+	end="$(date +%s)"
+	printf '%s\n' "$rc" >"$log_file.rc"
+	printf '%s\n' "$((end - start))" >"$log_file.duration"
+	return "$rc"
+}
+
+overall_rc=0
+total="${#tests[@]}"
+offset=0
+while ((offset < total)); do
+	pids=()
+	batch_names=()
+	batch_logs=()
+	for ((slot = 0; slot < parallelism && offset + slot < total; slot++)); do
+		test_name="${tests[offset + slot]}"
+		log_file="$log_root/$slot.log"
+		printf '\n>>> %s\n' "$test_name"
+		run_one "$test_name" "$log_file" &
+		pids+=("$!")
+		batch_names+=("$test_name")
+		batch_logs+=("$log_file")
+	done
+	for ((slot = 0; slot < ${#pids[@]}; slot++)); do
+		set +e
+		wait "${pids[slot]}"
+		rc=$?
+		set -e
+		cat "${batch_logs[slot]}"
+		duration="$(cat "${batch_logs[slot]}.duration" 2>/dev/null || printf '?')"
+		printf '<<< %s (%ss)\n' "${batch_names[slot]}" "$duration"
+		if ((rc != 0)); then
+			((overall_rc == 0)) && overall_rc="$rc"
+			printf 'FAILED: %s (exit %s)\n' "${batch_names[slot]}" "$rc" >&2
+		fi
+	done
+	offset=$((offset + ${#pids[@]}))
 done
 end_all="$(date +%s)"
-printf '\nall tests passed (%ss)\n' "$((end_all - start_all))"
+if ((overall_rc == 0)); then
+	printf '\nall tests passed (%ss)\n' "$((end_all - start_all))"
+else
+	printf '\nTESTS FAILED (first exit %s; elapsed %ss)\n' "$overall_rc" "$((end_all - start_all))" >&2
+fi
+exit "$overall_rc"

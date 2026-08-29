@@ -7,8 +7,6 @@ when:
         - apps/librechat/**
         - config/cluster/apps/librechat.policy
         - config/cluster/overrides/**/librechat.env
-        - config/cluster/nodes/**
-        - config/cluster/policy.env
         - config/routes.d/**
         - apps/librechat/images.lock.env
 

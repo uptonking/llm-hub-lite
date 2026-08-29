@@ -145,7 +145,7 @@ case "$*" in
     if [ "${OBSERVER_SMOKE_EMPTY:-0}" = 1 ]; then
       printf '%s\n' '{"total":0,"hits":[]}'
     else
-      printf '%s\n' '{"total":3,"hits":[{"node_id":"leader"},{"node_id":"worker-1"},{"node_id":"worker-2"}]}'
+      printf '%s\n' '{"total":4,"hits":[{"node_id":"leader"},{"node_id":"worker-1"},{"node_id":"worker-2"},{"node_id":"worker-3"}]}'
     fi
     exit 0
     ;;
@@ -599,8 +599,8 @@ if observer_smoke_failure="$(OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=2 OB
 	printf 'Observer smoke check accepted a missing collector heartbeat\n' >&2
 	exit 1
 fi
-grep -Fq 'attempt=1/2 reason=missing recent heartbeat nodes=leader,worker-1,worker-2 retry_in=0s' <<<"$observer_smoke_failure"
-grep -Fq 'reason=missing recent heartbeat nodes=leader,worker-1,worker-2' <<<"$observer_smoke_failure"
+grep -Fq 'attempt=1/2 reason=missing recent heartbeat nodes=leader,worker-1,worker-2,worker-3 retry_in=0s' <<<"$observer_smoke_failure"
+grep -Fq 'reason=missing recent heartbeat nodes=leader,worker-1,worker-2,worker-3' <<<"$observer_smoke_failure"
 if OBSERVER_CONTROLLER_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" health >/dev/null 2>&1; then
 	printf 'Observer controller health sidecar failure was accepted\n' >&2
 	exit 1

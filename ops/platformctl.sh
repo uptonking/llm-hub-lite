@@ -472,6 +472,19 @@ descriptor_secret_min_length() {
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" SECRET_MIN_LENGTHS)" | tr ',' '\n')"
 	printf '1\n'
 }
+descriptor_secret_regex() {
+	local d="$1" wanted="$2" rule key regex
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		regex="${rule#*:}"
+		[[ "$key" == "$wanted" ]] && {
+			printf '%s\n' "$regex"
+			return 0
+		}
+	done <<<"$(printf '%s\n' "$(descriptor_value "$d" SECRET_REGEXES)" | tr ',' '\n')"
+	printf '\n'
+}
 descriptor_secret_keys() {
 	local d="$1" keys
 	keys="$(descriptor_value "$d" CLUSTER_SECRET_KEYS),$(descriptor_value "$d" NODE_SECRET_KEYS)"
@@ -890,7 +903,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen=''
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -967,6 +980,13 @@ validate_descriptor() {
 	while IFS= read -r rule; do
 		[[ -n "$rule" ]] || continue
 		secret_key="${rule%%:*}"
+		bytes="${rule#*:}"
+		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ && "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry in $d/manifest.env: $rule"
+		csv_has "$generated_keys" "$secret_key" || die "GENERATED_SECRET_BYTES references undeclared generated secret in $d/manifest.env: $secret_key"
+	done <<<"$(printf '%s\n' "$(descriptor_value "$d" GENERATED_SECRET_BYTES)" | tr ',' '\n')"
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		secret_key="${rule%%:*}"
 		min_length="${rule#*:}"
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ && "$min_length" =~ ^[1-9][0-9]*$ ]] || die "invalid SECRET_MIN_LENGTHS entry in $d/manifest.env: $rule"
 		csv_has "$all_secret_keys" "$secret_key" || die "SECRET_MIN_LENGTHS references undeclared secret in $d/manifest.env: $secret_key"
@@ -988,6 +1008,13 @@ validate_descriptor() {
 			all_secret_keys="${all_secret_keys}${all_secret_keys:+,}$conditional_key"
 		done < <(printf '%s\n' "$conditional_keys" | tr ',' '\n')
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" CONDITIONAL_SECRET_KEYS)" | tr ';' '\n')"
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		secret_key="${rule%%:*}"
+		regex="${rule#*:}"
+		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ && -n "$regex" ]] || die "invalid SECRET_REGEXES entry in $d/manifest.env: $rule"
+		csv_has "$all_secret_keys" "$secret_key" || die "SECRET_REGEXES references undeclared secret in $d/manifest.env: $secret_key"
+	done <<<"$(printf '%s\n' "$(descriptor_value "$d" SECRET_REGEXES)" | tr ',' '\n')"
 	[[ "$(descriptor_value "$d" COMPOSE_PROJECT)" == "app-$(basename "$d")" ]] || die "COMPOSE_PROJECT must equal app-APP_ID in $d/manifest.env"
 	alias="$(descriptor_value "$d" NETWORK_ALIAS)"
 	[[ "$alias" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid NETWORK_ALIAS in $d/manifest.env"
@@ -1104,6 +1131,8 @@ validate_descriptor() {
 			[[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "active singleton requires a non-empty single-line secret: $k"
 			min_length="$(descriptor_secret_min_length "$d" "$k")"
 			((${#value} >= min_length)) || die "active singleton secret $k must contain at least $min_length characters"
+			regex="$(descriptor_secret_regex "$d" "$k")"
+			[[ -z "$regex" || "$value" =~ $regex ]] || die "active singleton secret $k does not match its configured format"
 			! placeholder_value "$value" || die "active singleton secret placeholder is not allowed: $k"
 		done <<<"$(descriptor_secret_keys "$d")"
 	fi

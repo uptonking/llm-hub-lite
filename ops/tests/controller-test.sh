@@ -2,6 +2,13 @@
 # shellcheck disable=SC2016 # grep patterns intentionally match literal '$var' text
 set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+runner="$repo_root/ops/tests/run-all.sh"
+bash -n "$runner"
+grep -Fq 'TEST_PARALLELISM must be an integer between 1 and 16' "$runner"
+if TEST_PARALLELISM=0 bash "$runner" fast >/dev/null 2>&1; then
+	printf 'test runner accepted invalid parallelism\n' >&2
+	exit 1
+fi
 [[ ! -e "$repo_root/compose/foundation/woodpecker.yml" && ! -e "$repo_root/compose/foundation/beszel.yml" ]]
 grep -Fq '${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker/data}:/var/lib/woodpecker' "$repo_root/compose/foundation/woodpecker-controller.yml"
 if grep -Fq '${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker}/data:/var/lib/woodpecker' "$repo_root/compose/foundation/woodpecker-controller.yml"; then
@@ -54,6 +61,8 @@ grep -q '^LEADER_NODE_ID=leader$' "$repo_root/config/cluster/policy.env"
 grep -q '^NODE_IDS=leader,worker-1,worker-2,worker-3$' "$repo_root/config/cluster/policy.env"
 grep -q '^REPO_SLUG=uptonking/llm-hub-lite$' "$repo_root/config/cluster/policy.env"
 grep -q '^APP_ID=cpapi$' "$repo_root/apps/cpapi/manifest.env"
+grep -q '^GENERATED_SECRET_BYTES=FLOWY_ENCRYPTION_KEY:16,FLOWY_JWT_SECRET:32$' "$repo_root/apps/flowy/manifest.env"
+grep -Fq 'SECRET_REGEXES=FLOWY_ENCRYPTION_KEY:^[A-Fa-f0-9]{32}$' "$repo_root/apps/flowy/manifest.env"
 grep -q '^APP_ID=librechat$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^NETWORK_ALIAS=librechat-client$' "$repo_root/apps/librechat/manifest.env"
 grep -q '^LIBRECHAT_CLIENT_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
@@ -369,10 +378,14 @@ if grep -Fq 'rm -f -- "$runtime_env"' "$repo_root/ops/platformctl.sh"; then
 	exit 1
 fi
 grep -Fq 'firewall-reconcile.request' "$repo_root/ops/platform-submit.sh"
-if find "$repo_root/.woodpecker" -maxdepth 1 -type f \( -name 'deploy-*.yml' -o -name 'singleton-*.yml' -o -name 'app-upgrade-*.yml' -o -name 'cluster-reconcile-*.yml' \) -print -quit | grep -q .; then
-	printf 'retired generated workflow family remains in .woodpecker\n' >&2
-	exit 1
-fi
+for node in leader worker-1 worker-2 worker-3; do
+	[[ -f "$repo_root/.woodpecker/cluster-reconcile-$node.yml" ]] || {
+		printf 'missing generated cluster reconciliation workflow: %s\n' "$node" >&2
+		exit 1
+	}
+done
+grep -Fq 'config/cluster/foundation/**' "$repo_root/.woodpecker/cluster-reconcile-leader.yml"
+grep -Fq 'cluster-reconcile-leader' "$repo_root/.woodpecker/cluster-reconcile-worker-1.yml"
 for compose_file in "$repo_root"/compose/foundation/*.yml; do
 	grep -Fq 'mem_limit:' "$compose_file"
 	grep -Fq 'cpus:' "$compose_file"

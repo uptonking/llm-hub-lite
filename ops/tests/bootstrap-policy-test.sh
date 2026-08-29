@@ -51,6 +51,18 @@ fi
 grep -Fq 'AICHOROUTER_MEMORY_LIMIT=768m' "$repo_root/apps/aichorouter/config.env"
 grep -Fq 'AICHOROUTER_GOMEMLIMIT=500MiB' "$repo_root/apps/aichorouter/config.env"
 grep -Fq 'RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-3600}"' "$bootstrap"
+grep -Fq 'RESTIC_REMOTE_ENABLED="${RESTIC_REMOTE_ENABLED:-false}"' "$bootstrap"
+grep -Fq 'PRODUCTION_REQUIRE_REMOTE_BACKUP="${PRODUCTION_REQUIRE_REMOTE_BACKUP:-false}"' "$bootstrap"
+grep -Fq '"PRODUCTION_REQUIRE_REMOTE_BACKUP=$PRODUCTION_REQUIRE_REMOTE_BACKUP"' "$bootstrap"
+grep -Fq '"RESTIC_REMOTE_ENABLED=$RESTIC_REMOTE_ENABLED"' "$bootstrap"
+grep -Fq '"RESTIC_REMOTE_REPOSITORY=$RESTIC_REMOTE_REPOSITORY"' "$bootstrap"
+grep -Fq '"RESTIC_REMOTE_PASSWORD_FILE=$RESTIC_REMOTE_PASSWORD_FILE"' "$bootstrap"
+grep -Fq 'if remote_enabled; then' "$bootstrap"
+grep -Fq "elif truthy \"\$PRODUCTION_REQUIRE_REMOTE_BACKUP\"; then" "$bootstrap"
+if grep -Fq '"PRODUCTION_REQUIRE_REMOTE_BACKUP=true"' "$bootstrap"; then
+	printf 'bootstrap must not force remote backups when local-only mode is selected\n' >&2
+	exit 1
+fi
 grep -Fq 'runtime_setting()' "$bootstrap"
 grep -Fq 'OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-}"' "$bootstrap"
 grep -Fq 'OBSERVER_INGEST_USER="${OBSERVER_INGEST_USER:-llm-hub-lite-collector}"' "$bootstrap"
@@ -178,6 +190,20 @@ prepare_call_line="$(grep -n '^prepare_application_secrets$' "$bootstrap" | head
 	exit 1
 }
 grep -Fq 'manifest_secret_min_length' "$bootstrap"
+grep -Fq 'manifest_secret_bytes' "$bootstrap"
+grep -Fq 'manifest_secret_regex' "$bootstrap"
+grep -Fq 'GENERATED_SECRET_BYTES' "$repo_root/apps/flowy/manifest.env"
+grep -Fq 'SECRET_REGEXES=FLOWY_ENCRYPTION_KEY' "$repo_root/apps/flowy/manifest.env"
+secret_format_helpers="$(sed -n '/^valid_input_value() {/,/^}/p; /^manifest_secret_bytes() {/,/^}/p' "$bootstrap")"
+SECRET_FORMAT_HELPERS="$secret_format_helpers" bash -c '
+  set -Eeuo pipefail
+  eval "$SECRET_FORMAT_HELPERS"
+  [[ "$(manifest_secret_bytes "$1" FLOWY_ENCRYPTION_KEY)" == 16 ]]
+  valid_input_value FLOWY_ENCRYPTION_KEY 0123456789abcdef0123456789abcdef 32 "^[A-Fa-f0-9]{32}$"
+  if valid_input_value FLOWY_ENCRYPTION_KEY 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef 32 "^[A-Fa-f0-9]{32}$"; then
+    exit 1
+  fi
+' -- "$repo_root/apps/flowy/manifest.env"
 grep -Fq 'app_active_on_node "$app_id"' "$bootstrap"
 grep -Fq 'generate_shared_secret WOODPECKER_AGENT_SECRET' "$bootstrap"
 grep -Fq "prompt_required LEADER_PUBLIC_IP 'Leader public IPv4 address'" "$bootstrap"

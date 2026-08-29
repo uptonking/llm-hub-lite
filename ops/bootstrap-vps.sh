@@ -56,12 +56,12 @@ COMPOSE_SHA256_AMD64="${COMPOSE_SHA256_AMD64:-6395dbb256db6ea28d5c6695bc9bc33866
 COMPOSE_SHA256_ARM64="${COMPOSE_SHA256_ARM64:-03a42a0fc0614ffc3c9ebca521cab75e02c427b68e45e3f6867d9510b9a28818}"
 COMPOSE_SHA256_OVERRIDE="${COMPOSE_SHA256:-}"
 COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}"
-RESTIC_REMOTE_ENABLED="${RESTIC_REMOTE_ENABLED:-true}"
+RESTIC_REMOTE_ENABLED="${RESTIC_REMOTE_ENABLED:-false}"
 RESTIC_REMOTE_REPOSITORY="${RESTIC_REMOTE_REPOSITORY:-}"
 RESTIC_REMOTE_PASSWORD_FILE="${RESTIC_REMOTE_PASSWORD_FILE:-$CONFIG_ROOT/restic-remote-password}"
 RESTIC_REMOTE_ENV_FILE="${RESTIC_REMOTE_ENV_FILE:-$CONFIG_ROOT/restic-remote.env}"
 RESTIC_REMOTE_ENV_SOURCE_FILE="${RESTIC_REMOTE_ENV_SOURCE_FILE:-}"
-PRODUCTION_REQUIRE_REMOTE_BACKUP="${PRODUCTION_REQUIRE_REMOTE_BACKUP:-true}"
+PRODUCTION_REQUIRE_REMOTE_BACKUP="${PRODUCTION_REQUIRE_REMOTE_BACKUP:-false}"
 RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/llm-hub-lite/restic}"
 RESTIC_READ_CONCURRENCY="${RESTIC_READ_CONCURRENCY:-1}"
 RESTIC_COMPRESSION="${RESTIC_COMPRESSION:-$(runtime_setting RESTIC_COMPRESSION)}"
@@ -397,7 +397,7 @@ valid_mongo_uri() {
 	done <<<"$(printf '%s' "$host" | tr ',' '\n')"
 }
 valid_input_value() {
-	local key="$1" value="$2" min_length="${3:-1}"
+	local key="$1" value="$2" min_length="${3:-1}" regex="${4:-}"
 	[[ -n "$value" ]] || {
 		printf '%s is required and cannot be empty\n' "$key" >&2
 		return 1
@@ -408,6 +408,10 @@ valid_input_value() {
 	}
 	if ((${#value} < min_length)); then
 		printf '%s must contain at least %s characters\n' "$key" "$min_length" >&2
+		return 1
+	fi
+	if [[ -n "$regex" && ! "$value" =~ $regex ]]; then
+		printf '%s does not match the configured secret format\n' "$key" >&2
 		return 1
 	fi
 	# Secrets and connection strings must never contain C0 controls or DEL.
@@ -463,11 +467,11 @@ prompt_read() {
 	return 1
 }
 prompt_required() {
-	local key="$1" prompt="$2" secret="${3:-0}" min_length="${4:-1}" value
+	local key="$1" prompt="$2" secret="${3:-0}" min_length="${4:-1}" regex="${5:-}" value
 	while :; do
 		value="${!key:-}"
 		if [[ -n "$value" ]]; then
-			if valid_input_value "$key" "$value" "$min_length"; then
+			if valid_input_value "$key" "$value" "$min_length" "$regex"; then
 				return 0
 			fi
 			prompt_available || die "$key is invalid; provide a clean replacement through the environment or shared secret bundle"
@@ -476,7 +480,7 @@ prompt_required() {
 		fi
 		if ! prompt_read "$prompt" "$secret"; then die "$key input was not received"; fi
 		value="$PROMPT_VALUE"
-		if valid_input_value "$key" "$value" "$min_length"; then
+		if valid_input_value "$key" "$value" "$min_length" "$regex"; then
 			printf -v "$key" '%s' "$value"
 			return 0
 		fi
@@ -497,6 +501,32 @@ manifest_secret_min_length() {
 		fi
 	done < <(sed -n 's/^SECRET_MIN_LENGTHS=//p' "$manifest" | tail -n1 | tr ',' '\n')
 	printf '1\n'
+}
+manifest_secret_regex() {
+	local manifest="$1" wanted="$2" rule key regex
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		regex="${rule#*:}"
+		[[ "$key" == "$wanted" ]] && {
+			printf '%s\n' "$regex"
+			return 0
+		}
+	done < <(sed -n 's/^SECRET_REGEXES=//p' "$manifest" | tail -n1 | tr ',' '\n')
+	printf '\n'
+}
+manifest_secret_bytes() {
+	local manifest="$1" wanted="$2" rule key bytes
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		bytes="${rule#*:}"
+		[[ "$key" == "$wanted" ]] && {
+			printf '%s\n' "$bytes"
+			return 0
+		}
+	done < <(sed -n 's/^GENERATED_SECRET_BYTES=//p' "$manifest" | tail -n1 | tr ',' '\n')
+	printf '32\n'
 }
 prompt_observer_ingest_token() {
 	while :; do
@@ -531,8 +561,7 @@ if [[ -s "$RESTIC_REMOTE_ENV_FILE" ]]; then
 	. "$RESTIC_REMOTE_ENV_FILE"
 	set +a
 fi
-if truthy "$PRODUCTION_REQUIRE_REMOTE_BACKUP"; then
-	truthy "$RESTIC_REMOTE_ENABLED" || die 'production bootstrap requires RESTIC_REMOTE_ENABLED=true'
+if remote_enabled; then
 	prompt_required RESTIC_REMOTE_REPOSITORY 'Remote Restic repository'
 	if [[ ! -s "$RESTIC_REMOTE_PASSWORD_FILE" ]]; then
 		RESTIC_REMOTE_PASSWORD="${RESTIC_REMOTE_PASSWORD:-}"
@@ -543,6 +572,8 @@ if truthy "$PRODUCTION_REQUIRE_REMOTE_BACKUP"; then
 		printf '%s\n' "$restic_remote_password" >"$RESTIC_REMOTE_PASSWORD_FILE"
 		chmod 600 "$RESTIC_REMOTE_PASSWORD_FILE"
 	fi
+elif truthy "$PRODUCTION_REQUIRE_REMOTE_BACKUP"; then
+	die 'production bootstrap requires RESTIC_REMOTE_ENABLED=true'
 fi
 generate_shared_secret() {
 	local key="$1"
@@ -969,7 +1000,7 @@ manifest_conditional_secret_keys() {
 	printf '%s\n' "$result"
 }
 prepare_application_secrets() {
-	local manifest app_id keys runtime_rel runtime_file key min_length conditional_keys
+	local manifest app_id keys runtime_rel runtime_file key min_length conditional_keys regex bytes
 	while IFS= read -r manifest; do
 		[[ -f "$manifest" ]] || continue
 		[[ "$(sed -n 's/^MANIFEST_VERSION=//p' "$manifest" | tail -n1)" == 5 ]] || die "unsupported application manifest version: $manifest"
@@ -984,9 +1015,14 @@ prepare_application_secrets() {
 				load_bundle_value "$key"
 				load_runtime_value "$key" "$app_env"
 				clear_placeholder "$key"
-				manifest_has_generated_secret "$manifest" "$key" && generate_shared_secret "$key"
+				if manifest_has_generated_secret "$manifest" "$key"; then
+					bytes="$(manifest_secret_bytes "$manifest" "$key")"
+					[[ "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry for $app_id/$key"
+					[[ -n "${!key:-}" ]] || printf -v "$key" '%s' "$(openssl rand -hex "$bytes")"
+				fi
 				min_length="$(manifest_secret_min_length "$manifest" "$key")"
-				prompt_required "$key" "$app_id shared $key" 1 "$min_length"
+				regex="$(manifest_secret_regex "$manifest" "$key")"
+				prompt_required "$key" "$app_id shared $key" 1 "$min_length" "$regex"
 			done < <(printf '%s\n' "$keys" | tr ',' '\n')
 			continue
 		fi
@@ -999,7 +1035,8 @@ prepare_application_secrets() {
 			load_runtime_value "$key" "$app_env"
 			clear_placeholder "$key"
 			min_length="$(manifest_secret_min_length "$manifest" "$key")"
-			prompt_required "$key" "$app_id shared $key" 1 "$min_length"
+			regex="$(manifest_secret_regex "$manifest" "$key")"
+			prompt_required "$key" "$app_id shared $key" 1 "$min_length" "$regex"
 		done < <(printf '%s\n' "$keys" | tr ',' '\n')
 		runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
 		keys="$(sed -n 's/^NODE_SECRET_KEYS=//p' "$manifest" | tail -n1)"
@@ -1009,9 +1046,14 @@ prepare_application_secrets() {
 			[[ -n "$key" ]] || continue
 			load_runtime_value "$key" "$runtime_file"
 			clear_placeholder "$key"
-			manifest_has_generated_secret "$manifest" "$key" && generate_shared_secret "$key"
+			if manifest_has_generated_secret "$manifest" "$key"; then
+				bytes="$(manifest_secret_bytes "$manifest" "$key")"
+				[[ "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry for $app_id/$key"
+				[[ -n "${!key:-}" ]] || printf -v "$key" '%s' "$(openssl rand -hex "$bytes")"
+			fi
 			min_length="$(manifest_secret_min_length "$manifest" "$key")"
-			prompt_required "$key" "$app_id node-local $key" 1 "$min_length"
+			regex="$(manifest_secret_regex "$manifest" "$key")"
+			prompt_required "$key" "$app_id node-local $key" 1 "$min_length" "$regex"
 		done < <(printf '%s\n' "$keys" | tr ',' '\n')
 	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 }
@@ -1069,7 +1111,7 @@ ufw --force enable >/dev/null
 previous_app_domain="$(sed -n 's/^DOMAIN_NAME=//p' "$app_env" 2>/dev/null | tail -n1)"
 set_key "$app_env" DOMAIN_NAME "$DOMAIN_NAME"
 set_key "$app_env" SSL_EMAIL "$SSL_EMAIL"
-for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "RESTIC_CACHE_DIR=$RESTIC_CACHE_DIR" "RESTIC_READ_CONCURRENCY=$RESTIC_READ_CONCURRENCY" "RESTIC_SKIP_IF_UNCHANGED=$RESTIC_SKIP_IF_UNCHANGED" "RESTIC_NICE_LEVEL=$RESTIC_NICE_LEVEL" "RESTIC_IONICE_ENABLED=$RESTIC_IONICE_ENABLED" "RESTIC_IONICE_CLASS=$RESTIC_IONICE_CLASS" "RESTIC_IONICE_LEVEL=$RESTIC_IONICE_LEVEL" "RESTIC_SCHEDULE_INTERVAL=$RESTIC_SCHEDULE_INTERVAL" "PRODUCTION_REQUIRE_REMOTE_BACKUP=true"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
+for pair in "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "RESTIC_REMOTE_ENABLED=$RESTIC_REMOTE_ENABLED" "RESTIC_REMOTE_REPOSITORY=$RESTIC_REMOTE_REPOSITORY" "RESTIC_REMOTE_PASSWORD_FILE=$RESTIC_REMOTE_PASSWORD_FILE" "RESTIC_REMOTE_ENV_FILE=$RESTIC_REMOTE_ENV_FILE" "RESTIC_CACHE_DIR=$RESTIC_CACHE_DIR" "RESTIC_READ_CONCURRENCY=$RESTIC_READ_CONCURRENCY" "RESTIC_SKIP_IF_UNCHANGED=$RESTIC_SKIP_IF_UNCHANGED" "RESTIC_NICE_LEVEL=$RESTIC_NICE_LEVEL" "RESTIC_IONICE_ENABLED=$RESTIC_IONICE_ENABLED" "RESTIC_IONICE_CLASS=$RESTIC_IONICE_CLASS" "RESTIC_IONICE_LEVEL=$RESTIC_IONICE_LEVEL" "RESTIC_SCHEDULE_INTERVAL=$RESTIC_SCHEDULE_INTERVAL" "PRODUCTION_REQUIRE_REMOTE_BACKUP=$PRODUCTION_REQUIRE_REMOTE_BACKUP"; do ensure_key "$app_env" "${pair%%=*}" "${pair#*=}"; done
 set_key "$app_env" RESTIC_COMPRESSION "$RESTIC_COMPRESSION"
 set_key "$app_env" RESTIC_SKIP_IF_UNCHANGED "$RESTIC_SKIP_IF_UNCHANGED"
 remove_key "$app_env" NODE_ROLE

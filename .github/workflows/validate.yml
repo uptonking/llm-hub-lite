@@ -25,6 +25,8 @@ jobs:
       - name: Check IP privacy
         run: ops/tests/ip-privacy-test.sh
       - name: Run fast test suites
+        env:
+          TEST_PARALLELISM: 2
         run: ops/tests/run-all.sh fast
   deployment-matrix:
     # This suite creates Git worktrees and exercises rollback transactions; run

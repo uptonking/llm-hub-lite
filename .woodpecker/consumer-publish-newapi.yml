@@ -7,8 +7,6 @@ when:
         - apps/newapi/**
         - config/cluster/apps/newapi.policy
         - config/cluster/overrides/**/newapi.env
-        - config/cluster/nodes/**
-        - config/cluster/policy.env
         - config/routes.d/**
         - apps/newapi/images.lock.env
 

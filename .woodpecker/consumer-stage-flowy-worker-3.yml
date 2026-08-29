@@ -7,8 +7,6 @@ when:
         - apps/flowy/**
         - config/cluster/apps/flowy.policy
         - config/cluster/overrides/**/flowy.env
-        - config/cluster/nodes/**
-        - config/cluster/policy.env
         - config/routes.d/**
         - apps/flowy/images.lock.env
 

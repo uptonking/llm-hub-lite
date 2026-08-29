@@ -7,8 +7,6 @@ when:
         - apps/pigeon/**
         - config/cluster/apps/pigeon.policy
         - config/cluster/overrides/**/pigeon.env
-        - config/cluster/nodes/**
-        - config/cluster/policy.env
         - config/routes.d/**
         - apps/pigeon/images.lock.env
 

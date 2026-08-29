@@ -4,11 +4,9 @@ when:
     branch: main
     path:
       include:
-        - apps/pigeon/**
-        - config/cluster/apps/pigeon.policy
-        - config/cluster/overrides/**/pigeon.env
-        - config/routes.d/**
-        - apps/pigeon/images.lock.env
+        - config/cluster/policy.env
+        - config/cluster/nodes/**
+        - config/cluster/foundation/**
 
 labels:
   node: leader
@@ -21,7 +19,7 @@ concurrency:
   group: llm-hub-lite-deployment
 
 steps:
-  publish:
+  reconcile:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -35,4 +33,4 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
-      - CONSUMER_APP_ID=pigeon /usr/local/bin/platform-submit consumer-publish "$CI_COMMIT_SHA"
+      - /usr/local/bin/platform-submit cluster-reconcile "$CI_COMMIT_SHA"

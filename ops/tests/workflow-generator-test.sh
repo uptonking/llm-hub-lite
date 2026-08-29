@@ -85,10 +85,14 @@ if grep -q '^depends_on:' "$base/workflows/consumer-secrets-cpapi-worker-1.yml";
 	exit 1
 fi
 grep -Fq 'group: llm-hub-lite-deployment' "$base/workflows/consumer-publish-cpapi.yml"
-if find "$base/workflows" -type f \( -name 'deploy-*' -o -name 'cluster-reconcile-*' -o -name 'app-upgrade-*' -o -name 'singleton-*' \) | grep -q .; then
-	printf 'obsolete workflow family was generated\n' >&2
-	exit 1
-fi
+for node in leader worker-1 worker-2 worker-3; do
+	[[ -f "$base/workflows/cluster-reconcile-$node.yml" ]] || {
+		printf 'missing cluster reconciliation workflow: %s\n' "$node" >&2
+		exit 1
+	}
+done
+grep -Fq 'config/cluster/foundation/**' "$base/workflows/cluster-reconcile-leader.yml"
+grep -Fq $'depends_on:\n  - cluster-reconcile-leader' "$base/workflows/cluster-reconcile-worker-1.yml"
 WOODPECKER_WORKFLOW_ROOT="$base/workflows" "$base/ops/generate-woodpecker-workflows.sh" --check
 
 # Rendering is staged before the live generated set is touched. An invalid

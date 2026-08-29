@@ -305,7 +305,7 @@ verify_app_scope() {
 			;;
 		esac
 		case "$path" in
-		config/cluster/policy.env | config/cluster/nodes/*)
+		config/cluster/policy.env | config/cluster/nodes/* | config/cluster/foundation/*.policy)
 			scope_failure "$old_sha" "$new_sha" "$mode"
 			die "cluster policy or inventory change requires a consumer or cluster reconciliation workflow: $path"
 			;;
@@ -326,10 +326,16 @@ verify_app_scope() {
 }
 
 verify_cluster_scope() {
-	local old_release="$1" new_release="$2" old_sha new_sha path app manifest policy
+	local old_release="$1" new_release="$2" old_sha new_sha path app manifest policy old_leader new_leader
 	[[ -n "$old_release" ]] || return 0
 	old_sha="$(basename "$old_release")"
 	new_sha="$(basename "$new_release")"
+	old_leader="$(sed -n 's/^LEADER_NODE_ID=//p' "$old_release/config/cluster/policy.env" | tail -n1)"
+	new_leader="$(sed -n 's/^LEADER_NODE_ID=//p' "$new_release/config/cluster/policy.env" | tail -n1)"
+	[[ "$old_leader" == "$new_leader" ]] || {
+		scope_failure "$old_sha" "$new_sha" cluster-reconcile
+		die 'cluster reconciliation cannot change LEADER_NODE_ID; use explicit repair promotion'
+	}
 	while IFS= read -r path; do
 		case "$path" in
 		config/cluster/apps/*.policy)
@@ -345,7 +351,7 @@ verify_cluster_scope() {
 				die "cluster reconciliation cannot own an enabled singleton policy: $path; use its dedicated stage/switch/stop workflow"
 			fi
 			;;
-		config/cluster/policy.env | config/cluster/nodes/* | .woodpecker/** | README.md | AGENTS.md) ;;
+		config/cluster/policy.env | config/cluster/nodes/* | config/cluster/foundation/*.policy | .woodpecker/** | README.md | AGENTS.md) ;;
 		*)
 			scope_failure "$old_sha" "$new_sha" cluster-reconcile
 			die "cluster reconciliation contains a non-cluster change: $path; run the reviewed foundation workflow first"

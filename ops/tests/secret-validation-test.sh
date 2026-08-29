@@ -22,9 +22,10 @@ VALIDATOR="$bootstrap_validator" bash -c '
 			exit 1
 		fi
 	'
-secret_validator="$(sed -n '/^placeholder_value() {/,/^}/p; /^valid_mongo_uri() {/,/^}/p; /^validate_secret() {/,/^}/p' "$repo_root/ops/configure-app-secrets.sh")"
+secret_validator="$(sed -n '/^placeholder_value() {/,/^}/p; /^valid_mongo_uri() {/,/^}/p; /^secret_regex() {/,/^}/p; /^validate_secret() {/,/^}/p' "$repo_root/ops/configure-app-secrets.sh")"
 VALIDATOR="$secret_validator" bash -c '
 	set -Eeuo pipefail
+	secret_regexes=""
 	eval "$VALIDATOR"
 	validate_secret test-value valid 1
 	validate_secret LIBRECHAT_MONGO_URI mongodb+srv://user:password@cluster.mongodb.net/LibreChat 1

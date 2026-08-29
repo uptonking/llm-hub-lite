@@ -172,6 +172,8 @@ fi
 cluster_keys="$(env_value CLUSTER_SECRET_KEYS "$manifest")"
 node_keys="$(env_value NODE_SECRET_KEYS "$manifest")"
 generated_keys="$(env_value GENERATED_SECRET_KEYS "$manifest")"
+generated_bytes="$(env_value GENERATED_SECRET_BYTES "$manifest")"
+secret_regexes="$(env_value SECRET_REGEXES "$manifest")"
 min_rules="$(env_value SECRET_MIN_LENGTHS "$manifest")"
 config_file="$root/apps/$app_id/$(env_value CONFIG_FILE "$manifest")"
 runtime_rel="$(env_value RUNTIME_ENV_FILE "$manifest")"
@@ -213,14 +215,45 @@ secret_min_length() {
 	done < <(printf '%s\n' "$min_rules" | tr ',' '\n')
 	printf '1\n'
 }
+secret_regex() {
+	local wanted="$1" rule key regex
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		regex="${rule#*:}"
+		[[ "$key" == "$wanted" ]] && {
+			printf '%s\n' "$regex"
+			return 0
+		}
+	done < <(printf '%s\n' "$secret_regexes" | tr ',' '\n')
+	printf '\n'
+}
+secret_bytes() {
+	local wanted="$1" rule key bytes
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		bytes="${rule#*:}"
+		[[ "$key" == "$wanted" ]] && {
+			printf '%s\n' "$bytes"
+			return 0
+		}
+	done < <(printf '%s\n' "$generated_bytes" | tr ',' '\n')
+	printf '32\n'
+}
 validate_secret() {
-	local key="$1" value="$2" min_length="$3"
+	local key="$1" value="$2" min_length="$3" regex
 	placeholder_value "$value" && {
 		printf '%s is required and cannot be a placeholder\n' "$key" >&2
 		return 1
 	}
 	if ((${#value} < min_length)); then
 		printf '%s must contain at least %s characters\n' "$key" "$min_length" >&2
+		return 1
+	fi
+	regex="$(secret_regex "$key")"
+	if [[ -n "$regex" && ! "$value" =~ $regex ]]; then
+		printf '%s does not match the configured secret format\n' "$key" >&2
 		return 1
 	fi
 	if printf '%s' "$value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then
@@ -241,14 +274,16 @@ existing_secret() {
 	printf '%s\n' "$value"
 }
 resolve_secret() {
-	local key="$1" destination="$2" value min_length
+	local key="$1" destination="$2" value min_length bytes
 	min_length="$(secret_min_length "$key")"
 	value="${!key:-}"
 	if [[ -z "$value" ]]; then
 		value="$(existing_secret "$key" "$destination")"
 	fi
 	if ((non_interactive == 0)) && placeholder_value "$value" && csv_has "$generated_keys" "$key"; then
-		value="$(openssl rand -hex 32)"
+		bytes="$(secret_bytes "$key")"
+		[[ "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry for $key"
+		value="$(openssl rand -hex "$bytes")"
 	fi
 	while ! validate_secret "$key" "$value" "$min_length"; do
 		((non_interactive == 0)) || die "$key must be supplied by a protected Woodpecker secret"
@@ -282,6 +317,20 @@ validate_key_list "$cluster_keys"
 validate_key_list "$node_keys"
 validate_key_list "$generated_keys"
 validate_key_list "$conditional_keys"
+while IFS= read -r rule; do
+	[[ -n "$rule" ]] || continue
+	key="${rule%%:*}"
+	bytes="${rule#*:}"
+	[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry: $rule"
+	csv_has "$generated_keys" "$key" || die "GENERATED_SECRET_BYTES references undeclared generated secret: $key"
+done < <(printf '%s\n' "$generated_bytes" | tr ',' '\n')
+while IFS= read -r rule; do
+	[[ -n "$rule" ]] || continue
+	key="${rule%%:*}"
+	regex="${rule#*:}"
+	[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && -n "$regex" ]] || die "invalid SECRET_REGEXES entry: $rule"
+	csv_has "$cluster_keys,$node_keys,$conditional_keys" "$key" || die "SECRET_REGEXES references undeclared secret: $key"
+done < <(printf '%s\n' "$secret_regexes" | tr ',' '\n')
 while IFS= read -r generated_key; do
 	[[ -n "$generated_key" ]] || continue
 	csv_has "$cluster_keys,$node_keys,$conditional_keys" "$generated_key" || die "generated secret is not declared as a cluster or node secret: $generated_key"

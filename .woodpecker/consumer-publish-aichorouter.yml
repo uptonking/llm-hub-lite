@@ -7,8 +7,6 @@ when:
         - apps/aichorouter/**
         - config/cluster/apps/aichorouter.policy
         - config/cluster/overrides/**/aichorouter.env
-        - config/cluster/nodes/**
-        - config/cluster/policy.env
         - config/routes.d/**
         - apps/aichorouter/images.lock.env
 

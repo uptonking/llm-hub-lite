@@ -7,8 +7,6 @@ when:
         - apps/cpapi/**
         - config/cluster/apps/cpapi.policy
         - config/cluster/overrides/**/cpapi.env
-        - config/cluster/nodes/**
-        - config/cluster/policy.env
         - config/routes.d/**
         - apps/cpapi/images.lock.env
 

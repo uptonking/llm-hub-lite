@@ -9,8 +9,9 @@ and let Woodpecker run the generated deployment workflows.
 - The Leader and every Follower have DNS-only origin records for Caddy. Public
   application records point to the Leader; `observer-ingest.<domain>` also
   points directly to the Leader and must not be proxied by Cloudflare.
-- The remote Restic repository is initialized, or the first bootstrap is run
-  with credentials that allow `restic init` to be performed explicitly.
+- Restic is local-only by default. For off-host recovery, set
+  `RESTIC_REMOTE_ENABLED=true`, provide a verified repository and password
+  file, and optionally set `PRODUCTION_REQUIRE_REMOTE_BACKUP=true`.
 - The repository contains the final logical inventory in
   `config/cluster/nodes/`. Node IDs are stable labels and are not VPS IPs.
 - Prepare the shared secret bundle from the Leader before bootstrapping a
@@ -27,17 +28,16 @@ confirmation, not to bypass required secrets.
 ssh -tt root@<leader> \
   'NODE_ID=leader LEADER_PUBLIC_IP=<leader-ip> \
    DOMAIN_NAME=<domain> SSL_EMAIL=<email> WOODPECKER_ADMIN=<github-user> \
-   RESTIC_REMOTE_REPOSITORY=<repository> \
    /root/llm-hub-lite-bootstrap.sh'
 
 ssh -tt root@<worker-1> \
   'NODE_ID=worker-1 LEADER_PUBLIC_IP=<leader-ip> \
    DOMAIN_NAME=<domain> SSL_EMAIL=<email> WOODPECKER_ADMIN=<github-user> \
-   RESTIC_REMOTE_REPOSITORY=<repository>/worker-1 \
    /root/llm-hub-lite-bootstrap.sh'
 ```
 
-Repeat the second command for every configured Follower. Supply
+Repeat the second command for every configured Follower (`worker-1`,
+`worker-2`, `worker-3`, ...). Supply
 `RESTIC_REMOTE_PASSWORD_FILE`, `RESTIC_REMOTE_ENV_FILE`,
 `PLATFORM_SECRET_BUNDLE_FILE`, or corresponding environment variables when
 running non-interactively. Never generate shared secrets independently on
@@ -75,7 +75,7 @@ default; use `BOOTSTRAP_ENDPOINT_RETRIES` and
 Run these checks after all nodes have finished:
 
 ```bash
-for host in <leader> <worker-1> <worker-2>; do
+for host in <leader> <worker-1> <worker-2> <worker-3>; do
   ssh root@"$host" platformctl health
 done
 ssh root@<leader> platformctl observer-smoke
@@ -91,6 +91,19 @@ Observer collector but no consumer. Promote it only after local health passes:
 DOMAIN_NAME=<domain> ops/configure-cluster-node.sh state worker-1 active
 git add config/cluster .woodpecker && git commit -m 'activate worker-1' && git push
 ```
+
+Cluster policy, node inventory, and foundation-policy changes are reconciled by
+the generated `cluster-reconcile-leader` → active-Follower workflows. The
+Leader ID is intentionally immutable in that workflow; a breaking Leader IP
+or promotion uses `BOOTSTRAP_MODE=repair` over SSH, then normal operation
+returns to push-driven reconciliation. Follower IP changes are DNS/origin
+updates and do not change logical placement IDs.
+
+Flowy (Activepieces) is enabled by default on `worker-3` at
+`https://flowy.<domain>`. It uses a single PGlite volume, in-memory Redis, one
+worker, and bounded CPU/RAM. Keep `FLOWY_FILE_STORAGE_LOCATION=DB` for the
+lowest footprint; switch to S3/R2 only when file durability or growth requires
+it.
 
 Review the generated workflows in Woodpecker, run the manual secret workflows
 for enabled consumers, and confirm each consumer's stage, publish, and stop

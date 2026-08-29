@@ -20,7 +20,7 @@ affected Compose projects, health-checks them, and only then does the Leader rew
 | Workflow generator | `ops/generate-woodpecker-workflows.sh` |
 | Per-node deploy engine | `ops/deploy-controller.sh` and `ops/platformctl.sh` , wrapped by `ops/platform-submit.sh` |
 
-Each of the three nodes runs a Woodpecker agent that connects to the Woodpecker
+Each active node runs a Woodpecker agent that connects to the Woodpecker
 server on the Leader ( `compose/foundation/woodpecker-worker.yml` on Followers,
 `woodpecker-deployer.yml` on the Leader). The agent labels come from
 `WOODPECKER_AGENT_LABELS` in `config/cluster/nodes/<node>.env` , for example
@@ -40,8 +40,7 @@ never removes hand-authored workflows.
 
 - **Trigger**: `when: event: push, branch: main` with a `path` include list of
 `apps/<app>/**` , `config/cluster/apps/<app>.policy` ,
-`config/cluster/overrides/**/<app>.env` , `config/cluster/nodes/**` ,
-`config/cluster/policy.env` , `config/routes.d/**` , and
+`config/cluster/overrides/**/<app>.env` , `config/routes.d/**` , and
 `apps/<app>/images.lock.env` . A push touching unrelated files triggers
   nothing.
 - **Placement**: `labels: node: <node>` routes each step to that VPS's agent.
@@ -50,6 +49,13 @@ never removes hand-authored workflows.
   one at a time across the whole cluster. A queued build is not stuck; wait
   for the earlier mutating workflow.
 - **Chaining** via `depends_on`, in policy `NODES` order.
+
+Cluster inventory, Leader policy, and foundation-policy changes use a separate
+generated chain, `cluster-reconcile-leader` followed by each active Follower.
+It runs the same commit on each node and is the normal push-driven path for
+enabling or disabling foundation services and activating joining nodes. It
+refuses `LEADER_NODE_ID` changes; use bootstrap repair for a break-glass Leader
+promotion or IP change.
 
 For the current placement ( `librechat` on worker-1 and worker-2 as
 active-active; `aichorouter` , `cpapi` , and `cursorapi` as singletons on
@@ -161,15 +167,14 @@ stale instances only after publication succeeded.
   ip-privacy and deployment/bootstrap/observer test suites, `docker compose
   config` validation of every Compose model, Caddyfile render validation per
   node, and Woodpecker CLI lint. It deploys nothing.
-- **Foundation changes** under `ops/`,      `compose/foundation/`, foundation
-  policies, or the foundation image manifest are excluded from push-triggered
-  consumer jobs by design. They use **manual** workflows: the
-`foundation-upgrade-leader` → `foundation-upgrade-worker-1` →
-`foundation-upgrade-worker-2` chain, the `runner-upgrade-*` chain (rebuilds
+- **Foundation implementation changes** under `ops/`, `compose/foundation/`,
+  or the foundation image manifest use **manual** workflows: the
+  `foundation-upgrade-leader` → `foundation-upgrade-worker-1` →
+  `foundation-upgrade-worker-2` → `foundation-upgrade-worker-3` chain, the `runner-upgrade-*` chain (rebuilds
   the deploy-runner image), `rollback-*` , and the manual
-`consumer-secrets-<app>-<node>` workflows. A push that mixes consumer and
-  foundation files is rejected by the scope guard; split it and apply the
-  foundation commit first.
+  `consumer-secrets-<app>-<node>` workflows. A push that mixes consumer and
+  foundation implementation files is rejected by the scope guard; split it
+  and apply the foundation commit first.
 - Each node keeps its own `current`/`previous` release pointers under
 `/opt/platform/control/` . If a node was offline, rerun the same Woodpecker
   build; the fast-forward guard lets it catch up to the newest SHA.

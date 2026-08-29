@@ -7,8 +7,6 @@ when:
         - apps/cursorapi/**
         - config/cluster/apps/cursorapi.policy
         - config/cluster/overrides/**/cursorapi.env
-        - config/cluster/nodes/**
-        - config/cluster/policy.env
         - config/routes.d/**
         - apps/cursorapi/images.lock.env
 
