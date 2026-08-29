@@ -84,6 +84,15 @@ die() {
 	printf 'ERROR: %s\n' "$*" >&2
 	exit 1
 }
+bootstrap_error() {
+	local status="$?" line="${BASH_LINENO[0]:-0}"
+	# Do not print BASH_COMMAND: bootstrap commands can contain credentials.
+	# A line number and exit status are enough to correlate a failed run with
+	# the reviewed script while keeping SSH output safe to share.
+	printf 'ERROR: bootstrap failed at line %s (exit status %s)\n' "$line" "$status" >&2
+	exit "$status"
+}
+trap bootstrap_error ERR
 need() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
 safe_observer_data_root() {
@@ -200,7 +209,12 @@ ensure_key() {
 }
 set_derived_key() {
 	local file="$1" key="$2" value="$3" previous_domain="$4" prefix="$5" current old_value
-	current="$(sed -n "s/^${key}=//p" "$file" 2>/dev/null | tail -n1)"
+	# Missing environment files are expected during first bootstrap. Avoid a
+	# pipefail exit from sed(1) before the file is created below.
+	current=''
+	if [[ -r "$file" ]]; then
+		current="$(sed -n "s/^${key}=//p" "$file" | tail -n1)"
+	fi
 	if [[ -z "$current" ]]; then
 		ensure_key "$file" "$key" "$value"
 		return 0
@@ -297,9 +311,23 @@ prompt_available() {
 PROMPT_VALUE=''
 prompt_read() {
 	local prompt="$1" secret="${2:-0}" value=''
-	# Secret reconciliation runs inside process-substitution loops. In that
-	# context stdin is the loop's pipe, not the operator's terminal, so prefer
-	# the controlling TTY and retain stdin as a fallback for normal shells.
+	# Use stdin when it is a real terminal or a deliberately supplied pipe. The
+	# secret reconciliation loops redirect stdin to process substitutions; only
+	# in that case do we read from the controlling TTY instead.
+	if [[ -t 0 ]]; then
+		if [[ "$secret" == 1 ]]; then
+			if IFS= read -r -s -p "$prompt: " value; then
+				printf '\n'
+				PROMPT_VALUE="$value"
+				return 0
+			fi
+		else
+			if IFS= read -r -p "$prompt: " value; then
+				PROMPT_VALUE="$value"
+				return 0
+			fi
+		fi
+	fi
 	if [[ -r /dev/tty ]]; then
 		if [[ "$secret" == 1 ]]; then
 			if IFS= read -r -s -p "$prompt: " value </dev/tty; then
@@ -314,14 +342,7 @@ prompt_read() {
 			fi
 		fi
 	fi
-	[[ -t 0 ]] || return 1
-	if [[ "$secret" == 1 ]]; then
-		IFS= read -r -s -p "$prompt: " value || return 1
-		printf '\n'
-	else
-		IFS= read -r -p "$prompt: " value || return 1
-	fi
-	PROMPT_VALUE="$value"
+	return 1
 }
 prompt_required() {
 	local key="$1" prompt="$2" secret="${3:-0}" min_length="${4:-1}" value
@@ -980,7 +1001,10 @@ persist_application_secrets() {
 persist_application_secrets
 
 woodpecker_env="$FOUNDATION_ROOT/env/woodpecker.env"
-previous_woodpecker_domain="$(sed -n 's/^WOODPECKER_HOST=https:\/\/ci\.//p' "$woodpecker_env" 2>/dev/null | tail -n1)"
+previous_woodpecker_domain=''
+if [[ -r "$woodpecker_env" ]]; then
+	previous_woodpecker_domain="$(sed -n 's/^WOODPECKER_HOST=https:\/\/ci\.//p' "$woodpecker_env" | tail -n1)"
+fi
 if [[ ! -f "$woodpecker_env" ]]; then
 	oauth_client=""
 	oauth_secret=""
@@ -1012,7 +1036,10 @@ done
 chmod 600 "$caddy_env"
 
 beszel_env="$FOUNDATION_ROOT/env/beszel.env"
-previous_beszel_domain="$(sed -n 's/^BESZEL_APP_URL=https:\/\/status\.//p' "$beszel_env" 2>/dev/null | tail -n1)"
+previous_beszel_domain=''
+if [[ -r "$beszel_env" ]]; then
+	previous_beszel_domain="$(sed -n 's/^BESZEL_APP_URL=https:\/\/status\.//p' "$beszel_env" | tail -n1)"
+fi
 if [[ ! -f "$beszel_env" ]]; then
 	{
 		printf 'BESZEL_APP_URL=https://status.%s\nBESZEL_DATA_ROOT=%s/hub\nBESZEL_AGENT_DATA_ROOT=%s/agent\n' "$DOMAIN_NAME" "$PLATFORM_ROOT/beszel" "$PLATFORM_ROOT/beszel"
