@@ -661,6 +661,15 @@ from existing runtime configuration or the shared bundle, then prompted for.
 Use the Upstash Redis TLS connection string beginning with `rediss://` ; the
 plaintext `redis://` form cannot connect to Upstash's TLS endpoint and is
 rejected during bootstrap validation.
+If LibreChat reports `mongodb+srv URI cannot have port number`, or bootstrap
+reports `LIBRECHAT_MONGO_URI must be one valid ... URI`, repair the value on the
+Leader before retrying any Follower. Run `configure-app-secrets librechat` on
+the Leader and enter the provider's original single Mongo URI at the prompt;
+do not concatenate a URI with an existing value or place it in shell history.
+Then copy the corrected `/etc/llm-hub-lite/shared-secrets.env` to each Follower
+and rerun bootstrap. Bootstrap and `platformctl validate` reject duplicate
+Mongo schemes and SRV ports before starting LibreChat, while preserving all
+other existing secrets.
 When `NODE_ID` is omitted on an interactive first deployment, bootstrap first
 asks whether the VPS is the Leader or a Follower. Choosing Leader selects the
 committed `LEADER_NODE_ID`; choosing Follower asks for one of the committed

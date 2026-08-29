@@ -175,6 +175,42 @@ placeholder_value() {
 	*) return 1 ;;
 	esac
 }
+valid_mongo_uri() {
+	local uri="$1" scheme rest authority host entry host_name host_port
+	case "$uri" in
+	mongodb://*)
+		scheme=mongodb
+		rest="${uri#mongodb://}"
+		;;
+	mongodb+srv://*)
+		scheme=mongodb+srv
+		rest="${uri#mongodb+srv://}"
+		;;
+	*) return 1 ;;
+	esac
+	# A URI must be a single-line value with one scheme. This catches accidental
+	# pastes such as mongodb+srv://clmongodb+srv://... before Mongo sees them.
+	[[ -n "$rest" && "$rest" != *'://' && "$rest" != *$'\n'* && "$rest" != *$'\r'* ]] || return 1
+	authority="${rest%%[/?#]*}"
+	[[ -n "$authority" ]] || return 1
+	host="${authority##*@}"
+	[[ -n "$host" ]] || return 1
+	if [[ "$scheme" == mongodb+srv ]]; then
+		[[ "$host" != *:* && "$host" != *,* ]] || return 1
+		[[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ || "$host" =~ ^[A-Za-z0-9]$ ]] || return 1
+		return 0
+	fi
+	# Standard Mongo URIs may list host:port pairs for replica sets.
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] || return 1
+		host_name="${entry%%:*}"
+		host_port="${entry#*:}"
+		[[ "$host_name" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ || "$host_name" =~ ^[A-Za-z0-9]$ ]] || return 1
+		if [[ "$entry" == *:* ]]; then
+			[[ "$host_port" =~ ^[0-9]{1,5}$ ]] || return 1
+		fi
+	done <<<"$(printf '%s' "$host" | tr ',' '\n')"
+}
 safe_relative() {
 	local value="$1"
 	[[ "$value" != /* && "$value" != *..* && "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
@@ -984,7 +1020,7 @@ validate_descriptor() {
 		for k in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_BUCKET_NAME; do
 			[[ -n "$(env_value "$k")" && "$(env_value "$k")" != replace-with-* ]] || die "production LibreChat requires $k"
 		done
-		[[ "$(env_value LIBRECHAT_MONGO_URI)" =~ ^mongodb(\+srv)?:// ]] || die 'LibreChat Mongo URI must use mongodb:// or mongodb+srv://'
+		valid_mongo_uri "$(env_value LIBRECHAT_MONGO_URI)" || die 'LibreChat Mongo URI is malformed; use one mongodb:// or mongodb+srv:// URI with a valid host'
 		[[ "$(env_value LIBRECHAT_REDIS_URI)" =~ ^rediss:// ]] || die 'LibreChat Upstash Redis URI must use TLS (rediss://)'
 		[[ "$(env_value LIBRECHAT_AWS_ENDPOINT_URL)" =~ ^https:// ]] || die 'LibreChat R2 endpoint must use https://'
 		for k in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_BUCKET_NAME; do

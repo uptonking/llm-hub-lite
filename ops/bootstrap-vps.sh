@@ -361,6 +361,41 @@ clear_placeholder() {
 	value="${!key:-}"
 	case "$value" in replace-with-* | bootstrap-pending | example.invalid | *'<'* | *'>'* | *example.* | *your-upstash* | *account-id*) printf -v "$key" '%s' '' ;; esac
 }
+valid_mongo_uri() {
+	local uri="$1" scheme rest authority host entry host_name host_port
+	case "$uri" in
+	mongodb://*)
+		scheme=mongodb
+		rest="${uri#mongodb://}"
+		;;
+	mongodb+srv://*)
+		scheme=mongodb+srv
+		rest="${uri#mongodb+srv://}"
+		;;
+	*) return 1 ;;
+	esac
+	# Keep this deliberately structural: it catches pasted duplicate schemes
+	# before the application starts and avoids logging or parsing credentials.
+	[[ -n "$rest" && "$rest" != *'://' && "$rest" != *$'\n'* && "$rest" != *$'\r'* ]] || return 1
+	authority="${rest%%[/?#]*}"
+	[[ -n "$authority" ]] || return 1
+	host="${authority##*@}"
+	[[ -n "$host" ]] || return 1
+	if [[ "$scheme" == mongodb+srv ]]; then
+		[[ "$host" != *:* && "$host" != *,* ]] || return 1
+		[[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ || "$host" =~ ^[A-Za-z0-9]$ ]] || return 1
+		return 0
+	fi
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] || return 1
+		host_name="${entry%%:*}"
+		host_port="${entry#*:}"
+		[[ "$host_name" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ || "$host_name" =~ ^[A-Za-z0-9]$ ]] || return 1
+		if [[ "$entry" == *:* ]]; then
+			[[ "$host_port" =~ ^[0-9]{1,5}$ ]] || return 1
+		fi
+	done <<<"$(printf '%s' "$host" | tr ',' '\n')"
+}
 valid_input_value() {
 	local key="$1" value="$2" min_length="${3:-1}"
 	[[ -n "$value" ]] || {
@@ -381,6 +416,10 @@ valid_input_value() {
 	# which would make every otherwise valid value look invalid.
 	if printf '%s' "$value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then
 		printf '%s contains control characters; enter a clean single-line value\n' "$key" >&2
+		return 1
+	fi
+	if [[ "$key" == LIBRECHAT_MONGO_URI ]] && ! valid_mongo_uri "$value"; then
+		printf '%s must be one valid mongodb:// or mongodb+srv:// URI\n' "$key" >&2
 		return 1
 	fi
 }

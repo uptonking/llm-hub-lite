@@ -4,11 +4,15 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Exercise both validators without requiring root. This catches accidental
 # newline matching (for example, from a Bash here-string) before production.
-bootstrap_validator="$(sed -n '/^valid_input_value() {/,/^}/p' "$repo_root/ops/bootstrap-vps.sh")"
+bootstrap_validator="$(sed -n '/^valid_mongo_uri() {/,/^}/p; /^valid_input_value() {/,/^}/p' "$repo_root/ops/bootstrap-vps.sh")"
 VALIDATOR="$bootstrap_validator" bash -c '
 		set -Eeuo pipefail
 		eval "$VALIDATOR"
 		valid_input_value test-value valid
+		valid_input_value LIBRECHAT_MONGO_URI mongodb+srv://user:password@cluster.mongodb.net/LibreChat
+		if valid_input_value LIBRECHAT_MONGO_URI mongodb+srv://clmongodb+srv://user:password@cluster.mongodb.net/LibreChat; then
+			exit 1
+		fi
 		if valid_input_value test-value short 12; then
 			exit 1
 		fi
@@ -18,11 +22,15 @@ VALIDATOR="$bootstrap_validator" bash -c '
 			exit 1
 		fi
 	'
-secret_validator="$(sed -n '/^placeholder_value() {/,/^}/p; /^validate_secret() {/,/^}/p' "$repo_root/ops/configure-app-secrets.sh")"
+secret_validator="$(sed -n '/^placeholder_value() {/,/^}/p; /^valid_mongo_uri() {/,/^}/p; /^validate_secret() {/,/^}/p' "$repo_root/ops/configure-app-secrets.sh")"
 VALIDATOR="$secret_validator" bash -c '
 	set -Eeuo pipefail
 	eval "$VALIDATOR"
 	validate_secret test-value valid 1
+	validate_secret LIBRECHAT_MONGO_URI mongodb+srv://user:password@cluster.mongodb.net/LibreChat 1
+	if validate_secret LIBRECHAT_MONGO_URI mongodb+srv://clmongodb+srv://user:password@cluster.mongodb.net/LibreChat 1; then
+		exit 1
+	fi
 	if validate_secret test-value short 12; then
 		exit 1
 	fi

@@ -81,6 +81,17 @@ compose_command=("$tmp/bin/compose")
 [[ "$(woodpecker_agent_config_file foundation-woodpecker-worker)" == "$tmp/agent/agent.conf" ]]
 [[ "$(woodpecker_agent_config_file woodpecker-deployer)" == "$tmp/deployer/agent.conf" ]]
 
+valid_mongo_uri 'mongodb+srv://user:password@cluster.example.mongodb.net/LibreChat'
+valid_mongo_uri 'mongodb://user:password@mongo.example:27017/LibreChat'
+if valid_mongo_uri 'mongodb+srv://clmongodb+srv://user:password@cluster.example.mongodb.net/'; then
+	printf 'malformed duplicated Mongo scheme was accepted\n' >&2
+	exit 1
+fi
+if valid_mongo_uri 'mongodb+srv://user:password@cluster.example.mongodb.net:27017/'; then
+	printf 'mongodb+srv URI with a port was accepted\n' >&2
+	exit 1
+fi
+
 export WOODPECKER_STALE_LOG=1
 repair_woodpecker_agent_identity woodpecker-worker
 [[ ! -e "$tmp/agent/agent.conf" ]]
