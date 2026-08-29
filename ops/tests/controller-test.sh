@@ -92,7 +92,18 @@ if grep -Fq 'wget -q -O - http://127.0.0.1:80/api/v1/health' "$repo_root/apps/fl
 	exit 1
 fi
 grep -q '^FLOWY_MEMORY_LIMIT=1400m$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_CPUS=0.95$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_LOG_LEVEL=warn$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_REUSE_SANDBOX=false$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_NODE_OPTIONS=--max-old-space-size=768$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_FILE_STORAGE_LOCATION=DB$' "$repo_root/apps/flowy/config.env"
+if grep -Fq 'fail_duration 30s' "$repo_root/apps/flowy/route.leader.caddy"; then
+	printf 'Flowy singleton route must not quarantine the origin for 30 seconds after one failed request\n' >&2
+	exit 1
+fi
+grep -Fq 'health_timeout 10s' "$repo_root/apps/flowy/route.leader.caddy"
+grep -Fq 'health_fails 3' "$repo_root/apps/flowy/route.leader.caddy"
+grep -Fq 'health_passes 1' "$repo_root/apps/flowy/route.leader.caddy"
 for app in aichorouter cpapi cursorapi pigeon; do
 	grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/$app/manifest.env"
 	nodes="$(sed -n 's/^NODES=//p' "$repo_root/config/cluster/apps/$app.policy")"
