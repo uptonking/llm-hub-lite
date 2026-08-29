@@ -347,6 +347,8 @@ fi
 grep -Fq 'cluster app policy requires its consumer reconciliation workflow' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'unsupported cluster configuration path in application deployment' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'application image manifest changes require the reviewed consumer workflow' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'prune_stale_image_keys' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'removing stale image key' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'ops/*.sh | ops/deploy-runner/** | ops/tests/**' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-state' "$repo_root/ops/backup-platform.sh"

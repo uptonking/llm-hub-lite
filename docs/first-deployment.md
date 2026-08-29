@@ -49,6 +49,11 @@ Woodpecker credentials. If a partial or older installation left different
 values in `foundation/env/woodpecker.env`, bootstrap replaces those local
 values with the supplied bundle and recreates the worker. The Leader keeps the stricter mismatch check so an established cluster secret cannot be changed by accident.
 
+Bootstrap and the daily deployment controller also remove image keys that are
+no longer declared by the checked-in manifests (for example, a key renamed
+during an app migration). This repairs stale installed image environments
+without running `clean-vps.sh` or deleting application data.
+
 Bootstrap performs the foreground Compose reconciliation before registering
 the reboot units. It then releases its platform lock and queues
 `platform.target` asynchronously; this final systemd handoff is intentionally

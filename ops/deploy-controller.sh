@@ -131,6 +131,46 @@ image_required() {
 	((matched == 0)) && die "image key is not declared by a manifest: $key"
 	return 1
 }
+image_key_declared() {
+	local key="$1" manifest image_key
+	for manifest in "$CONTROL_ROOT"/current/compose/foundation/manifests/*.env; do
+		[[ -f "$manifest" ]] || continue
+		for image_key in $(env_value IMAGE_KEYS "$manifest"); do
+			[[ "$image_key" == "$key" ]] && return 0
+		done
+	done
+	while IFS= read -r manifest; do
+		while IFS= read -r image_key; do
+			[[ "$image_key" == "$key" ]] && return 0
+		done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
+	done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+	return 1
+}
+prune_stale_image_keys() {
+	local target="$1" tmp line key
+	[[ -f "$target" ]] || return 0
+	tmp="$(mktemp "${target}.tmp.XXXXXX")"
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		case "$line" in
+		'' | \#*)
+			printf '%s\n' "$line" >>"$tmp"
+			;;
+		*=*)
+			key="${line%%=*}"
+			if [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] && ! image_key_declared "$key"; then
+				log "removing stale image key from $target: $key"
+				continue
+			fi
+			printf '%s\n' "$line" >>"$tmp"
+			;;
+		*)
+			printf '%s\n' "$line" >>"$tmp"
+			;;
+		esac
+	done <"$target"
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$target"
+}
 
 git_auth_helper="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/git-auth.sh"
 if [[ ! -r "$git_auth_helper" && -r /usr/local/bin/git-auth.sh ]]; then
@@ -756,6 +796,11 @@ apply() {
 		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
 		install -m 600 "$release/ops/images.foundation.prod.env" "$FOUNDATION_IMAGE_ENV"
 	fi
+	# Image keys are declarative. Remove entries from an older release (for
+	# example a key renamed during an app migration) before prefetching, while
+	# retaining all keys still declared by the candidate release.
+	prune_stale_image_keys "$APP_IMAGE_ENV"
+	prune_stale_image_keys "$FOUNDATION_IMAGE_ENV"
 	sync_scope=apps
 	[[ "$mode" == foundation ]] && sync_scope=foundation
 	[[ "$mode" == cluster-reconcile || "$mode" == rollback ]] && sync_scope=all

@@ -200,26 +200,39 @@ normalize_restic_features() {
 		RESTIC_SKIP_IF_UNCHANGED=false
 	fi
 }
+image_key_declared() {
+	local key="$1" manifest image_key
+	for manifest in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
+		[[ -f "$manifest" ]] || continue
+		for image_key in $(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1); do
+			[[ "$image_key" == "$key" ]] && return 0
+		done
+	done
+	while IFS= read -r manifest; do
+		while IFS= read -r image_key; do
+			[[ "$image_key" == "$key" ]] && return 0
+		done < <(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1 | tr ' ' '\n')
+	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+	return 1
+}
 image_required() {
-	local key="$1" manifest image_key app_id matched=0 component
+	local key="$1" manifest image_key app_id component
+	image_key_declared "$key" || die "image key is not declared by a manifest: $key"
 	for manifest in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
 		[[ -f "$manifest" ]] || continue
 		component="$(sed -n 's/^COMPONENT_ID=//p' "$manifest" | tail -n1)"
 		for image_key in $(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1); do
 			[[ "$image_key" == "$key" ]] || continue
-			matched=1
 			bootstrap_foundation_enabled "$component" && return 0
 		done
 	done
 	while IFS= read -r manifest; do
 		while IFS= read -r image_key; do
 			[[ "$image_key" == "$key" ]] || continue
-			matched=1
 			app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 			app_active_on_node "$app_id" && return 0
 		done < <(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1 | tr ' ' '\n')
 	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
-	((matched == 0)) && die "image key is not declared by a manifest: $key"
 	return 1
 }
 valid_ipv4() {
@@ -285,6 +298,31 @@ merge_image_manifest() {
 		grep -q "^${key}=" "$target" || printf '%s=%s\n' "$key" "$value" >>"$target"
 	done <"$source"
 	chmod 600 "$target"
+}
+prune_stale_image_keys() {
+	local target="$1" tmp line key
+	[[ -f "$target" ]] || return 0
+	tmp="$(mktemp "${target}.tmp.XXXXXX")"
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		case "$line" in
+		'' | \#*)
+			printf '%s\n' "$line" >>"$tmp"
+			;;
+		*=*)
+			key="${line%%=*}"
+			if [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] && ! image_key_declared "$key"; then
+				printf 'Removing stale image key from %s: %s\n' "$target" "$key" >&2
+				continue
+			fi
+			printf '%s\n' "$line" >>"$tmp"
+			;;
+		*)
+			printf '%s\n' "$line" >>"$tmp"
+			;;
+		esac
+	done <"$target"
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$target"
 }
 remove_key() {
 	local file="$1" key="$2" tmp
@@ -1286,6 +1324,8 @@ restic_password="$CONFIG_ROOT/restic-password"
 chmod 600 "$restic_password"
 merge_image_manifest "$SOURCE_ROOT/ops/images.foundation.prod.env" "$CONFIG_ROOT/images.foundation.env"
 merge_image_manifest "$SOURCE_ROOT/ops/images.apps.prod.env" "$CONFIG_ROOT/images.apps.env"
+prune_stale_image_keys "$CONFIG_ROOT/images.foundation.env"
+prune_stale_image_keys "$CONFIG_ROOT/images.apps.env"
 
 # Persist the shared values generated or supplied on the Leader so the exact
 # same bundle can be copied to every Follower during first deployment.
