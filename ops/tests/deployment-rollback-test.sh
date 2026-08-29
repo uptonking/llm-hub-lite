@@ -311,6 +311,19 @@ fi
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
 grep -Fq 'target commit is older than the installed release' "$tmp/deploy-stale.log"
 
+# Documentation and test-only changes are safe to ship with an application
+# commit; they must not force operators to split an otherwise valid consumer
+# deployment into unrelated commits.
+mkdir -p "$work/docs" "$work/ops/tests"
+printf '# consumer documentation note\n' >"$work/docs/consumer-note.md"
+printf '# consumer test note\n' >"$work/ops/tests/consumer-note.sh"
+git -C "$work" add docs/consumer-note.md ops/tests/consumer-note.sh
+git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-docs-tests
+git -C "$work" push --quiet origin HEAD:main
+sha_consumer_docs_tests="$(git -C "$work" rev-parse HEAD)"
+CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_docs_tests" >"$tmp/deploy-consumer-docs-tests.log" 2>&1
+[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_consumer_docs_tests" ]]
+
 # Consumer jobs may carry coordinated app and placement changes, but must
 # reject a foundation/control-plane path before any runtime mutation occurs.
 printf '\n# cpapi consumer change\n' >>"$work/apps/cpapi/compose.yml"
