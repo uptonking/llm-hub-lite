@@ -1026,6 +1026,14 @@ include the current/previous release pointers, maintenance marker, Compose
 state, container exit/OOM/restart counts, and recent healthcheck output. Do not
 paste `/etc/llm-hub-lite/*.env` files or any secret values.
 
+If a Woodpecker agent reports `agent could not auth: AgentID not found in
+database`, `platformctl` automatically moves that node's stale `agent.conf` to
+the matching `agent/orphaned/` or `deployer/orphaned/` directory and recreates
+the agent with the installed digest-pinned image. The agent then registers a
+new identity; application data and shared cluster secrets are untouched. This
+repair also runs during `platformctl recreate`, so a database restore or
+controller redeploy does not require manually deleting the agent state.
+
 If the pipeline log is truncated, collect the same safe summary directly from
 the affected node:
 

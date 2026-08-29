@@ -1386,11 +1386,63 @@ report_compose_failure() {
 		inspect_container_state "$id" >&2 || true
 	done <<<"$("${compose_command[@]}" ps --all -q 2>/dev/null || true)"
 }
+woodpecker_agent_component() {
+	case "$1" in
+	woodpecker-worker | foundation-woodpecker-worker) printf 'woodpecker-worker\n' ;;
+	woodpecker-deployer | foundation-woodpecker-deployer) printf 'woodpecker-deployer\n' ;;
+	*) return 1 ;;
+	esac
+}
+woodpecker_agent_config_file() {
+	local p="$1" component env_file config_root
+	component="$(woodpecker_agent_component "$p")" || return 1
+	env_file="$(foundation_env "$component")"
+	case "$component" in
+	woodpecker-worker) config_root="$(env_value WOODPECKER_AGENT_CONFIG_ROOT "$env_file")" ;;
+	woodpecker-deployer) config_root="$(env_value WOODPECKER_DEPLOYER_CONFIG_ROOT "$env_file")" ;;
+	*) return 1 ;;
+	esac
+	[[ -n "$config_root" ]] || return 1
+	printf '%s/agent.conf\n' "$config_root"
+}
+woodpecker_agent_auth_failed() {
+	local p="$1" id logs
+	woodpecker_agent_component "$p" >/dev/null || return 1
+	while IFS= read -r id; do
+		[[ -n "$id" ]] || continue
+		logs="$(docker logs --tail 100 "$id" 2>&1 || true)"
+		[[ "$logs" == *'agent could not auth: AgentID not found in database'* ]] && return 0
+	done <<<"$("${compose_command[@]}" ps --all -q 2>/dev/null || true)"
+	return 1
+}
+quarantine_woodpecker_agent_identity() {
+	local p="$1" config_file orphan_dir orphan_stamp
+	config_file="$(woodpecker_agent_config_file "$p")" || return 1
+	[[ -s "$config_file" ]] || return 1
+	orphan_dir="$(dirname "$config_file")/orphaned"
+	install -d -m 700 "$orphan_dir"
+	orphan_stamp="$(date -u '+%Y%m%dT%H%M%SZ').$$"
+	mv -f -- "$config_file" "$orphan_dir/agent.conf.$orphan_stamp"
+	printf 'platformctl: quarantined stale Woodpecker agent identity: %s\n' "$orphan_dir/agent.conf.$orphan_stamp" >&2
+}
+repair_woodpecker_agent_identity() {
+	local p="$1"
+	woodpecker_agent_auth_failed "$p" || return 1
+	quarantine_woodpecker_agent_identity "$p"
+}
 compose_up_wait() {
 	if "${compose_command[@]}" up -d --pull never --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$@"; then
 		return 0
 	fi
 	report_compose_failure
+	if [[ -n "${PLATFORM_COMPOSE_PROJECT:-}" ]] && repair_woodpecker_agent_identity "$PLATFORM_COMPOSE_PROJECT"; then
+		printf 'platformctl: stale Woodpecker agent identity detected; registering a new identity\n' >&2
+		if ! "${compose_command[@]}" up -d --pull never --force-recreate --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$@"; then
+			report_compose_failure
+			return 1
+		fi
+		return 0
+	fi
 	printf 'platformctl: project did not become healthy; recreating it once\n' >&2
 	if ! "${compose_command[@]}" up -d --pull never --force-recreate --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$@"; then
 		report_compose_failure
@@ -1401,13 +1453,22 @@ start_project() {
 	local p="$1"
 	project_enabled "$p" || return
 	ensure_network
+	PLATFORM_COMPOSE_PROJECT="$p"
 	if beszel_enrollment_pending "$p"; then
 		foundation_compose "$p"
-		compose_up_wait beszel-socket-proxy
+		if ! compose_up_wait beszel-socket-proxy; then
+			unset PLATFORM_COMPOSE_PROJECT
+			return 1
+		fi
+		unset PLATFORM_COMPOSE_PROJECT
 		return
 	fi
 	[[ "$p" == app:* ]] && app_compose "${p#app:}" || foundation_compose "$p"
-	compose_up_wait
+	if ! compose_up_wait; then
+		unset PLATFORM_COMPOSE_PROJECT
+		return 1
+	fi
+	unset PLATFORM_COMPOSE_PROJECT
 }
 stop_project() {
 	local p="$1" project ids
@@ -1739,10 +1800,22 @@ recreate_project() {
 		return
 	}
 	[[ "$p" == app:* ]] && app_compose "${p#app:}" || foundation_compose "$p"
+	PLATFORM_COMPOSE_PROJECT="$p"
 	if ! "${compose_command[@]}" up -d --pull never --force-recreate --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT"; then
 		report_compose_failure
-		die "$p failed during recreate"
+		if repair_woodpecker_agent_identity "$p"; then
+			printf 'platformctl: stale Woodpecker agent identity detected; registering a new identity\n' >&2
+			if ! "${compose_command[@]}" up -d --pull never --force-recreate --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT"; then
+				report_compose_failure
+				unset PLATFORM_COMPOSE_PROJECT
+				die "$p failed during recreate"
+			fi
+		else
+			unset PLATFORM_COMPOSE_PROJECT
+			die "$p failed during recreate"
+		fi
 	fi
+	unset PLATFORM_COMPOSE_PROJECT
 }
 smoke_project() {
 	local d="$1" u path expected smoke_local
