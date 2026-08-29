@@ -107,8 +107,9 @@ role-aware:
    consistency. A candidate that fails validation mutates nothing.
 5. **Scope guards.** A consumer job rejects any commit that also contains
    control-plane or foundation changes ( `verify_consumer_scope` ); the failure
-   lists every changed path. This is why mixed changes must be split into
-   separate commits.
+   lists every changed path. Documentation (`docs/**`) and test-only changes
+   (`ops/tests/**`) are non-runtime and may accompany an application commit.
+   Other mixed changes must be split into separate commits.
 6. **Pre-change backup.** A verified Restic snapshot via
 `backup-platform snapshot pre-<mode>` .
 7. **Atomic cutover.** Swaps the `current` symlink to the new release while

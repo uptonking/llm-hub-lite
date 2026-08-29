@@ -384,7 +384,7 @@ verify_consumer_scope() {
 	while IFS= read -r path; do
 		case "$path" in
 		apps/** | config/cluster/apps/*.policy | config/cluster/nodes/*.env | config/cluster/overrides/** | config/cluster/policy.env | \
-			config/routes.d/** | .woodpecker/** | ops/images.apps.prod.env | README.md | AGENTS.md | LICENSE.md | .env.prod.example | .env.dev.example) ;;
+			config/routes.d/** | .woodpecker/** | ops/images.apps.prod.env | ops/tests/** | docs/** | README.md | AGENTS.md | LICENSE.md | .env.prod.example | .env.dev.example) ;;
 		*)
 			scope_failure "$(basename "$old_release")" "$(basename "$new_release")" "$mode"
 			die "consumer workflow for $app contains a control-plane or foundation change: $path"

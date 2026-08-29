@@ -340,6 +340,7 @@ grep -Fq 'observer-health-probe:' "$repo_root/compose/foundation/observer-contro
 grep -Fq 'singleton-transition-fail' "$repo_root/ops/platformctl.sh"
 grep -Fq 'verify_cluster_scope "$old_current" "$release"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'cluster reconciliation contains a non-cluster change' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'ops/tests/** | docs/**' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'current_route="$RUNTIME_ROOT/config/routes.d/$a.caddy"' "$repo_root/ops/platformctl.sh"
 grep -Fq 'stopping retired Observer container' "$repo_root/ops/platformctl.sh"
