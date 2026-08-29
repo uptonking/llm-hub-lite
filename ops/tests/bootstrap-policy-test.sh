@@ -21,6 +21,27 @@ grep -Fq 'if [[ -r "$woodpecker_env" ]]; then' "$bootstrap"
 grep -Fq "previous_beszel_domain=''" "$bootstrap"
 grep -Fq 'if [[ -r "$beszel_env" ]]; then' "$bootstrap"
 grep -Fq 'if [[ -r "$file" ]]; then' "$bootstrap"
+grep -Fq 'The Leader-generated shared bundle is authoritative on Followers' "$bootstrap"
+grep -Fq 'set_key_if_changed()' "$bootstrap"
+grep -Fq 'set_key_if_changed "$woodpecker_env" "$shared_key" "$shared_value"' "$bootstrap"
+grep -Fq 'set_key_if_changed "$app_env" "$key" "$value"' "$bootstrap"
+grep -Fq 'set_key_if_changed "$runtime_file" "$key" "$value"' "$bootstrap"
+secret_write_helpers="$(sed -n '/^set_key() {/,/^merge_image_manifest() {/p' "$bootstrap" | sed '$d')"
+SECRET_WRITE_HELPERS="$secret_write_helpers" bash -c '
+	set -Eeuo pipefail
+	eval "$SECRET_WRITE_HELPERS"
+	tmp="$(mktemp)"
+	trap '\''rm -f "$tmp"'\'' EXIT
+	printf "KEY=old-value\\n" >"$tmp"
+	set_key_if_changed "$tmp" KEY new-value
+	grep -qx "KEY=new-value" "$tmp"
+	set_key_if_changed "$tmp" KEY new-value
+	grep -qx "KEY=new-value" "$tmp"
+'
+grep -Fq 'already differs from the configured Leader value' "$bootstrap"
+secret_reconcile_block="$(sed -n '/^for shared_key in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do$/,/^chmod 600 "\$woodpecker_env"/p' "$bootstrap")"
+grep -Fq 'if [[ "$NODE_ROLE" == follower ]]; then' <<<"$secret_reconcile_block"
+grep -Fq 'else' <<<"$secret_reconcile_block"
 grep -Fq 'prompt_observer_ingest_token()' "$bootstrap"
 grep -Fq 'OBSERVER_INGEST_TOKEN must be an OpenObserve token' "$bootstrap"
 if grep -Fq 'AICHOROUTER_MEMORY_LIMIT="${AICHOROUTER_MEMORY_LIMIT:-768m}"' "$bootstrap"; then

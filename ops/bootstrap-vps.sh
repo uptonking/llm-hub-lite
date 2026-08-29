@@ -267,6 +267,13 @@ set_key() {
 	chmod 600 "$tmp"
 	mv -f -- "$tmp" "$file"
 }
+set_key_if_changed() {
+	local file="$1" key="$2" value="$3" current=''
+	if [[ -r "$file" ]]; then
+		current="$(sed -n "s/^${key}=//p" "$file" | tail -n1)"
+	fi
+	[[ "$current" == "$value" ]] || set_key "$file" "$key" "$value"
+}
 merge_image_manifest() {
 	local source="$1" target="$2" key value
 	if [[ ! -s "$target" ]]; then
@@ -1014,8 +1021,8 @@ persist_application_secrets() {
 				[[ -n "$key" ]] || continue
 				value="${!key:-}"
 				[[ -n "$value" ]] || die "application secret was not prepared: $app_id/$key"
-				set_key "$app_env" "$key" "$value"
-				[[ "$NODE_ROLE" != leader ]] || set_key "$CONFIG_ROOT/shared-secrets.env" "$key" "$value"
+				set_key_if_changed "$app_env" "$key" "$value"
+				[[ "$NODE_ROLE" != leader ]] || set_key_if_changed "$CONFIG_ROOT/shared-secrets.env" "$key" "$value"
 			done < <(printf '%s\n' "$keys" | tr ',' '\n')
 		fi
 		[[ "$NODE_ROLE" == follower ]] || continue
@@ -1028,7 +1035,7 @@ persist_application_secrets() {
 			[[ -n "$key" ]] || continue
 			value="${!key:-}"
 			[[ -n "$value" ]] || die "node-local application secret was not prepared: $app_id/$key"
-			set_key "$runtime_file" "$key" "$value"
+			set_key_if_changed "$runtime_file" "$key" "$value"
 		done < <(printf '%s\n' "$keys" | tr ',' '\n')
 	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 }
@@ -1120,14 +1127,22 @@ fi
 for shared_key in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
 	shared_value="${!shared_key:-}"
 	[[ -n "$shared_value" ]] || die "$shared_key is required and cannot be empty"
-	ensure_key "$woodpecker_env" "$shared_key" "$shared_value"
+	if [[ "$NODE_ROLE" == follower ]]; then
+		# The Leader-generated shared bundle is authoritative on Followers. A
+		# prior partial bootstrap may have left an older runtime value behind;
+		# preserving it would make repair fail even though the supplied bundle is
+		# the exact cluster credential we need to use.
+		set_key_if_changed "$woodpecker_env" "$shared_key" "$shared_value"
+	else
+		ensure_key "$woodpecker_env" "$shared_key" "$shared_value"
+	fi
 done
 for shared_key in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
 	shared_value="${!shared_key:-}"
-	if [[ -n "$shared_value" ]]; then
+	if [[ -n "$shared_value" && "$NODE_ROLE" == leader ]]; then
 		existing_value="$(sed -n "s/^${shared_key}=//p" "$woodpecker_env" | tail -n1)"
 		if [[ -n "$existing_value" && "$existing_value" != "$shared_value" && "$existing_value" != replace-with-* ]]; then
-			die "$shared_key already differs from the supplied shared secret bundle"
+			die "$shared_key already differs from the configured Leader value"
 		fi
 		set_key "$woodpecker_env" "$shared_key" "$shared_value"
 	fi

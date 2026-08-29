@@ -44,6 +44,11 @@ running non-interactively. Never generate shared secrets independently on
 different nodes. The Leader owns Woodpecker, Beszel Hub, and Observer;
 Followers run worker components and only consumers selected by app policy.
 
+On a Follower, `shared-secrets.env` is authoritative for cluster-wide
+Woodpecker credentials. If a partial or older installation left different
+values in `foundation/env/woodpecker.env`, bootstrap replaces those local
+values with the supplied bundle and recreates the worker. The Leader keeps the stricter mismatch check so an established cluster secret cannot be changed by accident.
+
 Bootstrap performs the foreground Compose reconciliation before registering
 the reboot units. It then releases its platform lock and queues
 `platform.target` asynchronously; this final systemd handoff is intentionally
