@@ -107,6 +107,19 @@ grep -q -- "--exclude $tmp/platform/observer-custom/collector-buffer" "$tmp/rest
 grep -q -- "--exclude $tmp/platform/observer-custom/data/db/metadata.sqlite" "$tmp/restic.log"
 grep -q "$tmp/platform/observer-custom/data/db/metadata.sqlite" "$tmp/restic.log"
 
+# A node may explicitly opt out when its disk is too small for a local
+# repository. The backup command must return successfully without invoking
+# Restic so deployments do not fail on the opt-out node.
+printf 'NODE_ID=worker-2\nBACKUP_ENABLED=false\n' >"$tmp/config/node.env"
+: >"$tmp/restic.log"
+output="$(NODE_CONFIG_FILE="$tmp/config/node.env" "$repo_root/ops/backup-platform.sh" snapshot disabled-node 2>&1)"
+grep -Fq 'Restic backup is disabled for node worker-2' <<<"$output"
+[[ ! -s "$tmp/restic.log" ]] || {
+	printf 'disabled backup node invoked Restic\n' >&2
+	exit 1
+}
+printf 'NODE_ID=leader\n' >"$tmp/config/node.env"
+
 if PRODUCTION_REQUIRE_REMOTE_BACKUP=true RESTIC_REMOTE_ENABLED=false \
 	"$repo_root/ops/backup-platform.sh" snapshot production-gate-test >/dev/null 2>&1; then
 	printf 'production backup gate accepted a local-only snapshot\n' >&2
