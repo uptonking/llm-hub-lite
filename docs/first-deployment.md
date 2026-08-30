@@ -101,9 +101,10 @@ updates and do not change logical placement IDs.
 
 Flowy (Activepieces) is enabled by default on `worker-3` at
 `https://flowy.<domain>`. It uses a single PGlite volume, in-memory Redis, one
-worker, and bounded CPU/RAM. Keep `FLOWY_FILE_STORAGE_LOCATION=DB` for the
-lowest footprint; switch to S3/R2 only when file durability or growth requires
-it.
+worker, and bounded CPU/RAM. The production profile uses Cloudflare R2 for
+execution files (`FLOWY_FILE_STORAGE_LOCATION=S3`) while keeping metadata in
+PGlite. Provision the four `FLOWY_S3_*` values with the generated
+`consumer-secrets-flowy-worker-3` workflow before the first Flowy deployment.
 
 Review the generated workflows in Woodpecker. For each secret workflow, create
 a manual pipeline on `main` and set its `MANUAL_WORKFLOW` variable to the

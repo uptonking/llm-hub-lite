@@ -552,7 +552,11 @@ render_consumer_workflows() {
 		cluster_keys="$(env_value CLUSTER_SECRET_KEYS "$manifest")"
 		node_keys="$(env_value NODE_SECRET_KEYS "$manifest")"
 		conditional_keys="$(conditional_secret_keys "$manifest" "$leader_id")"
-		if [[ -n "$cluster_keys" || -n "$conditional_keys" ]]; then
+		# Conditional credentials for singleton consumers belong only to the
+		# selected follower.  Cluster-wide secrets still need a Leader workflow;
+		# active-active consumers continue to provision conditional credentials on
+		# the Leader and each selected follower.
+		if [[ -n "$cluster_keys" || ("$upstream" != singleton && -n "$conditional_keys") ]]; then
 			render_consumer_secrets "$app" "$leader_id" '' "$cluster_keys,$conditional_keys"
 		fi
 		# Node-local secrets belong only on the nodes selected by this app's

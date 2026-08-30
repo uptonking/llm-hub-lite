@@ -94,20 +94,25 @@ grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/flowy.policy"
 grep -q '^NODES=worker-3$' "$repo_root/config/cluster/apps/flowy.policy"
 grep -q '^NODE_STATE=active$' "$repo_root/config/cluster/nodes/worker-3.env"
 grep -q '^FLOWY_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
-grep -q '^CONDITIONAL_SECRET_KEYS=FLOWY_FILE_STORAGE_LOCATION=S3|FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"
+grep -q '^CONDITIONAL_SECRET_KEYS=FLOWY_FILE_STORAGE_LOCATION=S3|FLOWY_S3_ENDPOINT,FLOWY_S3_BUCKET,FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"
+grep -q '^WOODPECKER_SECRET_NAMES=FLOWY_ENCRYPTION_KEY:flowy_encryption_key,FLOWY_JWT_SECRET:flowy_jwt_secret,FLOWY_S3_ENDPOINT:FLOWY_S3_ENDPOINT,FLOWY_S3_BUCKET:FLOWY_S3_BUCKET,FLOWY_S3_ACCESS_KEY_ID:FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY:FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"
 grep -Fq 'reverse_proxy flowy:80' "$repo_root/apps/flowy/route.follower.caddy"
 grep -Fq '127.0.0.1:80/api/v1/health' "$repo_root/apps/flowy/compose.yml"
 grep -Fq 'curl -fsS --max-time 5 http://127.0.0.1:80/api/v1/health' "$repo_root/apps/flowy/compose.yml"
+grep -Fq 'mem_limit: ${FLOWY_MEMORY_LIMIT:-1500m}' "$repo_root/apps/flowy/compose.yml"
+grep -Fq 'AP_TELEMETRY_ENABLED: ${FLOWY_TELEMETRY_ENABLED:-false}' "$repo_root/apps/flowy/compose.yml"
+grep -Fq 'AP_FILE_STORAGE_LOCATION: ${FLOWY_FILE_STORAGE_LOCATION:-S3}' "$repo_root/apps/flowy/compose.yml"
 if grep -Fq 'wget -q -O - http://127.0.0.1:80/api/v1/health' "$repo_root/apps/flowy/compose.yml"; then
 	printf 'Flowy healthcheck must use an image-provided HTTP client\n' >&2
 	exit 1
 fi
-grep -q '^FLOWY_MEMORY_LIMIT=1400m$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_MEMORY_LIMIT=1500m$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_CPUS=0.95$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_LOG_LEVEL=warn$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_REUSE_SANDBOX=false$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_NODE_OPTIONS=--max-old-space-size=768$' "$repo_root/apps/flowy/config.env"
-grep -q '^FLOWY_FILE_STORAGE_LOCATION=DB$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_FILE_STORAGE_LOCATION=S3$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_TELEMETRY_ENABLED=false$' "$repo_root/apps/flowy/config.env"
 if grep -Fq 'fail_duration 30s' "$repo_root/apps/flowy/route.leader.caddy"; then
 	printf 'Flowy singleton route must not quarantine the origin for 30 seconds after one failed request\n' >&2
 	exit 1

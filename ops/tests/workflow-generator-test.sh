@@ -113,6 +113,14 @@ for app in aichorouter cpapi cursorapi; do
 		exit 1
 	}
 done
+[[ -f "$base/workflows/consumer-secrets-flowy-worker-3.yml" ]]
+[[ ! -e "$base/workflows/consumer-secrets-flowy-leader.yml" ]]
+for secret in FLOWY_S3_ENDPOINT FLOWY_S3_BUCKET FLOWY_S3_ACCESS_KEY_ID FLOWY_S3_SECRET_ACCESS_KEY; do
+	grep -Fq "from_secret: $secret" "$base/workflows/consumer-secrets-flowy-worker-3.yml"
+done
+grep -Fq 'from_secret: flowy_encryption_key' "$base/workflows/consumer-secrets-flowy-worker-3.yml"
+grep -Fq 'from_secret: flowy_jwt_secret' "$base/workflows/consumer-secrets-flowy-worker-3.yml"
+grep -Fq 'FLOWY_FILE_STORAGE_LOCATION=S3' "$base/apps/flowy/config.env"
 [[ -f "$base/workflows/consumer-secrets-librechat-leader.yml" ]]
 [[ -f "$base/workflows/consumer-secrets-librechat-worker-1.yml" ]]
 [[ -f "$base/workflows/consumer-secrets-librechat-worker-2.yml" ]]

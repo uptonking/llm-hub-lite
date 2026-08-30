@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 60s
-    mem_limit: ${FLOWY_MEMORY_LIMIT:-1400m}
+    mem_limit: ${FLOWY_MEMORY_LIMIT:-1500m}
     cpus: ${FLOWY_CPUS:-0.95}
     pids_limit: ${FLOWY_PIDS_LIMIT:-256}
     labels:
@@ -25,7 +25,7 @@ services:
       AP_EXECUTION_MODE: ${FLOWY_EXECUTION_MODE:-SANDBOX_CODE_ONLY}
       AP_REUSE_SANDBOX: ${FLOWY_REUSE_SANDBOX:-false}
       AP_PIECES_SYNC_MODE: ${FLOWY_PIECES_SYNC_MODE:-OFFICIAL_AUTO}
-      AP_FILE_STORAGE_LOCATION: ${FLOWY_FILE_STORAGE_LOCATION:-DB}
+      AP_FILE_STORAGE_LOCATION: ${FLOWY_FILE_STORAGE_LOCATION:-S3}
       AP_S3_ENDPOINT: ${FLOWY_S3_ENDPOINT:-}
       AP_S3_BUCKET: ${FLOWY_S3_BUCKET:-}
       AP_S3_REGION: ${FLOWY_S3_REGION:-auto}

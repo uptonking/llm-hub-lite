@@ -124,13 +124,8 @@ no Redis, PostgreSQL, or other local dependency. `SESSION_SECRET` and `CRYPTO_SE
 For the first login, open  https://aichorouter.aichorage.de/setup/.
 
 Flowy is the Activepieces singleton at `flowy.aichorage.de` , enabled on the
-active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/flowy.policy` to move it to another active follower, then regenerate the reviewed workflows. Flowy uses one `WORKER_AND_APP` process with PGlite under `data/prod/flowy/config/pglite` , in-memory Redis, one worker, sandbox code-only execution, official piece synchronization, and bounded memory/CPU. The default `FLOWY_FILE_STORAGE_LOCATION=DB` keeps files in the local PGlite
- database for a minimal single-node deployment. Warning-level logging avoids noisy periodic snapshots on a small VPS. The default 768 MB Node heap fits inside the 1.4 GB container while leaving headroom for the worker,
- PGlite, and native allocations; sandbox reuse is disabled so piece modules do  not accumulate in a long-lived execution process. Cloudflare R2 is optional: set
-the mode to `S3` and provide the endpoint, bucket, region, access key, and  secret key through protected deployment secrets. `FLOWY_ENCRYPTION_KEY` and
-`FLOWY_JWT_SECRET` are node-local. Singleton moves are fresh deployments and
- archive the prior local PGlite directory; backups stop the running Flowy
- container before copying its PGlite state. Backup staging is kept under
+active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/flowy.policy` to move it to another active follower, then regenerate the reviewed workflows. Flowy uses one `WORKER_AND_APP` process with PGlite under `data/prod/flowy/config/pglite` , in-memory Redis, one worker, sandbox code-only execution, no automatic piece-catalog synchronization, and bounded memory/CPU. The default `FLOWY_FILE_STORAGE_LOCATION=S3` stores execution files in Cloudflare R2 while keeping metadata in PGlite. Warning-level logging avoids noisy periodic snapshots on a small VPS. The container is capped at 1.5 GB with a 768 MB Node heap, leaving headroom for the worker, PGlite, and native allocations; sandbox reuse is disabled so piece modules do not accumulate in a long-lived execution process. Provision `FLOWY_S3_ENDPOINT`, `FLOWY_S3_BUCKET`, `FLOWY_S3_ACCESS_KEY_ID`, and `FLOWY_S3_SECRET_ACCESS_KEY` with the generated `consumer-secrets-flowy-worker-3` workflow. These credentials are delivered only to the selected singleton follower; no Leader secret workflow is emitted. `FLOWY_ENCRYPTION_KEY` and
+`FLOWY_JWT_SECRET` are node-local. Existing DB-backed files remain readable after switching to S3; no automatic blob migration is performed. Singleton moves are fresh deployments and archive the prior local PGlite directory; backups stop the running Flowy container before copying its PGlite state. Backup staging is kept under
 `/opt/backups/llm-hub-lite/stage` by default rather than `/run` , because VPS
 `/run` is commonly a small tmpfs that cannot hold the PGlite directory.
 
