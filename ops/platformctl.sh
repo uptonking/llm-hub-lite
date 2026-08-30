@@ -1745,6 +1745,7 @@ sync() {
 	local scope="${1:-all}" p
 	[[ "$scope" == apps || "$scope" == foundation || "$scope" == all ]] || die 'sync scope must be apps, foundation, or all'
 	[[ "${PLATFORM_RECREATE_FOUNDATION:-0}" == 0 || "${PLATFORM_RECREATE_FOUNDATION:-0}" == 1 ]] || die 'PLATFORM_RECREATE_FOUNDATION must be 0 or 1'
+	[[ "${PLATFORM_RECREATE_APPS:-0}" == 0 || "${PLATFORM_RECREATE_APPS:-0}" == 1 ]] || die 'PLATFORM_RECREATE_APPS must be 0 or 1'
 	if [[ "${PLATFORM_BOOTSTRAP_VALIDATION_REUSE:-0}" == 1 ]]; then
 		VALIDATE_SKIP_EXTERNAL=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 VALIDATE_STAGE_ONLY=1 validate
 	elif [[ "$PLATFORM_TEST_SKIP_SYNC_VALIDATION" == 0 ]]; then
@@ -1770,7 +1771,12 @@ sync() {
 	if [[ "$scope" == apps || "$scope" == all ]]; then
 		while IFS= read -r p; do
 			[[ -n "$p" ]] || continue
-			start_project "$p"
+			if [[ "${PLATFORM_RECREATE_APPS:-0}" == 1 ]]; then
+				printf 'Recreating application project to apply release configuration: %s\n' "$p"
+				recreate_project "$p"
+			else
+				start_project "$p"
+			fi
 		done <<<"$(projects_apps)"
 		stop_inactive || die 'inactive project cleanup failed'
 		health_scope consumers

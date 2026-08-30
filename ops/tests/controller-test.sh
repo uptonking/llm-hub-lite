@@ -367,6 +367,8 @@ grep -q '^NEW_API_BACKUP_NODE_ID=worker-2$' "$repo_root/config/cluster/apps/newa
 grep -q '^NEW_API_MIGRATION_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -Fq 'cluster-reconcile' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'consumer-stage)' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'DEPLOY_RECREATE_APPS=1' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'PLATFORM_RECREATE_APPS="${DEPLOY_RECREATE_APPS:-0}"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'consumer-publish)' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'consumer-stop)' "$repo_root/ops/deploy-controller.sh"
 if grep -Eq '^(singleton-stage|singleton-switch|singleton-stop)\)' "$repo_root/ops/deploy-controller.sh"; then

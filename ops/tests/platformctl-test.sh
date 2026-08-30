@@ -862,6 +862,19 @@ bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
 for project in app-librechat app-aichorouter app-cpapi app-cursorapi; do
 	grep -Fq "$project" "$tmp/compose.log"
 done
+# A staged application release must force-recreate its selected project.
+# Compose can otherwise miss inline configs.content changes and report an old
+# container as healthy without applying the new configuration.
+: >"$tmp/compose.log"
+PLATFORM_RECREATE_APPS=1 PLATFORM_ONLY_APP_ID=cpapi bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
+grep -Fq 'app-cpapi' "$tmp/compose.log"
+grep -Fq -- '--force-recreate --wait' "$tmp/compose.log"
+for project in app-librechat app-aichorouter app-cursorapi; do
+	if grep -Fq "$project" "$tmp/compose.log"; then
+		printf 'focused application recreate touched unrelated project: %s\n' "$project" >&2
+		exit 1
+	fi
+done
 # A consumer that remains unhealthy after startup must make recovery fail so
 # systemd's OnFailure retry path can run. Foundation startup remains complete.
 if CONSUMER_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" recover >/dev/null 2>&1; then
