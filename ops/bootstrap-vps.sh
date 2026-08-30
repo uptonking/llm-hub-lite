@@ -1466,7 +1466,7 @@ for foundation_file in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
 done
 
 install -d -m 700 /usr/local/libexec
-for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-placement configure-app-secrets configure-observer-ingest enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows; do
+for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-placement configure-app-secrets configure-observer-ingest enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows woodpecker-repair; do
 	cat >"/usr/local/bin/$script" <<EOF
 #!/bin/sh
 exec /opt/platform/control/current/ops/$script.sh "\$@"
@@ -1535,7 +1535,7 @@ PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 PLATFORM_CO
 # and need this same lock. Finish the locked backup and then release the lock
 # before starting platform.target; otherwise systemd waits for the lock until
 # its timeout even though this bootstrap has already reconciled all projects.
-systemctl enable platform.target platform-firewall.service platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer >/dev/null
+systemctl enable platform.target platform-firewall.service platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer platform-woodpecker-repair.timer >/dev/null
 # A previous interrupted bootstrap may have left dependency units in a
 # failed state. All platform projects have just passed the foreground sync,
 # so clear those stale systemd result flags without starting another recovery
@@ -1550,9 +1550,12 @@ flock -u 9
 exec 9>&-
 unset PLATFORM_LOCK_HELD
 start_platform_target "$BOOTSTRAP_SYSTEMD_WAIT_SECONDS"
-systemctl restart platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer
+systemctl restart platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer platform-woodpecker-repair.timer
 
 curl -fsS --retry "$BOOTSTRAP_ENDPOINT_RETRIES" --retry-delay 2 --retry-all-errors --connect-timeout 5 --max-time "$BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS" "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet; systemd recovery will retry\n' >&2
+if [[ "$NODE_ROLE" == leader ]]; then
+	/usr/local/bin/woodpecker-repair || printf 'Woodpecker webhook repair deferred; platform-woodpecker-repair.timer will retry\n' >&2
+fi
 curl -fsS --retry "$BOOTSTRAP_ENDPOINT_RETRIES" --retry-delay 2 --retry-all-errors --connect-timeout 5 --max-time "$BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS" "https://status.$DOMAIN_NAME/api/health" >/dev/null || printf 'Beszel endpoint not ready yet; systemd recovery will retry\n' >&2
 print_bootstrap_summary() {
 	local foundation consumers disabled manifest app_id display_name placement origin_key public_key public_host route_label route_index groups availability_note summary_observer_root component

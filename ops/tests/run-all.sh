@@ -17,7 +17,7 @@ fast)
 		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
 		observer-ingest-test observer-log-proxy-test observer-vector-test
 		platform-submit-test restore-test secret-validation-test stack-test
-		cursorapi-release-test woodpecker-agent-repair-test workflow-generator-test bootstrap-policy-test
+		cursorapi-release-test woodpecker-agent-repair-test woodpecker-webhook-repair-test workflow-generator-test bootstrap-policy-test
 	)
 	;;
 full)
@@ -26,7 +26,7 @@ full)
 		controller-test cursorapi-release-test deployment-rollback-test
 		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
 		observer-ingest-test observer-log-proxy-test observer-vector-test
-		platform-submit-test platformctl-test restore-test secret-validation-test woodpecker-agent-repair-test
+		platform-submit-test platformctl-test restore-test secret-validation-test woodpecker-agent-repair-test woodpecker-webhook-repair-test
 		stack-test workflow-generator-test
 	)
 	;;

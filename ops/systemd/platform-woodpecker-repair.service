@@ -1,0 +1,10 @@
+[Unit]
+Description=Repair llm-hub-lite Woodpecker repository webhooks
+After=platform-recovery.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/llm-hub-lite/node.env
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+ExecStart=/usr/local/bin/woodpecker-repair

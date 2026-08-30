@@ -3,6 +3,12 @@
 This document explains how a `git push` to `main` becomes a redeployment on the cluster.
 It describes the mechanics of the generated Woodpecker deployment workflows, the per-node deployment controller, and the Caddy publication step that keeps all public traffic flowing through the Leader.
 
+The Leader also runs `platform-woodpecker-repair.timer`. Woodpecker v3 signs
+repository webhook URLs with the repository hash; restoring or migrating its
+SQLite database can leave GitHub with a missing or stale hook. The timer calls
+Woodpecker's authenticated `POST /api/repos/repair` endpoint and recreates the
+hook automatically after the server is healthy. It is safe to run repeatedly.
+
 ## TL; DR
 
 `git push` → GitHub webhook → Woodpecker server (on the Leader) → picks an app-specific generated workflow from `.woodpecker/` → runs steps on each node's own Woodpecker agent, in a strict order (stage → publish → stop) → each step runs `deploy-controller` locally on that node, which fetches the same commit, validates it, swaps the `current` release symlink, recreates only the
@@ -43,6 +49,13 @@ never removes hand-authored workflows.
 `config/cluster/overrides/**/<app>.env` , `config/routes.d/**` , and
 `apps/<app>/images.lock.env` . A push touching unrelated files triggers
   nothing.
+
+  A push that changes only `ops/`, `.github/`, documentation, or tests is
+  intentionally not a consumer deployment. Foundation/controller changes use
+  the manual foundation-upgrade chain. If Woodpecker reports no pipeline at
+  all for a push, check the webhook delivery and the Leader's
+  `platform-woodpecker-repair.service`; a repaired hook should show a new
+  `POST /api/hook` delivery in GitHub.
 - **Placement**: `labels: node: <node>` routes each step to that VPS's agent.
 - **Serialization**: every mutating workflow shares
 `concurrency: group: llm-hub-lite-deployment, limit: 1` , so deployments run

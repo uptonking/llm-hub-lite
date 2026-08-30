@@ -1,0 +1,14 @@
+[Unit]
+Description=Retry llm-hub-lite Woodpecker webhook repair
+
+[Timer]
+OnBootSec=45s
+# Hook repair rotates the repository token, so retry conservatively. Bootstrap
+# also invokes the service immediately; this interval only covers later
+# database restores or an outage during the initial repair.
+OnUnitActiveSec=24h
+Persistent=true
+Unit=platform-woodpecker-repair.service
+
+[Install]
+WantedBy=timers.target
