@@ -2,6 +2,7 @@
 when:
   - event: manual
     branch: main
+    evaluate: 'MANUAL_WORKFLOW == "foundation-upgrade-worker-1"'
 
 depends_on:
   - foundation-upgrade-leader

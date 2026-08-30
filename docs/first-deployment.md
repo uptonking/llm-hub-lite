@@ -105,8 +105,10 @@ worker, and bounded CPU/RAM. Keep `FLOWY_FILE_STORAGE_LOCATION=DB` for the
 lowest footprint; switch to S3/R2 only when file durability or growth requires
 it.
 
-Review the generated workflows in Woodpecker, run the manual secret workflows
-for enabled consumers, and confirm each consumer's stage, publish, and stop
-jobs. From this point onward, routine changes are `git push` followed by the
-appropriate Woodpecker workflow. Do not rerun bootstrap for a normal
-application or Compose update.
+Review the generated workflows in Woodpecker. For each secret workflow, create
+a manual pipeline on `main` and set its `MANUAL_WORKFLOW` variable to the
+exact workflow name (for example, `consumer-secrets-librechat-worker-1`); the
+selector prevents unrelated manual workflows from running. Confirm each
+consumer's stage, publish, and stop jobs. From this point onward, routine
+changes are `git push` followed by the appropriate Woodpecker workflow. Do not
+rerun bootstrap for a normal application or Compose update.

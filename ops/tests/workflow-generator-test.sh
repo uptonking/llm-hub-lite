@@ -121,6 +121,18 @@ for node in leader worker-1 worker-2; do
 	grep -Fq 'from_secret: LIBRECHAT_OPENROUTER_KEY' "$base/workflows/consumer-secrets-librechat-$node.yml"
 done
 grep -Fq 'from_secret: librechat_mongo_uri' "$base/workflows/consumer-secrets-librechat-worker-1.yml"
+for file in \
+	consumer-secrets-librechat-leader.yml \
+	consumer-secrets-librechat-worker-1.yml \
+	foundation-upgrade-leader.yml \
+	runner-upgrade-leader.yml \
+	rollback-leader.yml; do
+	workflow="${file%.yml}"
+	grep -Fq "evaluate: 'MANUAL_WORKFLOW == \"$workflow\"'" "$base/workflows/$file" || {
+		printf 'manual workflow must require its explicit selector: %s\n' "$file" >&2
+		exit 1
+	}
+done
 if grep -q '^depends_on:' "$base/workflows/consumer-secrets-cpapi-worker-1.yml"; then
 	printf 'manual consumer secret workflow must be independently runnable\n' >&2
 	exit 1

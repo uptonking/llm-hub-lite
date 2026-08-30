@@ -103,9 +103,10 @@ endpoint, access key, secret key, region ( `auto` ), and bucket through the
 source of truth for uploads and images across Followers. OpenRouter is exposed
 as a bounded custom endpoint using only `openrouter/free`; live model discovery
 is disabled so paid models cannot appear unexpectedly. Store the shared key as
-the protected Woodpecker repository secret `LIBRECHAT_OPENROUTER_KEY`, then run
-the generated LibreChat secret workflows for the Leader and the selected
-`worker-1` and `worker-2` Followers. The runtime key remains root-only as
+the protected Woodpecker repository secret `LIBRECHAT_OPENROUTER_KEY`, then
+create three manual pipelines with `MANUAL_WORKFLOW` set to
+`consumer-secrets-librechat-leader`, `consumer-secrets-librechat-worker-1`, and
+`consumer-secrets-librechat-worker-2`. The runtime key remains root-only as
 `LIBRECHAT_OPENROUTER_KEY` and is mapped to LibreChat's `OPENROUTER_KEY` only
 inside the API container. Rotate the repository secret and rerun those three
 manual workflows before recreating LibreChat. Registration is disabled;

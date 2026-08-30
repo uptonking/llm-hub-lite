@@ -200,8 +200,13 @@ stale instances only after publication succeeded.
 - Each node keeps its own `current`/`previous` release pointers under
 `/opt/platform/control/` . If a node was offline, rerun the same Woodpecker
   build; the fast-forward guard lets it catch up to the newest SHA.
-- `consumer-secrets-<app>-<node>` workflows are `event: manual` only. Run a
-  future follower's workflow before changing singleton placement.
+- Manual workflows are explicitly selected with the `MANUAL_WORKFLOW` variable.
+  This is required because Woodpecker evaluates every `event: manual` config
+  file in a manually created pipeline. For example, to provision LibreChat's
+  key on worker-1, create a manual pipeline for `main` with
+  `MANUAL_WORKFLOW=consumer-secrets-librechat-worker-1`. A missing or unknown
+  selector intentionally runs no manual workflow. Run the selected secret
+  workflow before changing singleton placement or recreating LibreChat.
 
 ## Concrete example: editing LibreChat configuration and pushing
 
