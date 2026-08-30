@@ -113,9 +113,14 @@ for app in aichorouter cpapi cursorapi; do
 		exit 1
 	}
 done
-[[ ! -e "$base/workflows/consumer-secrets-librechat-leader.yml" ]]
+[[ -f "$base/workflows/consumer-secrets-librechat-leader.yml" ]]
 [[ -f "$base/workflows/consumer-secrets-librechat-worker-1.yml" ]]
 [[ -f "$base/workflows/consumer-secrets-librechat-worker-2.yml" ]]
+[[ ! -e "$base/workflows/consumer-secrets-librechat-worker-3.yml" ]]
+for node in leader worker-1 worker-2; do
+	grep -Fq 'from_secret: LIBRECHAT_OPENROUTER_KEY' "$base/workflows/consumer-secrets-librechat-$node.yml"
+done
+grep -Fq 'from_secret: librechat_mongo_uri' "$base/workflows/consumer-secrets-librechat-worker-1.yml"
 if grep -q '^depends_on:' "$base/workflows/consumer-secrets-cpapi-worker-1.yml"; then
 	printf 'manual consumer secret workflow must be independently runnable\n' >&2
 	exit 1

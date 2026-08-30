@@ -354,13 +354,29 @@ EOF
 	printf '    environment:\n' >>"$file"
 	while IFS= read -r key; do
 		[[ -n "$key" ]] || continue
-		secret_name="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
+		secret_name="$(woodpecker_secret_name "$app" "$key")"
 		printf '      %s:\n        from_secret: %s\n' "$key" "$secret_name" >>"$file"
 	done < <(printf '%s\n' "$keys" | tr ',' '\n')
 	cat >>"$file" <<EOF
     commands:
       - /usr/local/bin/configure-app-secrets $app$target_arg --non-interactive
 EOF
+}
+woodpecker_secret_name() {
+	local app="$1" wanted="$2" manifest rule key name
+	manifest="$root/apps/$app/manifest.env"
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		key="${rule%%:*}"
+		name="${rule#*:}"
+		[[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$name" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] ||
+			die "invalid WOODPECKER_SECRET_NAMES entry: $app/$rule"
+		if [[ "$key" == "$wanted" ]]; then
+			printf '%s\n' "$name"
+			return 0
+		fi
+	done < <(printf '%s\n' "$(env_value WOODPECKER_SECRET_NAMES "$manifest")" | tr ',' '\n')
+	printf '%s' "$wanted" | tr '[:upper:]' '[:lower:]'
 }
 conditional_secret_keys() {
 	local manifest="$1" node="${2:-}" rule selector expected keys config_file override_file value result=''
