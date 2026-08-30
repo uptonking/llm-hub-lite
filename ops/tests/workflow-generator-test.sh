@@ -120,7 +120,10 @@ done
 for node in leader worker-1 worker-2; do
 	grep -Fq 'from_secret: LIBRECHAT_OPENROUTER_KEY' "$base/workflows/consumer-secrets-librechat-$node.yml"
 done
-grep -Fq 'from_secret: librechat_mongo_uri' "$base/workflows/consumer-secrets-librechat-worker-1.yml"
+if grep -Fq 'from_secret: librechat_mongo_uri' "$base/workflows/consumer-secrets-librechat-worker-1.yml"; then
+	printf 'mapped LibreChat secret workflow must preserve unmapped host-local secrets\n' >&2
+	exit 1
+fi
 for file in \
 	consumer-secrets-librechat-leader.yml \
 	consumer-secrets-librechat-worker-1.yml \
