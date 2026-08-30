@@ -56,6 +56,7 @@ jobs:
       AICHOROUTER_SITE: https://aichorouter.example.invalid
       CPAPI_SITE: https://cpapi.example.invalid
       CURSORAPI_SITE: https://cursorapi.example.invalid
+      FLOWY_SITE: https://flowy.example.invalid
       LIBRECHAT_SITE: https://chat.example.invalid
       LIBRECHAT_ADMIN_SITE: https://chat-admin.example.invalid
       PIGEON_SITE: https://pigeon.example.invalid
@@ -98,10 +99,11 @@ jobs:
           docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cpapi/compose.yml config --quiet
           docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/cursorapi/compose.yml config --quiet
           docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-1.env --env-file ops/images.apps.prod.env -f apps/librechat/compose.yml config --quiet
+          docker compose --env-file .env.prod.example --env-file config/cluster/nodes/worker-3.env --env-file ops/images.apps.prod.env -f apps/flowy/compose.yml config --quiet
           PIGEON_SECRET_KEY=validation-secret-key-which-is-long PIGEON_LOGIN_PASSWORD=validation-password docker compose --env-file .env.prod.example --env-file ops/images.apps.prod.env -f apps/pigeon/compose.yml config --quiet
       - name: Validate Caddyfile
         run: |
-          for node in leader worker-1 worker-2; do
+          for node in leader worker-1 worker-2 worker-3; do
             STACK_ENV_FILE=.env.prod.example STACK_NODE_CONFIG_FILE="config/cluster/nodes/$node.env" STACK_IMAGE_ENV_FILE=ops/images.apps.prod.env STACK_FOUNDATION_IMAGE_ENV_FILE=ops/images.foundation.prod.env STACK_RUNTIME_ROOT="$PWD/.runtime/$node" ./stack.sh prod validate
           done
       - name: Validate deployment runner Dockerfile

@@ -6,9 +6,6 @@ when:
   - event: push
     branch: main
 
-depends_on:
-  - control-sync-leader
-
 labels:
   node: leader
   target: production
@@ -22,7 +19,17 @@ steps:
   audit:
     image: llm-hub-lite/deploy-runner:current
     pull: false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite
+      - /opt/platform:/opt/platform
+      - /opt/backups/llm-hub-lite:/opt/backups/llm-hub-lite
+      - /run/lock/llm-hub-lite:/run/lock/llm-hub-lite
+      - /etc/llm-hub-lite:/etc/llm-hub-lite
+      - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
+      - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
+      - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
       - printf 'Woodpecker push received sha=%s ref=%s repo=%s\n' "$CI_COMMIT_SHA" "$CI_COMMIT_REF" "$CI_REPO"
       - printf 'Changed paths (deployment workflows are selected independently):\n'
-      - git show --format= --name-only "$CI_COMMIT_SHA" | sed '/^$/d'
+      - git --git-dir=/opt/platform/control/mirror.git show --format= --name-only "$CI_COMMIT_SHA" | sed '/^$/d'

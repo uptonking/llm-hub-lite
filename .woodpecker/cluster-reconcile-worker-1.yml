@@ -12,8 +12,8 @@ when:
 
 depends_on:
   - cluster-reconcile-leader
-
   - control-sync-worker-1
+
 labels:
   node: worker-1
   deployment: "true"

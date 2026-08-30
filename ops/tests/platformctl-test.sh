@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091,SC2034 # dynamically sourced fixture; values are read by sourced platformctl code
 set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 lock_key="${repo_root//[^A-Za-z0-9]/_}"
@@ -56,6 +57,7 @@ export PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0
 mkdir -p "$tmp/control/releases/test" "$tmp/foundation/env" "$tmp/foundation/manifests" "$tmp/app/shared" "$tmp/config" "$tmp/bin" "$tmp/locks"
 cp -a "$repo_root/apps" "$repo_root/config" "$tmp/control/releases/test/"
 ln -s "$tmp/control/releases/test" "$tmp/control/current"
+ln -s "$tmp/control/releases/test" "$tmp/app/current"
 for f in "$repo_root"/compose/foundation/*.yml; do cp "$f" "$tmp/foundation/"; done
 cp "$repo_root"/compose/foundation/manifests/*.env "$tmp/foundation/manifests/"
 for source in "$repo_root"/ops/foundation/*.env.example; do

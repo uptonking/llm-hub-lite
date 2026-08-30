@@ -53,7 +53,7 @@ never removes hand-authored workflows.
   and changed paths in Woodpecker Activity. This gives webhook and push
   visibility without deploying unrelated changes.
 
-  Foundation runtime changes use generated push workflows (`foundation-reconcile-<node>`) and remain optional prerequisites for app workflows. Controller/runner changes still use the manual foundation/runner workflows. If Woodpecker reports no pipeline at
+  Foundation runtime changes use generated push workflows (`foundation-reconcile-<node>`) chained in node order. Each downstream foundation job marks the previous job optional, so a broken foundation node does not prevent later nodes or consumer jobs from reconciling. Controller/runner changes still use the manual foundation/runner workflows. If Woodpecker reports no pipeline at
   all for a push, check the webhook delivery and the Leader's
   `platform-woodpecker-repair.service`; a repaired hook should show a new
   `POST /api/hook` delivery in GitHub.
@@ -125,11 +125,12 @@ role-aware:
    Caddy configuration into a staging directory, checks `docker compose
    config`, verifies digest-pinned image locks, and checks policy
    consistency. A candidate that fails validation mutates nothing.
-5. **Scope guards.** A consumer job rejects any commit that also contains
-   control-plane or foundation changes ( `verify_consumer_scope` ); the failure
-   lists every changed path. Documentation (`docs/**`) and test-only changes
-   (`ops/tests/**`) are non-runtime and may accompany an application commit.
-   Other mixed changes must be split into separate commits.
+5. **Scope and ordering.** Control sync runs first on every node, so a consumer
+   job may accompany control-plane, foundation, policy, documentation, or test
+   changes in one commit. `verify_consumer_scope` still requires the selected
+   application to be declared as a consumer; foundation and cluster workflows
+   own their respective runtime changes while the consumer workflow reconciles
+   only its selected app.
 6. **Pre-change backup.** A verified Restic snapshot via
 `backup-platform snapshot pre-<mode>` .
 7. **Atomic cutover.** Swaps the `current` symlink to the new release while

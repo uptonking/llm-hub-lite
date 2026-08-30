@@ -1444,6 +1444,10 @@ release="$CONTROL_ROOT/releases/$sha"
 	git -C "$SOURCE_ROOT" archive "$sha" | tar -x -C "$release"
 }
 ln -sfn "$release" "$CONTROL_ROOT/current"
+install -d -m 700 "$APP_ROOT"
+if [[ ! -e "$APP_ROOT/current" && ! -L "$APP_ROOT/current" ]]; then
+	ln -s "$release" "$APP_ROOT/current"
+fi
 install -o root -g root -m 600 "$release/config/cluster/nodes/$NODE_ID.env" "$CONFIG_ROOT/node.env"
 set_key "$CONFIG_ROOT/node.env" LEADER_PUBLIC_IP "$LEADER_PUBLIC_IP"
 install -d -m 700 "$CONTROL_ROOT/descriptors"
@@ -1484,6 +1488,7 @@ for pair in \
 	"APP_ROOT=$APP_ROOT" "PLATFORM_ROOT=$PLATFORM_ROOT" "CONTROL_ROOT=$CONTROL_ROOT" "FOUNDATION_ROOT=$FOUNDATION_ROOT" \
 	"REPO_URL=$REPO_URL" "MAIN_BRANCH=$MAIN_BRANCH" "APP_ENV=$app_env" "APP_IMAGE_ENV=$CONFIG_ROOT/images.apps.env" \
 	"FOUNDATION_IMAGE_ENV=$CONFIG_ROOT/images.foundation.env" "FOUNDATION_ENV_ROOT=$FOUNDATION_ROOT/env" \
+	"CONTROL_SYNC_STATE_FILE=$CONFIG_ROOT/control-sync.state" \
 	"RUNTIME_ROOT=$APP_ROOT/shared/runtime" "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" \
 	"PLATFORM_LOCK_FILE=/run/lock/llm-hub-lite/platform.lock" "GITHUB_TOKEN_FILE=${GITHUB_TOKEN_FILE:-$CONFIG_ROOT/github-token}" "PLATFORM_RUNNER_IMAGE=llm-hub-lite/deploy-runner:current"; do
 	set_key "$platform_env" "${pair%%=*}" "${pair#*=}"

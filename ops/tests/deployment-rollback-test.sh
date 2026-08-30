@@ -324,19 +324,17 @@ sha_consumer_docs_tests="$(git -C "$work" rev-parse HEAD)"
 CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_docs_tests" >"$tmp/deploy-consumer-docs-tests.log" 2>&1
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_consumer_docs_tests" ]]
 
-# Consumer jobs may carry coordinated app and placement changes, but must
-# reject a foundation/control-plane path before any runtime mutation occurs.
+# Consumer jobs may carry coordinated app and control-plane changes. Control
+# sync is a prerequisite in production, so this stage only reconciles cpapi;
+# foundation and policy workflows consume the same commit independently.
 printf '\n# cpapi consumer change\n' >>"$work/apps/cpapi/compose.yml"
 printf '\n# unrelated control-plane change\n' >>"$work/ops/platformctl.sh"
 git -C "$work" add apps/cpapi/compose.yml ops/platformctl.sh
 git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-scope-change
 git -C "$work" push --quiet origin HEAD:main
 sha_consumer_scope="$(git -C "$work" rev-parse HEAD)"
-if CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_scope" >"$tmp/deploy-consumer-scope.log" 2>&1; then
-	printf 'consumer workflow accepted a control-plane path\n' >&2
-	exit 1
-fi
-grep -Fq 'consumer workflow for cpapi contains a control-plane or foundation change: ops/platformctl.sh' "$tmp/deploy-consumer-scope.log"
+CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_scope" >"$tmp/deploy-consumer-scope.log" 2>&1
+[[ "$(readlink "$platform_root/app/current")" == "$platform_root/control/releases/$sha_consumer_scope" ]]
 
 aichorouter_image="$(sed -n 's/^AICHOROUTER_IMAGE=//p' "$work/ops/images.apps.prod.env")"
 aichorouter_prefix="${aichorouter_image%@sha256:*}"
@@ -425,18 +423,15 @@ bash "$repo_root/ops/deploy-controller.sh" foundation-upgrade "$sha7" >/dev/null
 grep -Fqx 'rm -f removed-woodpecker-deployer-container' "$tmp/docker.log"
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha7" ]]
 
-# Global ingress and foundation route changes are foundation-scoped even when
-# they are committed alongside a consumer change. A consumer workflow must
-# fail before taking a backup or changing the current release pointer.
+# Global ingress and foundation route changes may be committed alongside a
+# consumer change. The foundation workflow owns those files; this consumer
+# stage still deploys the selected app from the synchronized release.
 printf '\n# unrelated global ingress change\n' >>"$work/config/Caddyfile"
 git -C "$work" add config/Caddyfile
 git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-ingress-scope-change
 git -C "$work" push --quiet origin HEAD:main
 sha_consumer_ingress_scope="$(git -C "$work" rev-parse HEAD)"
-if CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_ingress_scope" >"$tmp/deploy-consumer-ingress-scope.log" 2>&1; then
-	printf 'consumer workflow accepted a global ingress change\n' >&2
-	exit 1
-fi
-grep -Fq 'consumer workflow for cpapi contains a control-plane or foundation change: config/Caddyfile' "$tmp/deploy-consumer-ingress-scope.log"
+CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_ingress_scope" >"$tmp/deploy-consumer-ingress-scope.log" 2>&1
+[[ "$(readlink "$platform_root/app/current")" == "$platform_root/control/releases/$sha_consumer_ingress_scope" ]]
 
 printf 'deployment rollback tests passed\n'

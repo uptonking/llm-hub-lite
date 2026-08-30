@@ -56,6 +56,11 @@ done
 grep -Fq 'event: push' "$base/workflows/push-audit.yml"
 grep -Fq 'node: leader' "$base/workflows/push-audit.yml"
 grep -Fq 'Woodpecker push received' "$base/workflows/push-audit.yml"
+grep -Fq 'git --git-dir=/opt/platform/control/mirror.git show' "$base/workflows/push-audit.yml"
+if grep -Fq 'depends_on:' "$base/workflows/push-audit.yml"; then
+	printf 'push audit must remain visible even when control sync fails\n' >&2
+	exit 1
+fi
 if grep -Eq '^  audit: ' "$base/workflows/push-audit.yml"; then
 	printf 'push audit workflow must use labels present on the Leader agent\n' >&2
 	exit 1
@@ -86,6 +91,18 @@ if grep -Fq 'SINGLETON_FINAL_STOP=1' "$base/workflows/consumer-stop-aichorouter-
 fi
 grep -Fq $'depends_on:\n  - consumer-stop-newapi-worker-1' "$base/workflows/consumer-stop-newapi-worker-2.yml"
 grep -Fq 'CONSUMER_APP_ID=librechat /usr/local/bin/platform-submit consumer-stage' "$base/workflows/consumer-stage-librechat-worker-1.yml"
+grep -Fq $'depends_on:\n  - control-sync-leader' "$base/workflows/control-sync-worker-1.yml"
+grep -Fq $'depends_on:\n  - control-sync-worker-1' "$base/workflows/control-sync-worker-2.yml"
+grep -Fq $'depends_on:\n  - control-sync-worker-2' "$base/workflows/control-sync-worker-3.yml"
+for node in leader worker-1 worker-2 worker-3; do
+	grep -Fq 'platform-submit control-sync' "$base/workflows/control-sync-$node.yml"
+	grep -Fq 'skip_clone: true' "$base/workflows/control-sync-$node.yml"
+done
+grep -Fq $'depends_on:\n  - control-sync-worker-1\n  - name: foundation-reconcile-leader\n    optional: true' "$base/workflows/foundation-reconcile-worker-1.yml"
+if grep -R -Fq 'legacy deployment wrapper detected' "$base/workflows"; then
+	printf 'generated control sync workflows must not auto-upgrade legacy wrappers\n' >&2
+	exit 1
+fi
 for app in aichorouter cpapi cursorapi; do
 	[[ -f "$base/workflows/consumer-secrets-$app-worker-1.yml" ]] || {
 		printf 'missing selected-node secret workflow: %s\n' "$app/worker-1" >&2

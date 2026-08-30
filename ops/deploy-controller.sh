@@ -77,10 +77,10 @@ env_value() {
 [[ "$PLATFORM_TEST_MODE" == 1 || ("$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 0 && "$PLATFORM_TEST_SKIP_SYNC_VALIDATION" == 0 && "$PLATFORM_TEST_SKIP_RENDER" == 0 && "$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" == 0 && "$PLATFORM_TEST_FAST_VALIDATE" == 0 && -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" && "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 0) ]] || die 'test-only deployment controls require PLATFORM_TEST_MODE=1'
 [[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 0 || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'DEPLOY_TEST_SKIP_RELEASE_VALIDATION requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1'
 case "$DEPLOY_DEBUG_LEVEL" in off | debug | warn) ;; *) die 'DEPLOY_DEBUG_LEVEL must be off, debug, or warn' ;; esac
-if [[ "$DEPLOY_DEBUG_LEVEL" == debug ]]; then
-	PS4='+ deploy-controller:${LINENO}: '
-	set -x
-fi
+debug_log() {
+	[[ "$DEPLOY_DEBUG_LEVEL" == debug ]] || return 0
+	log "DEBUG: $*"
+}
 [[ "$PLATFORM_TEST_FAST_VALIDATE" == 0 || "$PLATFORM_TEST_FAST_VALIDATE" == 1 ]] || die 'PLATFORM_TEST_FAST_VALIDATE must be 0 or 1'
 [[ -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" || "$PLATFORM_TEST_ONLY_DESCRIPTOR" =~ ^[a-z][a-z0-9-]*$ ]] || die 'PLATFORM_TEST_ONLY_DESCRIPTOR must be a valid application ID'
 [[ "$PLATFORM_TEST_FAST_VALIDATE" == 0 || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'PLATFORM_TEST_FAST_VALIDATE requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1'
@@ -191,7 +191,19 @@ fi
 # shellcheck disable=SC1090
 source "$git_auth_helper"
 setup_github_https_auth || die 'unable to configure GitHub HTTPS authentication'
-trap cleanup_github_https_auth EXIT
+CONTROL_SYNC_ACTIVE=0
+CONTROL_SYNC_SHA=''
+CONTROL_SYNC_PREVIOUS_SHA=''
+controller_exit() {
+	local status=$?
+	trap - EXIT
+	if [[ "$CONTROL_SYNC_ACTIVE" == 1 && "$status" -ne 0 ]]; then
+		write_control_sync_state failed "$CONTROL_SYNC_SHA" "$CONTROL_SYNC_PREVIOUS_SHA" 'control sync aborted before completion' || true
+	fi
+	cleanup_github_https_auth
+	exit "$status"
+}
+trap controller_exit EXIT
 
 SOURCE_MIRROR="$CONTROL_ROOT/mirror.git"
 RELEASES="$CONTROL_ROOT/releases"
@@ -215,16 +227,28 @@ write_control_sync_state() {
 }
 
 apply_control_sync() {
-	local sha="$1" release old_current old_sha=''
-	sha_valid "$sha"
+	local sha="$1" release old_current old_sha='' stage
+	CONTROL_SYNC_ACTIVE=1
+	CONTROL_SYNC_SHA="$sha"
+	if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+		write_control_sync_state failed "$sha" '' 'expected a full 40-character commit SHA' || true
+		die 'expected a full 40-character commit SHA'
+	fi
 	exec 9>"$PLATFORM_LOCK_FILE"
-	flock -w 300 9 || die 'timed out waiting for deployment lock'
+	if ! flock -w 300 9; then
+		write_control_sync_state failed "$sha" '' 'timed out waiting for deployment lock' || true
+		die 'timed out waiting for deployment lock'
+	fi
 	log "control sync start: node=$(node_value NODE_ID) sha=$sha"
+	debug_log "control pointer=$(readlink "$CURRENT" 2>/dev/null || printf '<missing>') service pointer=$(readlink "$APP_CURRENT" 2>/dev/null || printf '<missing>')"
 	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
 	old_sha="${old_current##*/}"
-	ensure_mirror
+	if ! ensure_mirror; then
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to initialize repository mirror' || true
+		die 'unable to initialize repository mirror'
+	fi
 	fetch_main || {
-		write_control_sync_state failed "$sha" '' 'unable to fetch repository'
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to fetch repository' || true
 		die 'unable to fetch repository'
 	}
 	if ! git -C "$SOURCE_MIRROR" cat-file -e "$sha^{commit}"; then
@@ -239,16 +263,46 @@ apply_control_sync() {
 		write_control_sync_state failed "$sha" "$old_sha" 'target commit is older than installed control release'
 		die 'target commit is older than the installed control release'
 	fi
-	release="$(prepare_release "$sha")"
+	if ! release="$(prepare_release "$sha")"; then
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to prepare control release' || true
+		die 'unable to prepare control release'
+	fi
+	debug_log "prepared release=$release"
 	if ! validate_release "$release"; then
 		write_control_sync_state failed "$sha" "$old_sha" 'candidate validation failed'
 		die 'candidate control release validation failed'
 	fi
-	sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
-	refresh_descriptor_registry "$release"
-	[[ -n "$old_current" ]] && atomic_link "$old_current" "$PREVIOUS"
-	atomic_link "$release" "$CURRENT"
+	stage="$(mktemp -d "$CONTROL_ROOT/.control-sync.XXXXXX")"
+	if ! sync_node_config "$release" "$stage/node.env"; then
+		rm -rf -- "$stage"
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to stage node configuration' || true
+		die 'unable to stage node configuration'
+	fi
+	if ! refresh_descriptor_registry "$release" "$stage/descriptors"; then
+		rm -rf -- "$stage"
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to stage application descriptors' || true
+		die 'unable to stage application descriptors'
+	fi
+	if ! install_control_sync_metadata "$stage"; then
+		rm -rf -- "$stage"
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to install control metadata' || true
+		die 'unable to install control metadata'
+	fi
+	if [[ -n "$old_current" ]] && ! atomic_link "$old_current" "$PREVIOUS"; then
+		rollback_control_sync_metadata "$stage"
+		rm -rf -- "$stage"
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to update previous control pointer' || true
+		die 'unable to update previous control pointer'
+	fi
+	if ! atomic_link "$release" "$CURRENT"; then
+		rollback_control_sync_metadata "$stage"
+		rm -rf -- "$stage"
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to update current control pointer' || true
+		die 'unable to update current control pointer'
+	fi
+	rm -rf -- "$stage"
 	write_control_sync_state succeeded "$sha" "$old_sha"
+	CONTROL_SYNC_ACTIVE=0
 	log "control sync succeeded: $sha"
 }
 
@@ -266,8 +320,12 @@ atomic_link() {
 	tmp="$directory/.$(basename "$link").tmp.$$"
 	rm -f -- "$tmp"
 	ln -s "$target" "$tmp"
-	rm -f -- "$link"
-	mv -- "$tmp" "$link"
+	# GNU mv needs -T to replace a symlink-to-directory; BSD mv uses -h
+	# for the same no-follow behavior. Both preserve the old link until the
+	# rename, avoiding a window where readers see no current release.
+	if ! mv -fT "$tmp" "$link" 2>/dev/null; then
+		mv -fh "$tmp" "$link"
+	fi
 }
 sync_node_config() {
 	local release="$1" destination="$2" runtime_source id source tmp value
@@ -440,23 +498,17 @@ verify_woodpecker_self_disable() {
 }
 
 verify_consumer_scope() {
-	# Allowed non-runtime paths include ops/tests/** | docs/** alongside app/config files.
-	local old_release="$1" new_release="$2" mode="$3" app="${CONSUMER_APP_ID:-}" path manifest
+	# Control sync runs before every consumer workflow. A commit may therefore
+	# coordinate an application change with foundation, policy, or controller
+	# changes; those changes are installed by their own optional workflows while
+	# this job reconciles only the selected application. Non-runtime paths such as
+	# ops/tests/** | docs/** remain harmless to include in the same commit.
+	local old_release="$1" new_release="$2" mode="$3" app="${CONSUMER_APP_ID:-}" manifest
 	[[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop ]] || return 0
 	[[ "$app" =~ ^[a-z][a-z0-9-]*$ ]] || die 'consumer deployment is missing a valid CONSUMER_APP_ID'
 	manifest="$new_release/apps/$app/manifest.env"
 	[[ -f "$manifest" && "$(env_value APP_ID "$manifest")" == "$app" ]] || die "consumer application is not present in target release: $app"
 	[[ "$(env_value PLACEMENT "$manifest")" == consumer ]] || die "application is not a consumer: $app"
-	[[ -n "$old_release" ]] || return 0
-	while IFS= read -r path; do
-		case "$path" in
-		apps/** | config/** | compose/foundation/** | .woodpecker/** | ops/** | docs/** | README.md | AGENTS.md | LICENSE.md | .env.prod.example | .env.dev.example) ;;
-		*)
-			scope_failure "$(basename "$old_release")" "$(basename "$new_release")" "$mode"
-			die "consumer workflow for $app contains a control-plane or foundation change: $path"
-			;;
-		esac
-	done < <(git -C "$SOURCE_MIRROR" diff --name-only "$(basename "$old_release")" "$(basename "$new_release")")
 }
 singleton_previous_target() {
 	local release="$1" app="$2" state_file
@@ -635,8 +687,11 @@ install_foundation_files() {
 }
 
 refresh_descriptor_registry() {
-	local release="$1" descriptor id registry="$CONTROL_ROOT/descriptors" old
+	local release="$1" descriptor id registry="${2:-$CONTROL_ROOT/descriptors}" old
 	install -d -m 700 "$registry"
+	if [[ "$registry" == "$CONTROL_ROOT/descriptors" ]]; then
+		rm -rf -- "${registry:?}"/*
+	fi
 	for descriptor in "$release"/apps/*; do
 		[[ -f "$descriptor/manifest.env" ]] || continue
 		id="$(basename "$descriptor")"
@@ -648,6 +703,43 @@ refresh_descriptor_registry() {
 		id="${old##*/}"
 		[[ -f "$release/apps/$id/manifest.env" ]] || rm -rf -- "$old"
 	done
+}
+
+install_control_sync_metadata() {
+	local stage="$1" destination="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" registry="$CONTROL_ROOT/descriptors"
+	local backup="$stage/old-descriptors" old_node="$stage/old-node.env"
+	[[ -f "$stage/node.env" && -d "$stage/descriptors" ]] || return 1
+	if [[ -e "$destination" || -L "$destination" ]]; then
+		cp -p "$destination" "$old_node" || return 1
+	fi
+	if [[ -e "$registry" || -L "$registry" ]]; then
+		mv -- "$registry" "$backup" || return 1
+	fi
+	if ! mv -- "$stage/descriptors" "$registry"; then
+		[[ -e "$backup" ]] && mv -- "$backup" "$registry"
+		return 1
+	fi
+	if ! mv -f -- "$stage/node.env" "$destination"; then
+		rm -rf -- "$registry"
+		[[ -e "$backup" ]] && mv -- "$backup" "$registry"
+		[[ -e "$old_node" ]] && mv -f -- "$old_node" "$destination"
+		return 1
+	fi
+}
+
+rollback_control_sync_metadata() {
+	local stage="$1" destination="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" registry="$CONTROL_ROOT/descriptors"
+	rm -rf -- "$registry"
+	if [[ -e "$stage/old-descriptors" ]]; then
+		mv -- "$stage/old-descriptors" "$registry"
+	else
+		install -d -m 700 "$registry"
+	fi
+	if [[ -e "$stage/old-node.env" ]]; then
+		mv -f -- "$stage/old-node.env" "$destination"
+	else
+		rm -f -- "$destination"
+	fi
 }
 
 install_application_image_lock() {

@@ -13,6 +13,12 @@ sha="${2:-}"
 	exit 2
 }
 
+controller_source="${PLATFORM_CONTROLLER_SOURCE:-/opt/platform/control/current/ops/deploy-controller.sh}"
+if [[ ! -r "$controller_source" ]] || ! grep -q 'control-sync)' "$controller_source"; then
+	printf 'installed deployment controller is too old for %s; rerun ops/bootstrap-vps.sh in repair mode on this node\n' "$mode" >&2
+	exit 1
+fi
+
 retire_delay=''
 if [[ "$mode" == node-retire ]]; then
 	retire_delay="${NODE_RETIRE_DELAY_SECONDS:-30}"
