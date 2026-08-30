@@ -56,6 +56,10 @@ done
 grep -Fq 'event: push' "$base/workflows/push-audit.yml"
 grep -Fq 'node: leader' "$base/workflows/push-audit.yml"
 grep -Fq 'Woodpecker push received' "$base/workflows/push-audit.yml"
+if grep -Eq '^  audit: ' "$base/workflows/push-audit.yml"; then
+	printf 'push audit workflow must use labels present on the Leader agent\n' >&2
+	exit 1
+fi
 if grep -Fq 'path:' "$base/workflows/push-audit.yml"; then
 	printf 'push audit workflow must run for every main push and have no path filter\n' >&2
 	exit 1

@@ -199,7 +199,6 @@ when:
 
 labels:
   node: $leader_id
-  audit: "true"
   target: production
   repo: $repo_slug
 
