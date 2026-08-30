@@ -17,6 +17,8 @@ services:
       PORT: 3080
       NODE_ENV: production
       NODE_OPTIONS: ${LIBRECHAT_API_NODE_OPTIONS:---max-old-space-size=384}
+      APP_TITLE: ${LIBRECHAT_APP_TITLE:-LibreChat}
+      HELP_AND_FAQ_URL: ${LIBRECHAT_HELP_AND_FAQ_URL:-https://librechat.ai}
       OTEL_SDK_DISABLED: ${LIBRECHAT_OTEL_SDK_DISABLED:-true}
       CONSOLE_JSON: ${LIBRECHAT_CONSOLE_JSON:-false}
       MONGO_URI: ${LIBRECHAT_MONGO_URI:?LIBRECHAT_MONGO_URI must be set}

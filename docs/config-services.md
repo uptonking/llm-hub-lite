@@ -100,7 +100,9 @@ the generated JWT and admin-panel secrets) in the root-only bundle or during
 interactive bootstrap. Production also requires the shared Cloudflare R2
 endpoint, access key, secret key, region ( `auto` ), and bucket through the
 `LIBRECHAT_AWS_*` settings. LibreChat uses `fileStrategy: s3` , so R2 is the
-source of truth for uploads and images across Followers. OpenRouter is exposed
+source of truth for uploads and images across Followers. Set `LIBRECHAT_APP_TITLE`
+and `LIBRECHAT_HELP_AND_FAQ_URL` in `apps/librechat/config.env` to control the
+product name and help link returned by the LibreChat API. OpenRouter is exposed
 as a bounded custom endpoint using only `openrouter/free`; live model discovery
 is disabled so paid models cannot appear unexpectedly. Store the shared key as
 the protected Woodpecker repository secret `LIBRECHAT_OPENROUTER_KEY`, then
