@@ -123,6 +123,9 @@ LEADER='<leader-host-or-ip>'
 WORKER_1='<worker-1-host-or-ip>'
 WORKER_2='<worker-2-host-or-ip>'
 WORKER_3='<worker-3-host-or-ip>'
+DOMAIN_NAME=your-top-level-domain
+SSL_EMAIL=admin@xx.xx
+WOODPECKER_ADMIN=xx
 
 # for redeployment, clean up might help
 for host in "$LEADER" "$WORKER_1" "$WORKER_2" "$WORKER_3"; do
@@ -174,6 +177,19 @@ ssh -tt "root@$LEADER" \
     BOOTSTRAP_ASSUME_YES=1 \
     /root/llm-hub-lite-bootstrap.sh"
 
+# or repair leader
+ssh -tt "root@$LEADER" \
+  "NODE_ID=leader \
+    LEADER_PUBLIC_IP=$LEADER \
+    DOMAIN_NAME=$DOMAIN_NAME \
+    SSL_EMAIL=$SSL_EMAIL \
+    WOODPECKER_ADMIN=$WOODPECKER_ADMIN \
+    BOOTSTRAP_MODE=repair \
+    BOOTSTRAP_ASSUME_YES=1 \
+    /root/llm-hub-lite-bootstrap.sh"
+```
+
+```sh
 # Copy these root-only files before starting either Follower. Use a protected
 # local temporary directory, or transfer them through an equivalent secure
 # one-time channel, then remove the local copies.
@@ -204,6 +220,17 @@ ssh -tt "root@$WORKER_1" \
     DOMAIN_NAME=aichorage.de \
     SSL_EMAIL=admin@aichorage.de \
     WOODPECKER_ADMIN=uptonking \
+    BOOTSTRAP_ASSUME_YES=1 \
+    /root/llm-hub-lite-bootstrap.sh"
+
+# or repair worker_1
+ssh -tt "root@$WORKER_1" \
+  "NODE_ID=worker-1 \
+    LEADER_PUBLIC_IP=$LEADER \
+    DOMAIN_NAME=$DOMAIN_NAME \
+    SSL_EMAIL=$SSL_EMAIL \
+    WOODPECKER_ADMIN=$WOODPECKER_ADMIN \
+    BOOTSTRAP_MODE=repair \
     BOOTSTRAP_ASSUME_YES=1 \
     /root/llm-hub-lite-bootstrap.sh"
 
