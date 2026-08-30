@@ -842,7 +842,7 @@ write_validation_stamp() {
 	mv -f -- "$tmp" "$VALIDATION_STAMP_FILE"
 }
 validate_cluster() {
-	local node file state migration backup d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor
+	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor
 	need_file "$CLUSTER_POLICY_FILE"
 	need_file "$NODE_CONFIG_FILE"
 	[[ "$(policy_value CLUSTER_CONFIG_VERSION)" == 3 ]] || die 'unsupported cluster policy version'
@@ -858,6 +858,11 @@ validate_cluster() {
 		[[ "$node" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid stable node ID: $node"
 		state="$(env_value NODE_STATE "$file")"
 		case "$state" in joining | active | draining | retired) ;; *) die "NODE_STATE must be joining, active, draining, or retired: $node" ;; esac
+		backup_enabled="$(env_value BACKUP_ENABLED "$file")"
+		case "${backup_enabled:-true}" in
+		true | false | 1 | 0 | TRUE | FALSE) ;;
+		*) die "BACKUP_ENABLED must be true or false: $node" ;;
+		esac
 		if [[ "$node" == "$(leader_node_id)" && "$state" != active ]]; then
 			die "designated Leader node must be active: $node"
 		fi

@@ -359,6 +359,17 @@ assert_invalid_origin_host '192.0.2.1' 'invalid origin host NODE_AICHOROUTER_ORI
 assert_invalid_origin_host 'Worker1-aichorouter-origin.example.invalid' 'invalid origin host NODE_AICHOROUTER_ORIGIN_HOST for worker-1'
 mv "$tmp/worker-1.node.original" "$worker_node"
 
+# Restic backup is enabled by default, but a node may opt out explicitly. A
+# malformed value must fail control validation before the node is reconciled.
+cp "$worker_node" "$tmp/worker-1.backup-policy.original"
+printf 'BACKUP_ENABLED=maybe\n' >>"$worker_node"
+if output="$(PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_library aichorouter 1 1 0 1 2>&1)"; then
+	printf 'cluster validation accepted invalid BACKUP_ENABLED\n' >&2
+	exit 1
+fi
+grep -Fq 'BACKUP_ENABLED must be true or false: worker-1' <<<"$output"
+mv "$tmp/worker-1.backup-policy.original" "$worker_node"
+
 # Node-local defaults are explicit, single-line values and may not overwrite
 # identity or role fields used by bootstrap and workflow routing.
 newapi_manifest="$tmp/control/current/apps/newapi/manifest.env"

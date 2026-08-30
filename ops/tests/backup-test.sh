@@ -118,6 +118,10 @@ grep -Fq 'Restic backup is disabled for node worker-2' <<<"$output"
 	printf 'disabled backup node invoked Restic\n' >&2
 	exit 1
 }
+# The opt-out is self-contained: no Restic binary, password, or flock is
+# required when the node descriptor disables backups.
+output="$(PATH="$tmp/no-restic:/usr/bin:/bin" RESTIC_PASSWORD_FILE="$tmp/missing-password" PLATFORM_LOCK_FILE="$tmp/missing-lock" NODE_CONFIG_FILE="$tmp/config/node.env" "$repo_root/ops/backup-platform.sh" snapshot disabled-without-backend 2>&1)"
+grep -Fq 'Restic backup is disabled for node worker-2' <<<"$output"
 printf 'NODE_ID=leader\n' >"$tmp/config/node.env"
 
 if PRODUCTION_REQUIRE_REMOTE_BACKUP=true RESTIC_REMOTE_ENABLED=false \

@@ -24,6 +24,36 @@ MIN_FREE_BYTES="${BACKUP_MIN_FREE_BYTES:-5368709120}"
 MIN_FREE_PERCENT="${BACKUP_MIN_FREE_PERCENT:-10}"
 operation="${1:-snapshot}"
 reason="${2:-manual}"
+
+env_value() {
+	local key="$1" file="${2:-$APP_ENV}"
+	[[ -f "$file" ]] || return 0
+	sed -n "s/^${key}=//p" "$file" | tail -n1
+}
+observer_env_value() { env_value "$1" "$OBSERVER_ENV_FILE"; }
+truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
+node_value() { env_value "$1" "$NODE_CONFIG_FILE"; }
+NODE_ID="${NODE_ID:-$(node_value NODE_ID)}"
+NODE_ID="${NODE_ID:-leader}"
+[[ "$NODE_ID" =~ ^[a-z][a-z0-9-]*$ ]] || {
+	printf 'invalid backup NODE_ID: %s\n' "$NODE_ID" >&2
+	exit 1
+}
+BACKUP_ENABLED="${BACKUP_ENABLED:-$(env_value BACKUP_ENABLED "$NODE_CONFIG_FILE")}"
+BACKUP_ENABLED="${BACKUP_ENABLED:-true}"
+case "$BACKUP_ENABLED" in
+true | TRUE | 1) ;;
+false | FALSE | 0)
+	# Opted-out nodes do not need Restic, its password, or a backup lock.
+	printf 'Restic backup is disabled for node %s by BACKUP_ENABLED=%s\n' "$NODE_ID" "$BACKUP_ENABLED"
+	exit 0
+	;;
+*)
+	printf 'BACKUP_ENABLED must be true or false\n' >&2
+	exit 1
+	;;
+esac
+
 command -v flock >/dev/null 2>&1 || {
 	printf 'flock is required\n' >&2
 	exit 1
@@ -49,33 +79,6 @@ command -v restic >/dev/null 2>&1 || {
 	printf 'missing Restic password file: %s\n' "$PASSWORD_FILE" >&2
 	exit 1
 }
-env_value() {
-	local key="$1" file="${2:-$APP_ENV}"
-	[[ -f "$file" ]] || return 0
-	sed -n "s/^${key}=//p" "$file" | tail -n1
-}
-observer_env_value() { env_value "$1" "$OBSERVER_ENV_FILE"; }
-truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
-node_value() { env_value "$1" "$NODE_CONFIG_FILE"; }
-NODE_ID="${NODE_ID:-$(node_value NODE_ID)}"
-NODE_ID="${NODE_ID:-leader}"
-[[ "$NODE_ID" =~ ^[a-z][a-z0-9-]*$ ]] || {
-	printf 'invalid backup NODE_ID: %s\n' "$NODE_ID" >&2
-	exit 1
-}
-BACKUP_ENABLED="${BACKUP_ENABLED:-$(env_value BACKUP_ENABLED "$NODE_CONFIG_FILE")}"
-BACKUP_ENABLED="${BACKUP_ENABLED:-true}"
-case "$BACKUP_ENABLED" in
-true | TRUE | 1) ;;
-false | FALSE | 0)
-	printf 'Restic backup is disabled for node %s by BACKUP_ENABLED=%s\n' "${NODE_ID:-unknown}" "$BACKUP_ENABLED"
-	exit 0
-	;;
-*)
-	printf 'BACKUP_ENABLED must be true or false\n' >&2
-	exit 1
-	;;
-esac
 RESTIC_REMOTE_ENV_FILE="${RESTIC_REMOTE_ENV_FILE:-$(env_value RESTIC_REMOTE_ENV_FILE)}"
 RESTIC_REMOTE_ENV_FILE="${RESTIC_REMOTE_ENV_FILE:-$CONFIG_ROOT/restic-remote.env}"
 if [[ -n "$RESTIC_REMOTE_ENV_FILE" && -f "$RESTIC_REMOTE_ENV_FILE" ]]; then
