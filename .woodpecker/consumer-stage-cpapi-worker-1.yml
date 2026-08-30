@@ -9,6 +9,7 @@ when:
         - config/cluster/overrides/**/cpapi.env
         - config/routes.d/**
         - apps/cpapi/images.lock.env
+      on_empty: false
 
 labels:
   node: worker-1

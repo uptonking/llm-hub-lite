@@ -9,6 +9,7 @@ when:
         - config/cluster/overrides/**/pigeon.env
         - config/routes.d/**
         - apps/pigeon/images.lock.env
+      on_empty: false
 
 labels:
   node: leader

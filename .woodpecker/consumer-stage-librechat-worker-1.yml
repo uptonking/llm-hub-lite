@@ -9,6 +9,7 @@ when:
         - config/cluster/overrides/**/librechat.env
         - config/routes.d/**
         - apps/librechat/images.lock.env
+      on_empty: false
 
 labels:
   node: worker-1

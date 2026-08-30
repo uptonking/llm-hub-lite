@@ -9,6 +9,7 @@ when:
         - config/cluster/overrides/**/flowy.env
         - config/routes.d/**
         - apps/flowy/images.lock.env
+      on_empty: false
 
 labels:
   node: worker-3

@@ -64,6 +64,13 @@ if grep -Fq 'path:' "$base/workflows/push-audit.yml"; then
 	printf 'push audit workflow must run for every main push and have no path filter\n' >&2
 	exit 1
 fi
+for file in "$base"/workflows/consumer-{stage,publish,stop,finalize}-*.yml "$base"/workflows/cluster-reconcile-*.yml; do
+	[[ -f "$file" ]] || continue
+	grep -Fq 'on_empty: false' "$file" || {
+		printf 'path-filtered workflow must opt out of empty commits: %s\n' "$file" >&2
+		exit 1
+	}
+done
 [[ ! -e "$base/workflows/consumer-stage-newapi-worker-1.yml" ]]
 [[ ! -e "$base/workflows/consumer-stage-pigeon-worker-2.yml" ]]
 [[ ! -e "$base/workflows/consumer-stop-librechat-worker-1.yml" ]]

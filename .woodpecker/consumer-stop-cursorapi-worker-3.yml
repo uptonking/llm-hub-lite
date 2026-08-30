@@ -9,6 +9,7 @@ when:
         - config/cluster/overrides/**/cursorapi.env
         - config/routes.d/**
         - apps/cursorapi/images.lock.env
+      on_empty: false
 
 depends_on:
   - consumer-stop-cursorapi-worker-2

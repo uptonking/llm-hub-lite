@@ -9,6 +9,7 @@ when:
         - config/cluster/overrides/**/aichorouter.env
         - config/routes.d/**
         - apps/aichorouter/images.lock.env
+      on_empty: false
 
 depends_on:
   - consumer-stop-aichorouter-worker-3

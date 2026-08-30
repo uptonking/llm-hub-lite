@@ -126,6 +126,7 @@ when:
         - config/cluster/overrides/**/$app.env
         - config/routes.d/**
         - apps/$app/images.lock.env
+      on_empty: false
 EOF
 	if [[ -n "$dependency" ]]; then
 		printf '\ndepends_on:\n  - %s\n' "$dependency" >>"$file"
@@ -159,6 +160,7 @@ when:
         - config/cluster/policy.env
         - config/cluster/nodes/**
         - config/cluster/foundation/**
+      on_empty: false
 
 EOF
 	if [[ -n "$dependency" ]]; then

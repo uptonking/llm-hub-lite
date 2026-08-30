@@ -7,6 +7,7 @@ when:
         - config/cluster/policy.env
         - config/cluster/nodes/**
         - config/cluster/foundation/**
+      on_empty: false
 
 depends_on:
   - cluster-reconcile-worker-1
