@@ -80,7 +80,7 @@ configs:
       pprof:
         enable: false
       plugins:
-        enabled: false
+        enabled: ${CPAPI_PLUGINS_ENABLED:-true}
         dir: "/runtime/plugins"
       commercial-mode: true
       logging-to-file: false

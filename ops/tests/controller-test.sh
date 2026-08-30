@@ -267,6 +267,9 @@ fi
 grep -Fq 'mem_limit: ${CPAPI_MEMORY_LIMIT:-256m}' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'cpus: ${CPAPI_CPUS:-0.25}' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'pids_limit: ${CPAPI_PIDS_LIMIT:-128}' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'enabled: ${CPAPI_PLUGINS_ENABLED:-true}' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'CPAPI_PLUGINS_ENABLED' "$repo_root/apps/cpapi/manifest.env"
+grep -Fq 'CPAPI_PLUGINS_ENABLED=true' "$repo_root/apps/cpapi/config.env"
 if grep -Eq 'ports:' "$repo_root/apps/cpapi/compose.yml"; then
 	printf 'CPAPI must not publish a host port\n' >&2
 	exit 1
