@@ -44,11 +44,14 @@ temporary sibling tree, dependency-checked, and applied only after the whole
 set succeeds. A failed render or copy restores the previous generated set and
 never removes hand-authored workflows.
 
-- **Trigger**: `when: event: push, branch: main` with a `path` include list of
+- **Deployment triggers**: `when: event: push, branch: main` with a `path` include list of
 `apps/<app>/**` , `config/cluster/apps/<app>.policy` ,
 `config/cluster/overrides/**/<app>.env` , `config/routes.d/**` , and
 `apps/<app>/images.lock.env` . A push touching unrelated files triggers
-  nothing.
+  no deployment workflow. The generated `push-audit` workflow has no path
+  filter and runs once on the Leader for every `main` push, printing the SHA
+  and changed paths in Woodpecker Activity. This gives webhook and push
+  visibility without deploying unrelated changes.
 
   A push that changes only `ops/`, `.github/`, documentation, or tests is
   intentionally not a consumer deployment. Foundation/controller changes use

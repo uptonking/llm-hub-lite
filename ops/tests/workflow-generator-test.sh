@@ -41,6 +41,7 @@ if grep -R -Eq '^[[:space:]]+role:' "$base/workflows"; then
 fi
 
 for file in \
+	push-audit.yml \
 	consumer-stage-aichorouter-worker-1.yml consumer-publish-aichorouter.yml consumer-stop-aichorouter-worker-2.yml \
 	consumer-finalize-aichorouter-worker-1.yml \
 	consumer-stage-librechat-worker-1.yml consumer-stage-librechat-worker-2.yml consumer-publish-librechat.yml \
@@ -52,6 +53,13 @@ for file in \
 		exit 1
 	}
 done
+grep -Fq 'event: push' "$base/workflows/push-audit.yml"
+grep -Fq 'node: leader' "$base/workflows/push-audit.yml"
+grep -Fq 'Woodpecker push received' "$base/workflows/push-audit.yml"
+if grep -Fq 'path:' "$base/workflows/push-audit.yml"; then
+	printf 'push audit workflow must run for every main push and have no path filter\n' >&2
+	exit 1
+fi
 [[ ! -e "$base/workflows/consumer-stage-newapi-worker-1.yml" ]]
 [[ ! -e "$base/workflows/consumer-stage-pigeon-worker-2.yml" ]]
 [[ ! -e "$base/workflows/consumer-stop-librechat-worker-1.yml" ]]
