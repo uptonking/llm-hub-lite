@@ -23,6 +23,9 @@ env_value() {
 	printf '%s\n' "$value"
 }
 value() { env_value "$1" "$policy"; }
+deploy_debug_level="${DEPLOY_DEBUG_LEVEL:-$(value DEPLOY_DEBUG_LEVEL)}"
+deploy_debug_level="${deploy_debug_level:-off}"
+case "$deploy_debug_level" in off | warn | debug) ;; *) die 'DEPLOY_DEBUG_LEVEL must be off, warn, or debug' ;; esac
 csv_has() {
 	local csv=",${1//[[:space:]]/},"
 	[[ "$csv" == *",$2,"* ]]
@@ -185,7 +188,12 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - /usr/local/bin/platform-submit control-sync "\$CI_COMMIT_SHA"
+      - >-
+        if ! grep -q 'control-sync' /opt/platform/control/current/ops/platform-submit.sh 2>/dev/null; then
+          printf '%s\n' 'legacy deployment wrapper detected; upgrading control release'
+          /usr/local/bin/platform-submit foundation-upgrade "\$CI_COMMIT_SHA"
+        fi
+        DEPLOY_DEBUG_LEVEL=$deploy_debug_level /usr/local/bin/platform-submit control-sync "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -233,7 +241,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - /usr/local/bin/platform-submit cluster-reconcile "\$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level /usr/local/bin/platform-submit cluster-reconcile "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -278,7 +286,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - /usr/local/bin/platform-submit foundation-upgrade "\$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level /usr/local/bin/platform-submit foundation-upgrade "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -388,7 +396,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -404,7 +412,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-publish "\$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-publish "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -420,7 +428,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -436,7 +444,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
 EOF
 }
 

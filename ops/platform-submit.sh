@@ -76,6 +76,7 @@ docker run -d --name "$job" \
 	-e DEPLOY_WORKFLOW="${CI_WORKFLOW_NAME:-${CI_WORKFLOW:-unknown}}" \
 	-e DEPLOY_PIPELINE="${CI_PIPELINE_NUMBER:-${CI_PIPELINE:-unknown}}" \
 	-e DEPLOY_BUILD="${CI_BUILD_NUMBER:-${CI_BUILD:-unknown}}" \
+	-e DEPLOY_DEBUG_LEVEL="${DEPLOY_DEBUG_LEVEL:-${PLATFORM_DEBUG_LEVEL:-off}}" \
 	-v /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro \
 	-v /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro \
 	-v /usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro \

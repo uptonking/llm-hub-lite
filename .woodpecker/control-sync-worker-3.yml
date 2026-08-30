@@ -32,4 +32,9 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
-      - /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"
+      - >-
+        if ! grep -q 'control-sync' /opt/platform/control/current/ops/platform-submit.sh 2>/dev/null; then
+          printf '%s\n' 'legacy deployment wrapper detected; upgrading control release'
+          /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"
+        fi
+        DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"

@@ -56,6 +56,7 @@ source "$config_file"
 # Test fixtures that fully mock platformctl may skip the candidate validation
 # tree; production deployments always validate releases before mutation.
 : "${DEPLOY_TEST_SKIP_RELEASE_VALIDATION:=0}"
+: "${DEPLOY_DEBUG_LEVEL:=off}"
 
 env_value() {
 	local key="$1" file="${2:-$APP_ENV}" line value=''
@@ -75,6 +76,11 @@ env_value() {
 [[ "$PLATFORM_TEST_MODE" == 0 || "$PLATFORM_TEST_MODE" == 1 ]] || die 'PLATFORM_TEST_MODE must be 0 or 1'
 [[ "$PLATFORM_TEST_MODE" == 1 || ("$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 0 && "$PLATFORM_TEST_SKIP_SYNC_VALIDATION" == 0 && "$PLATFORM_TEST_SKIP_RENDER" == 0 && "$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" == 0 && "$PLATFORM_TEST_FAST_VALIDATE" == 0 && -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" && "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 0) ]] || die 'test-only deployment controls require PLATFORM_TEST_MODE=1'
 [[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 0 || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'DEPLOY_TEST_SKIP_RELEASE_VALIDATION requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1'
+case "$DEPLOY_DEBUG_LEVEL" in off | debug | warn) ;; *) die 'DEPLOY_DEBUG_LEVEL must be off, debug, or warn' ;; esac
+if [[ "$DEPLOY_DEBUG_LEVEL" == debug ]]; then
+	PS4='+ deploy-controller:${LINENO}: '
+	set -x
+fi
 [[ "$PLATFORM_TEST_FAST_VALIDATE" == 0 || "$PLATFORM_TEST_FAST_VALIDATE" == 1 ]] || die 'PLATFORM_TEST_FAST_VALIDATE must be 0 or 1'
 [[ -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" || "$PLATFORM_TEST_ONLY_DESCRIPTOR" =~ ^[a-z][a-z0-9-]*$ ]] || die 'PLATFORM_TEST_ONLY_DESCRIPTOR must be a valid application ID'
 [[ "$PLATFORM_TEST_FAST_VALIDATE" == 0 || "$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" == 1 ]] || die 'PLATFORM_TEST_FAST_VALIDATE requires PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1'
