@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2329
 set -Eeuo pipefail
 
 mode="${1:-}"
@@ -38,6 +39,21 @@ if [[ -n "$expected_image_id" ]]; then
 fi
 job="llm-hub-lite-platform-apply-$(printf '%s' "$mode-$sha" | tr -c 'A-Za-z0-9_.-' '-')"
 docker rm -f "$job" >/dev/null 2>&1 || true
+log_pid=''
+cleanup_runner() {
+	local status="${1:-$?}"
+	# Woodpecker can cancel a step while this wrapper is waiting on Docker. The
+	# deployment container must be removed in that case or its child controller
+	# can retain the platform flock and block all later pushes indefinitely.
+	trap - EXIT INT TERM
+	if [[ -n "$log_pid" ]]; then
+		kill "$log_pid" >/dev/null 2>&1 || true
+	fi
+	docker rm -f "$job" >/dev/null 2>&1 || true
+	exit "$status"
+}
+trap cleanup_runner EXIT
+trap 'cleanup_runner 143' INT TERM
 set +e
 # The full runner log is streamed to Woodpecker below; avoid duplicating a
 # short-lived, potentially secret-bearing build log in the Observer stream.
@@ -74,7 +90,6 @@ if [[ "$run_status" -ne 0 ]]; then
 	fi
 	exit "$run_status"
 fi
-log_pid=''
 docker logs -f "$job" &
 log_pid=$!
 status=0
@@ -91,7 +106,6 @@ if [[ "$status" -eq 0 ]]; then
 	[[ "$status" -ne 0 ]] || status="$wait_result"
 fi
 [[ "$stream_status" -eq 0 ]] || docker logs "$job" || true
-docker rm "$job" >/dev/null 2>&1 || true
 if [[ "$status" -ne 0 && -x /usr/local/bin/platformctl ]]; then
 	printf '%s\n' '--- host deployment diagnostics ---' >&2
 	if [[ -n "${CONSUMER_APP_ID:-}" ]]; then
