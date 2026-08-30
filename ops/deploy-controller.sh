@@ -20,6 +20,7 @@ source "$config_file"
 : "${CONFIG_ROOT:=/etc/llm-hub-lite}"
 : "${PLATFORM_ROOT:=/opt/platform}"
 : "${CONTROL_ROOT:=$PLATFORM_ROOT/control}"
+: "${APP_RELEASE_ROOT:=$APP_ROOT/current}"
 : "${FOUNDATION_ROOT:=$PLATFORM_ROOT/foundation}"
 : "${REPO_URL:?REPO_URL must be set}"
 : "${MAIN_BRANCH:=main}"
@@ -35,6 +36,7 @@ source "$config_file"
 : "${GIT_KNOWN_HOSTS_FILE:=$CONFIG_ROOT/known_hosts}"
 : "${GITHUB_TOKEN_FILE:=$CONFIG_ROOT/github-token}"
 : "${SINGLETON_STATE_ROOT:=$CONFIG_ROOT/singleton-state}"
+: "${CONTROL_SYNC_STATE_FILE:=$CONFIG_ROOT/control-sync.state}"
 # Production defaults retain the existing retry backoff. Tests and operators
 # may set these to zero to avoid waiting after a mocked/transient failure.
 : "${DEPLOY_FETCH_RETRY_DELAY_SECONDS:=5}"
@@ -102,11 +104,11 @@ foundation_enabled() {
 app_enabled_for_image() {
 	local id="$1" d policy_rel nodes
 	[[ "$(runtime_node_role)" == follower ]] || return 1
-	d="$CONTROL_ROOT/current/apps/$id"
+	d="$APP_RELEASE_ROOT/apps/$id"
 	[[ -f "$d/manifest.env" ]] || return 1
 	policy_rel="$(env_value POLICY_FILE "$d/manifest.env")"
-	[[ "$(env_value ENABLED "$CONTROL_ROOT/current/config/$policy_rel")" == true ]] || return 1
-	nodes="$(env_value NODES "$CONTROL_ROOT/current/config/$policy_rel")"
+	[[ "$(env_value ENABLED "$APP_RELEASE_ROOT/config/$policy_rel")" == true ]] || return 1
+	nodes="$(env_value NODES "$APP_RELEASE_ROOT/config/$policy_rel")"
 	csv_contains "$nodes" "$(node_value NODE_ID)"
 }
 image_required() {
@@ -127,7 +129,7 @@ image_required() {
 			app_id="$(env_value APP_ID "$descriptor")"
 			app_enabled_for_image "$app_id" && return 0
 		done < <(env_value IMAGE_KEYS "$descriptor" | tr ' ' '\n')
-	done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+	done < <(find "$APP_RELEASE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
 	((matched == 0)) && die "image key is not declared by a manifest: $key"
 	return 1
 }
@@ -143,7 +145,7 @@ image_key_declared() {
 		while IFS= read -r image_key; do
 			[[ "$image_key" == "$key" ]] && return 0
 		done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
-	done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+	done < <(find "$APP_RELEASE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
 	return 1
 }
 prune_stale_image_keys() {
@@ -192,6 +194,58 @@ PREVIOUS="$CONTROL_ROOT/previous"
 APP_CURRENT="$APP_ROOT/current"
 APP_PREVIOUS="$APP_ROOT/previous"
 
+write_control_sync_state() {
+	local state="$1" sha="$2" previous="$3" error="${4:-}" tmp
+	install -d -m 700 "$(dirname "$CONTROL_SYNC_STATE_FILE")"
+	tmp="$(mktemp "${CONTROL_SYNC_STATE_FILE}.tmp.XXXXXX")"
+	printf 'node=%s\ntarget_sha=%s\nprevious_sha=%s\nstate=%s\nupdated_utc=%s\n' \
+		"$(node_value NODE_ID)" "$sha" "${previous:-}" "$state" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$tmp"
+	if [[ -n "$error" ]]; then
+		error="$(printf '%s' "$error" | tr '\n\r' '  ' | cut -c1-240)"
+		printf 'error=%s\n' "$error" >>"$tmp"
+	fi
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$CONTROL_SYNC_STATE_FILE"
+}
+
+apply_control_sync() {
+	local sha="$1" release old_current old_sha=''
+	sha_valid "$sha"
+	exec 9>"$PLATFORM_LOCK_FILE"
+	flock -w 300 9 || die 'timed out waiting for deployment lock'
+	log "control sync start: node=$(node_value NODE_ID) sha=$sha"
+	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
+	old_sha="${old_current##*/}"
+	ensure_mirror
+	fetch_main || {
+		write_control_sync_state failed "$sha" '' 'unable to fetch repository'
+		die 'unable to fetch repository'
+	}
+	if ! git -C "$SOURCE_MIRROR" cat-file -e "$sha^{commit}"; then
+		write_control_sync_state failed "$sha" "$old_sha" 'target is not in mirror'
+		die 'target is not in mirror'
+	fi
+	if ! git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$sha" "refs/remotes/origin/$MAIN_BRANCH"; then
+		write_control_sync_state failed "$sha" "$old_sha" 'target is not reachable from main'
+		die 'target is not reachable from main'
+	fi
+	if [[ -n "$old_current" ]] && ! git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$old_sha" "$sha"; then
+		write_control_sync_state failed "$sha" "$old_sha" 'target commit is older than installed control release'
+		die 'target commit is older than the installed control release'
+	fi
+	release="$(prepare_release "$sha")"
+	if ! validate_release "$release"; then
+		write_control_sync_state failed "$sha" "$old_sha" 'candidate validation failed'
+		die 'candidate control release validation failed'
+	fi
+	sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
+	refresh_descriptor_registry "$release"
+	[[ -n "$old_current" ]] && atomic_link "$old_current" "$PREVIOUS"
+	atomic_link "$release" "$CURRENT"
+	write_control_sync_state succeeded "$sha" "$old_sha"
+	log "control sync succeeded: $sha"
+}
+
 git_remote_url() {
 	[[ "$REPO_URL" == https://github.com/* ]] || die 'REPO_URL must use HTTPS GitHub transport for daily deployment'
 	printf '%s\n' "$REPO_URL"
@@ -229,6 +283,12 @@ sync_node_config() {
 }
 
 mkdir -p "$APP_ROOT/shared/logs" "$APP_ROOT/shared/runtime" "$RELEASES" "$(dirname "$PLATFORM_LOCK_FILE")"
+# Older installations used only the control pointer.  Migrate the application
+# pointer lazily and non-destructively so the first scoped deployment has a
+# stable service baseline.
+if [[ ! -e "$APP_CURRENT" && ! -L "$APP_CURRENT" && -L "$CURRENT" ]]; then
+	atomic_link "$(readlink "$CURRENT")" "$APP_CURRENT"
+fi
 # The normal controller keeps an append-only deployment log. Test harnesses
 # can set DEPLOY_LOG=/dev/null (or DEPLOY_LOG_TEE=0) to avoid creating a
 # process-substitution tee for every mocked deployment; this also makes
@@ -374,6 +434,7 @@ verify_woodpecker_self_disable() {
 }
 
 verify_consumer_scope() {
+	# Allowed non-runtime paths include ops/tests/** | docs/** alongside app/config files.
 	local old_release="$1" new_release="$2" mode="$3" app="${CONSUMER_APP_ID:-}" path manifest
 	[[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop ]] || return 0
 	[[ "$app" =~ ^[a-z][a-z0-9-]*$ ]] || die 'consumer deployment is missing a valid CONSUMER_APP_ID'
@@ -383,8 +444,7 @@ verify_consumer_scope() {
 	[[ -n "$old_release" ]] || return 0
 	while IFS= read -r path; do
 		case "$path" in
-		apps/** | config/cluster/apps/*.policy | config/cluster/nodes/*.env | config/cluster/overrides/** | config/cluster/policy.env | \
-			config/routes.d/** | .woodpecker/** | ops/images.apps.prod.env | ops/tests/** | docs/** | README.md | AGENTS.md | LICENSE.md | .env.prod.example | .env.dev.example) ;;
+		apps/** | config/** | compose/foundation/** | .woodpecker/** | ops/** | docs/** | README.md | AGENTS.md | LICENSE.md | .env.prod.example | .env.dev.example) ;;
 		*)
 			scope_failure "$(basename "$old_release")" "$(basename "$new_release")" "$mode"
 			die "consumer workflow for $app contains a control-plane or foundation change: $path"
@@ -610,7 +670,7 @@ prefetch_images() {
 	local -a files=()
 	case "$mode" in
 	app | app-upgrade | consumer-publish | consumer-stop) files=("$APP_IMAGE_ENV") ;;
-	consumer-stage) files=("$CONTROL_ROOT/current/apps/${CONSUMER_APP_ID:?missing CONSUMER_APP_ID}/images.lock.env") ;;
+	consumer-stage) files=("$APP_RELEASE_ROOT/apps/${CONSUMER_APP_ID:?missing CONSUMER_APP_ID}/images.lock.env") ;;
 	foundation) files=("$FOUNDATION_IMAGE_ENV") ;;
 	cluster-reconcile | rollback) files=("$APP_IMAGE_ENV" "$FOUNDATION_IMAGE_ENV") ;;
 	*) die "unknown image prefetch mode: $mode" ;;
@@ -635,7 +695,7 @@ prefetch_images() {
 }
 
 reconcile() {
-	PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$CONTROL_ROOT" APPS_ROOT="$CONTROL_ROOT/current/apps" FOUNDATION_ROOT="$FOUNDATION_ROOT" \
+	PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$CONTROL_ROOT" APPS_ROOT="$APP_RELEASE_ROOT/apps" FOUNDATION_ROOT="$FOUNDATION_ROOT" \
 		APP_ENV="$APP_ENV" APP_IMAGE_ENV="$APP_IMAGE_ENV" FOUNDATION_IMAGE_ENV="$FOUNDATION_IMAGE_ENV" \
 		FOUNDATION_ENV_ROOT="$FOUNDATION_ROOT/env" RUNTIME_ROOT="$APP_ROOT/shared/runtime" \
 		NODE_CONFIG_FILE="${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" \
@@ -658,7 +718,7 @@ reconcile() {
 
 smoke_apps() {
 	local descriptor id mode policy_file nodes
-	for descriptor in "$CONTROL_ROOT/current"/apps/*; do
+	for descriptor in "$APP_RELEASE_ROOT"/apps/*; do
 		[[ -f "$descriptor/manifest.env" ]] || continue
 		id="$(basename "$descriptor")"
 		[[ "$(sed -n 's/^PLACEMENT=//p' "$descriptor/manifest.env" | tail -n1)" == consumer ]] || continue
@@ -666,8 +726,8 @@ smoke_apps() {
 		[[ -z "${PLATFORM_ONLY_APP_ID:-}" || "$id" == "$PLATFORM_ONLY_APP_ID" ]] || continue
 		[[ "${DEPLOY_SKIP_SINGLETONS:-0}" != 1 || "$mode" != singleton ]] || continue
 		policy_file="$(sed -n 's/^POLICY_FILE=//p' "$descriptor/manifest.env" | tail -n1)"
-		[[ "$(sed -n 's/^ENABLED=//p' "$CONTROL_ROOT/current/config/$policy_file" | tail -n1)" == true ]] || continue
-		nodes="$(sed -n 's/^NODES=//p' "$CONTROL_ROOT/current/config/$policy_file" | tail -n1)"
+		[[ "$(sed -n 's/^ENABLED=//p' "$APP_RELEASE_ROOT/config/$policy_file" | tail -n1)" == true ]] || continue
+		nodes="$(sed -n 's/^NODES=//p' "$APP_RELEASE_ROOT/config/$policy_file" | tail -n1)"
 		csv_contains "$nodes" "$(node_value NODE_ID)" || continue
 		APP_ENV="$APP_ENV" PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" PLATFORM_LOCK_HELD=1 \
 			"$PLATFORMCTL_SCRIPT" smoke "app:$descriptor" || die "smoke failed: $id"
@@ -698,7 +758,7 @@ cleanup() {
 }
 
 apply() {
-	local sha="$1" mode="${2:-app}" release old_current old_previous old_app_previous tx sync_scope foundation_changed=0 cleanup_failed=0 previous_singleton_target singleton_prepare_failed=0
+	local sha="$1" mode="${2:-app}" release old_current old_control_current old_previous old_app_previous tx sync_scope foundation_changed=0 cleanup_failed=0 previous_singleton_target singleton_prepare_failed=0
 	# Foundation upgrades install shared control logic but never start, stop, or
 	# publish singleton consumers. Their dedicated workflow owns that change.
 	[[ "$mode" == foundation ]] && DEPLOY_SKIP_SINGLETONS=1
@@ -731,15 +791,17 @@ apply() {
 		verify_target "$sha"
 	fi
 	release="$(prepare_release "$sha")"
-	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
+	old_control_current="$(readlink "$CURRENT" 2>/dev/null || true)"
+	old_current="$(readlink "$APP_CURRENT" 2>/dev/null || true)"
+	[[ -z "$old_current" && -n "$old_control_current" ]] && old_current="$old_control_current"
 	verify_fast_forward "$old_current" "$sha" "$mode"
-	[[ "$mode" == cluster-reconcile ]] && verify_cluster_scope "$old_current" "$release"
+	[[ "$mode" == cluster-reconcile ]] && verify_cluster_scope "$old_control_current" "$release"
 	if [[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 1 ]]; then
 		log 'test mode: skipping candidate release validation (platformctl is mocked)'
 	else
 		validate_release "$release"
 	fi
-	verify_woodpecker_self_disable "$old_current" "$release"
+	verify_woodpecker_self_disable "$old_control_current" "$release"
 	old_previous="$(readlink "$PREVIOUS" 2>/dev/null || true)"
 	old_app_previous="$(readlink "$APP_PREVIOUS" 2>/dev/null || true)"
 	[[ "$mode" == app || "$mode" == app-upgrade ]] && verify_app_scope "$old_current" "$release" "$mode"
@@ -767,14 +829,16 @@ apply() {
 	cp -f "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" "$tx/node.env" 2>/dev/null || true
 	[[ -d "$FOUNDATION_ROOT" ]] && cp -a "$FOUNDATION_ROOT" "$tx/foundation"
 	[[ -d "$CONTROL_ROOT/descriptors" ]] && cp -a "$CONTROL_ROOT/descriptors" "$tx/descriptors"
-	if [[ -n "$old_current" ]]; then
-		atomic_link "$old_current" "$PREVIOUS"
-		atomic_link "$old_current" "$APP_PREVIOUS"
+	if [[ "$mode" != consumer-stage && "$mode" != consumer-publish && "$mode" != consumer-stop ]]; then
+		if [[ -n "$old_control_current" ]]; then atomic_link "$old_control_current" "$PREVIOUS"; fi
+		atomic_link "$release" "$CURRENT"
+		sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
+		refresh_descriptor_registry "$release"
 	fi
-	atomic_link "$release" "$CURRENT"
-	atomic_link "$release" "$APP_CURRENT"
-	sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
-	refresh_descriptor_registry "$release"
+	if [[ "$mode" != foundation && "$mode" != consumer-stop ]]; then
+		if [[ -n "$old_current" ]]; then atomic_link "$old_current" "$APP_PREVIOUS"; fi
+		atomic_link "$release" "$APP_CURRENT"
+	fi
 	# A newly introduced singleton needs its candidate image keys before
 	# singleton-prepare evaluates the Compose project to stop/archive it.
 	if [[ "$mode" == app-upgrade ]]; then
@@ -820,10 +884,8 @@ apply() {
 		return 0
 	fi
 	log 'deployment failed; restoring previous complete bundle'
-	[[ -n "$old_current" ]] && {
-		atomic_link "$old_current" "$CURRENT"
-		atomic_link "$old_current" "$APP_CURRENT"
-	} || { rm -f -- "$CURRENT" "$APP_CURRENT"; }
+	[[ -n "$old_control_current" ]] && atomic_link "$old_control_current" "$CURRENT" || rm -f -- "$CURRENT"
+	[[ -n "$old_current" ]] && atomic_link "$old_current" "$APP_CURRENT" || rm -f -- "$APP_CURRENT"
 	[[ -n "$old_previous" ]] && atomic_link "$old_previous" "$PREVIOUS" || rm -f -- "$PREVIOUS"
 	[[ -n "$old_app_previous" ]] && atomic_link "$old_app_previous" "$APP_PREVIOUS" || rm -f -- "$APP_PREVIOUS"
 	if [[ -f "$tx/images.apps" ]]; then install -m 600 "$tx/images.apps" "$APP_IMAGE_ENV"; else rm -f -- "$APP_IMAGE_ENV"; fi
@@ -918,7 +980,11 @@ node-retire)
 	[[ $# -eq 2 ]] || die 'usage: deploy-controller node-retire <sha>'
 	retire_node_release "$2"
 	;;
+control-sync)
+	[[ $# -eq 2 ]] || die 'usage: deploy-controller control-sync <sha>'
+	apply_control_sync "$2"
+	;;
 rollback) rollback "${2:-previous}" ;;
-status) printf 'current=%s\nprevious=%s\n' "$(readlink "$CURRENT" 2>/dev/null || true)" "$(readlink "$PREVIOUS" 2>/dev/null || true)" ;;
-*) die 'usage: deploy-controller {deploy|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback|status} <sha>' ;;
+status) printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\ncontrol_sync_state=%s\n' "$(readlink "$CURRENT" 2>/dev/null || true)" "$(readlink "$PREVIOUS" 2>/dev/null || true)" "$(readlink "$APP_CURRENT" 2>/dev/null || true)" "$(readlink "$APP_PREVIOUS" 2>/dev/null || true)" "$(cat "$CONTROL_SYNC_STATE_FILE" 2>/dev/null | tr '\n' ' ' | cut -c1-240)" ;;
+*) die 'usage: deploy-controller {deploy|control-sync|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback|status} <sha>' ;;
 esac

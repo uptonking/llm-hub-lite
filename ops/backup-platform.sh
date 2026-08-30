@@ -497,7 +497,7 @@ snapshot() {
 		"$APP_ROOT/current" "$APP_ROOT/previous" "$CONTROL_ROOT/current" "$CONTROL_ROOT/previous"
 		"$CONTROL_ROOT/releases" "$CONTROL_ROOT/descriptors" "$FOUNDATION_ROOT" "$CADDY_DATA_ROOT" "$OBSERVER_DATA_ROOT"
 		"$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel" "$CONFIG_ROOT/platform.env"
-		"$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env"
+		"$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/control-sync.state"
 		"$CONFIG_ROOT/images.apps.previous.env" "$CONFIG_ROOT/images.foundation.previous.env"
 		"$CONFIG_ROOT/image-history" "$CONFIG_ROOT/singleton-state" "$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/node.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token" "$CONFIG_ROOT/restic-password" "$RESTIC_REMOTE_PASSWORD_FILE" "$RESTIC_REMOTE_ENV_FILE" "$STAGE_ROOT/sqlite" "$STAGE_ROOT/pglite" "$STAGE_ROOT/postgres" "$STAGE_ROOT/mongodb" "$STAGE_ROOT/manifest.txt"
 	)

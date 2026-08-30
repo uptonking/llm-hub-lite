@@ -11,7 +11,7 @@ hook automatically after the server is healthy. It is safe to run repeatedly.
 
 ## TL; DR
 
-`git push` → GitHub webhook → Woodpecker server (on the Leader) → picks an app-specific generated workflow from `.woodpecker/` → runs steps on each node's own Woodpecker agent, in a strict order (stage → publish → stop) → each step runs `deploy-controller` locally on that node, which fetches the same commit, validates it, swaps the `current` release symlink, recreates only the
+`git push` → GitHub webhook → Woodpecker server (on the Leader) → sequential `control-sync-<node>` workflows validate and install the immutable control release on every node → targeted app/foundation workflows run on the selected agents in a strict order (stage → publish → stop) → each step runs `deploy-controller` locally on that node, which fetches the same commit, validates it, swaps the service release only after the control release is ready, and recreates only the
 affected Compose projects, health-checks them, and only then does the Leader rewrite the Caddy route and reload. GitHub Actions ( `validate.yml` ) never deploys; it is test-only. There is no SSH fan-out: every node pulls the commit itself.
 
 ## The pieces and where they live
@@ -47,15 +47,13 @@ never removes hand-authored workflows.
 - **Deployment triggers**: `when: event: push, branch: main` with a `path` include list of
 `apps/<app>/**` , `config/cluster/apps/<app>.policy` ,
 `config/cluster/overrides/**/<app>.env` , `config/routes.d/**` , and
-`apps/<app>/images.lock.env` . A push touching unrelated files triggers
+`apps/<app>/route*.caddy` and `apps/<app>/images.lock.env` . A push touching unrelated files triggers
   no deployment workflow. The generated `push-audit` workflow has no path
   filter and runs once on the Leader for every `main` push, printing the SHA
   and changed paths in Woodpecker Activity. This gives webhook and push
   visibility without deploying unrelated changes.
 
-  A push that changes only `ops/`, `.github/`, documentation, or tests is
-  intentionally not a consumer deployment. Foundation/controller changes use
-  the manual foundation-upgrade chain. If Woodpecker reports no pipeline at
+  Foundation runtime changes use generated push workflows (`foundation-reconcile-<node>`) and remain optional prerequisites for app workflows. Controller/runner changes still use the manual foundation/runner workflows. If Woodpecker reports no pipeline at
   all for a push, check the webhook delivery and the Leader's
   `platform-woodpecker-repair.service`; a repaired hook should show a new
   `POST /api/hook` delivery in GitHub.
@@ -72,6 +70,12 @@ It runs the same commit on each node and is the normal push-driven path for
 enabling or disabling foundation services and activating joining nodes. It
 refuses `LEADER_NODE_ID` changes; use bootstrap repair for a break-glass Leader
 promotion or IP change.
+
+Control synchronization is deliberately separate from service reconciliation:
+`control/current` and `control/previous` track the validated repository contract,
+while `apps/current` and `apps/previous` track the last successfully reconciled
+service release. A failed app deployment therefore cannot advance or roll back
+the control pointer, and a reboot always starts consumers from `apps/current`.
 
 For the current placement ( `librechat` on worker-1 and worker-2 as
 active-active; `aichorouter` , `cpapi` , and `cursorapi` as singletons on

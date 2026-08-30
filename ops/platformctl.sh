@@ -12,7 +12,7 @@ PLATFORMCTL_SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(b
 APP_ROOT="${APP_ROOT:-/opt/apps/llm-hub-lite}"
 PLATFORM_ROOT="${PLATFORM_ROOT:-/opt/platform}"
 CONTROL_ROOT="${CONTROL_ROOT:-$PLATFORM_ROOT/control}"
-APPS_ROOT="${APPS_ROOT:-$CONTROL_ROOT/current/apps}"
+APPS_ROOT="${APPS_ROOT:-$APP_ROOT/current/apps}"
 FOUNDATION_ROOT="${FOUNDATION_ROOT:-$PLATFORM_ROOT/foundation}"
 FOUNDATION_MANIFEST_ROOT="${FOUNDATION_MANIFEST_ROOT:-$CONTROL_ROOT/current/compose/foundation/manifests}"
 APP_ENV="${APP_ENV:-$APP_ROOT/shared/.env.prod}"
@@ -1812,10 +1812,15 @@ diagnose() {
 	*) die 'diagnose scope must be foundation, consumers, all, or app:<id>' ;;
 	esac
 	printf 'platformctl diagnose: node=%s role=%s scope=%s\n' "$(node_id)" "$(node_role)" "$scope"
-	printf 'current=%s\nprevious=%s\nmaintenance=%s\n' \
+	printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\nmaintenance=%s\n' \
 		"$(readlink "$CONTROL_ROOT/current" 2>/dev/null || printf '<missing>')" \
 		"$(readlink "$CONTROL_ROOT/previous" 2>/dev/null || printf '<missing>')" \
+		"$(readlink "$APP_ROOT/current" 2>/dev/null || printf '<missing>')" \
+		"$(readlink "$APP_ROOT/previous" 2>/dev/null || printf '<missing>')" \
 		"$(maintenance status 2>/dev/null | tr '\n' ' ' | cut -c1-160)"
+	if [[ "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)" != "$(readlink "$APP_ROOT/current" 2>/dev/null || true)" ]]; then
+		printf 'release_divergence=control_and_service_differ\n'
+	fi
 	while IFS= read -r p; do
 		[[ -n "$p" ]] || continue
 		printf '\n[%s]\n' "$p"

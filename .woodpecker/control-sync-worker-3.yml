@@ -3,25 +3,12 @@ skip_clone: true
 when:
   - event: push
     branch: main
-    path:
-      include:
-        - apps/cpapi/**
-        - config/cluster/apps/cpapi.policy
-        - config/cluster/overrides/**/cpapi.env
-        - apps/cpapi/route*.caddy
-        - apps/cpapi/images.lock.env
-      on_empty: false
 
 depends_on:
-  - consumer-publish-cpapi
   - control-sync-worker-2
-  - name: foundation-reconcile-worker-2
-    optional: true
-  - name: cluster-reconcile-worker-2
-    optional: true
 
 labels:
-  node: worker-2
+  node: worker-3
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
@@ -31,7 +18,7 @@ concurrency:
   group: llm-hub-lite-deployment
 
 steps:
-  stop:
+  control-sync:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -45,4 +32,4 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
-      - CONSUMER_APP_ID=cpapi /usr/local/bin/platform-submit consumer-stop "$CI_COMMIT_SHA"
+      - /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"

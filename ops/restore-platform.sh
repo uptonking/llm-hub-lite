@@ -270,7 +270,7 @@ apply_snapshot() {
 		"$CONTROL_ROOT/current" "$CONTROL_ROOT/previous" "$CONTROL_ROOT/releases" "$CONTROL_ROOT/descriptors" "$FOUNDATION_ROOT" \
 		"$PLATFORM_ROOT/caddy" "$PLATFORM_ROOT/woodpecker" "$PLATFORM_ROOT/beszel" \
 		"$OBSERVER_DATA_ROOT" "$restored_observer_data_root" \
-		"$CONFIG_ROOT/platform.env" "$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/singleton-state" \
+		"$CONFIG_ROOT/platform.env" "$CONFIG_ROOT/images.apps.env" "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/control-sync.state" "$CONFIG_ROOT/singleton-state" \
 		"$CONFIG_ROOT/beszel-initial-credentials" "$CONFIG_ROOT/beszel-enrollment.env" "$CONFIG_ROOT/shared-secrets.env" "$CONFIG_ROOT/deploy-key" "$CONFIG_ROOT/known_hosts" "$CONFIG_ROOT/github-token" \
 		"${RESTIC_REMOTE_PASSWORD_FILE:-$CONFIG_ROOT/restic-remote-password}" "$RESTIC_REMOTE_ENV_FILE"; do
 		add_restore_path "$path"
@@ -280,7 +280,7 @@ apply_snapshot() {
 		[[ -n "$runtime_rel" ]] || continue
 		[[ "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die "unsafe runtime env path in restored manifest: $descriptor"
 		add_restore_path "$CONFIG_ROOT/$runtime_rel"
-	done < <(find -L "$target$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null | sort)
+	done < <(find -L "$target$APP_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null | sort)
 	"$BACKUP_SCRIPT" snapshot pre-restore
 	install -d -m 700 "$(dirname "$MAINTENANCE_FILE")"
 	printf 'started_utc=%s\nreason=restore %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$snapshot" >"$MAINTENANCE_FILE"

@@ -4,8 +4,8 @@ set -Eeuo pipefail
 
 mode="${1:-}"
 sha="${2:-}"
-[[ "$mode" =~ ^(deploy|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|consumer-stage|consumer-publish|consumer-stop|node-retire)$ ]] || {
-	printf 'usage: platform-submit {deploy|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback} <sha-or-previous>\n' >&2
+[[ "$mode" =~ ^(deploy|control-sync|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|consumer-stage|consumer-publish|consumer-stop|node-retire)$ ]] || {
+	printf 'usage: platform-submit {deploy|control-sync|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback} <sha-or-previous>\n' >&2
 	exit 2
 }
 [[ -n "$sha" ]] || {
