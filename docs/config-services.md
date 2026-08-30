@@ -100,11 +100,19 @@ the generated JWT and admin-panel secrets) in the root-only bundle or during
 interactive bootstrap. Production also requires the shared Cloudflare R2
 endpoint, access key, secret key, region ( `auto` ), and bucket through the
 `LIBRECHAT_AWS_*` settings. LibreChat uses `fileStrategy: s3` , so R2 is the
-source of truth for uploads and images across Followers. The initial profile
+source of truth for uploads and images across Followers. OpenRouter is exposed
+as a bounded custom endpoint using only `openrouter/free`; live model discovery
+is disabled so paid models cannot appear unexpectedly. Store the shared key as
+the protected Woodpecker repository secret `LIBRECHAT_OPENROUTER_KEY`, then run
+the generated LibreChat secret workflows for the Leader and the selected
+`worker-1` and `worker-2` Followers. The runtime key remains root-only as
+`LIBRECHAT_OPENROUTER_KEY` and is mapped to LibreChat's `OPENROUTER_KEY` only
+inside the API container. Rotate the repository secret and rerun those three
+manual workflows before recreating LibreChat. Registration is disabled;
+existing accounts and conversations remain available. The initial profile
 intentionally omits local MongoDB, Redis, Meilisearch, RAG, and pgvector.
-Registration is enabled by default as an explicit product choice. URL-encode
-reserved characters in Atlas and Upstash credentials before placing them in
-the connection URI.
+URL-encode reserved characters in Atlas and Upstash credentials before placing
+them in the connection URI.
 
 Aichorouter is the enabled singleton example at `aichorouter.aichorage.de` .
 It uses the upstream New API image plus a tiny HTTP health-probe sidecar, a
