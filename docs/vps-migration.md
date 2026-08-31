@@ -42,22 +42,41 @@ checks blocking. Use `--resume --backup-dir ~/backup-vps` after a transient
 failure; exactly one matching run is required, and verified
 artifacts and completed phases are rechecked before reuse.
 
-For a node whose committed descriptor sets `BACKUP_ENABLED=false`, pass
-`--disable-restic-backup`. The option is off by default. It refuses to proceed
+The transfer mode is persisted in migration state:
+
+- `--transfer-mode local` is the default. The source creates a gzip-compressed archive, the operator computer downloads and verifies it, and then uploads it
+  to the target. Interrupted downloads and uploads retry once, then retain their
+  partial files so `--resume` can continue through SFTP. Checksum-valid completed
+  files are reused after a crash. The full verified archive remains under
+`~/backup-vps` until manual cleanup.
+- `--transfer-mode direct` sends the same gzip-compressed archive from the
+  source VPS straight to the target VPS with a short-lived, forced-SFTP SSH key.
+  This avoids routing the large file through the operator computer. Direct mode
+  keeps only migration metadata locally and retains the recovery archive on the
+  stopped source. Interrupted transfers retry once from zero. On resume,
+  incomplete target and legacy local partial files and stale temporary keys are
+  deleted before a fresh direct upload; a complete target archive is reused only
+  when its SHA-256 checksum passes.
+
+The target validates the compressed archive and its manifest before extracting
+it into the original absolute paths. Target-side archive, checksum, manifest,
+and staging files are removed before bootstrap to conserve disk space.
+
+For a node whose committed descriptor sets `BACKUP_ENABLED=false` , pass
+`--disable-restic-backup` . The option is off by default. It refuses to proceed
 unless the source is already running a release with that policy, persists the
-choice across `--resume`, and disables the snapshot, prune, and repository-check
+choice across `--resume` , and disables the snapshot, prune, and repository-check
 timers on the target. This is the required mode for the small worker-3 VPS.
 Commit and deploy the descriptor change to the source before running the
 migration; the preflight checks both the deployed release and runtime copy.
 
-The archive is stored at `~/backup-vps/<migration>/` with mode 700 (archive and
-manifest mode 600). It preserves application databases (including SQLite WAL
-files and PGlite), releases, certificates, Woodpecker/Beszel identities,
-Observer durable data, and runtime secrets. It excludes local Restic
-repositories/caches, the Observer collector buffer, maintenance markers,
-transaction state, and ephemeral application logs.
-After extraction, the target-side archive is removed before bootstrap to free
-space; the verified local archive remains available for resume and recovery.
+In local mode, the archive is stored at `~/backup-vps/<migration>/` with mode
+700 (archive and manifest mode 600). In direct mode, that directory contains
+only state and the bootstrap copy. The archive preserves application databases
+(including SQLite WAL files and PGlite), releases, certificates,
+Woodpecker/Beszel identities, Observer durable data, and runtime secrets. It
+excludes local Restic repositories/caches, the Observer collector buffer,
+maintenance markers, transaction state, and ephemeral application logs.
 
 ## Worker-3 Example
 
@@ -89,8 +108,25 @@ ops/change-vps-for-consumer-node.sh \
 ```
 
 If a post-quiesce step fails, correct the reported cause and repeat the second
-command with `--resume`. The stored migration state retains the backup choice,
+command with `--resume` . The stored migration state retains the backup choice,
 but repeating `--disable-restic-backup` makes the intended mode explicit.
+
+For direct transfer mode:
+
+```sh
+ops/change-vps-for-consumer-node.sh \
+  --resume \
+  --assume-yes \
+  --disable-restic-backup \
+  --transfer-mode direct \
+  --backup-dir "$HOME/backup-vps" \
+  --known-hosts "$HOME/.ssh/known_hosts" \
+  "$SOURCE_IP" "$TARGET_IP"
+```
+
+Do not omit `--transfer-mode direct` on this first resume from legacy state.
+After it is persisted as state version 4, later resumes automatically retain
+direct mode and reject attempts to change the route.
 
 After the command reports success, verify the migrated node and its disabled
 backup policy:
@@ -110,7 +146,7 @@ ssh "root@$TARGET_IP" '
 '
 ```
 
-All three timer results must be `disabled`. Then verify the Leader-routed
+All three timer results must be `disabled` . Then verify the Leader-routed
 public service and cluster control surfaces:
 
 ```sh

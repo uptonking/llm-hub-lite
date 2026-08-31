@@ -12,6 +12,7 @@ grep -Fq -- '--backup-dir' "$script"
 grep -Fq -- '--known-hosts' "$script"
 grep -Fq -- '--strict-dns' "$script"
 grep -Fq -- '--disable-restic-backup' "$script"
+grep -Fq -- '--transfer-mode local|direct' "$script"
 grep -Fq 'DNS checks are advisory' "$script"
 grep -Fq 'scp_opts=(-P "$ssh_port"' "$script"
 grep -Fq 'StrictHostKeyChecking=yes' "$script"
@@ -37,6 +38,7 @@ grep -Fq -- "--exclude='opt/platform/observer/collector-buffer'" "$script"
 grep -Fq -- "--exclude='opt/platform/*restic*'" "$script"
 grep -Fq 'opt/apps/llm-hub-lite opt/platform etc/llm-hub-lite' "$script"
 grep -Fq 'sha256sum' "$script"
+grep -Fq 'valid_sha256()' "$script"
 grep -Fq 'unexpected archive path' "$script"
 grep -Fq 'BOOTSTRAP_SKIP_SOURCE_UPDATE=1' "$script"
 grep -Fq 'BOOTSTRAP_SKIP_POST_BACKUP=1' "$script"
@@ -51,7 +53,7 @@ grep -Fq 'requires BACKUP_ENABLED=false in the deployed' "$script"
 grep -Fq 'requires BACKUP_ENABLED=false in the source runtime' "$script"
 grep -Fq 'systemctl disable --now platform-backup.timer platform-backup-prune.timer platform-backup-check.timer' "$script"
 grep -Fq 'Restic backups and backup maintenance timers are disabled on the target' "$script"
-grep -Fq 'if phase_at_least local-copy-verified' "$script"
+grep -Fq '[[ "$transfer_mode" == local ]] && phase_at_least local-copy-verified' "$script"
 grep -Fq 'Restic path is inside an archived managed root' "$script"
 grep -Fq 'platform units, backup state, or networks were found' "$script"
 grep -Fq 'test -e /opt/backups/llm-hub-lite' "$script"
@@ -59,9 +61,16 @@ grep -Fq -- "--exclude='opt/platform/*/collector-buffer'" "$script"
 grep -Fq 'archive is missing the source node identity' "$script"
 grep -Fq 'archive is missing the source current release' "$script"
 grep -Fq 'unsafe archive symlink target' "$script"
+grep -Fq 'unsafe archive hard-link target' "$script"
 grep -Fq 'backup_root="$PWD/$backup_root"' "$script"
 grep -Fq 'verify_local_archive()' "$script"
 grep -Fq 'verify_target_archive()' "$script"
+grep -Fq 'checksum=\"\${archive}.sha256\"' "$script"
+if grep -Fq "checksum='\\\$archive.sha256'" "$script"; then
+	printf 'target archive verifier uses a literal checksum filename\n' >&2
+	exit 1
+fi
+grep -Fq 'ensure_target_transfer_dir()' "$script"
 grep -Fq 'verify_target_identity()' "$script"
 grep -Fq 'verify_target_health()' "$script"
 grep -Fq 'PLATFORM_READ_LOCK_WAIT=120 platformctl health' "$script"
@@ -71,6 +80,20 @@ grep -Fq 'resume domain is invalid' "$script"
 grep -Fq 'ROUTE_GROUPS=' "$script"
 grep -Fq 'discover_source_origins()' "$script"
 grep -Fq 'LibreChat' "$script"
+grep -Fq 'VERSION=4' "$script"
+grep -Fq 'TRANSFER_MODE=%s' "$script"
+grep -Fq "tar --numeric-owner --xattrs --acls --selinux -czf" "$script"
+grep -Fq "tar -xzf '\$target_dir/node-migration.tar.gz'" "$script"
+grep -Fq "printf 'put %s %s\\\\nput %s %s\\\\n'" "$script"
+grep -Fq 'Direct-mode partials are deliberately not resumed' "$script"
+grep -Fq 'reusing the complete checksum-verified archive already on the target' "$script"
+grep -Fq 'reusing the complete checksum-verified archive already on this computer' "$script"
+grep -Fq 'purge_stale_transfer_credentials' "$script"
+grep -Fq 'command="internal-sftp"' "$script"
+grep -Fq 'direct archive transfer was interrupted; deleting partials and retrying once from zero' "$script"
+grep -Fq 'target archive upload was interrupted; resuming once' "$script"
+grep -Fq 'local archive download was interrupted; resuming once' "$script"
+grep -Fq 'node-migration.tar.gz.manifest' "$script"
 
 if "$script" --help >/dev/null 2>&1; then :; else
 	printf 'migration help failed\n' >&2
@@ -82,6 +105,10 @@ if "$script" 192.0.2.1 192.0.2.1 >/dev/null 2>&1; then
 fi
 if "$script" 999.0.2.1 192.0.2.2 >/dev/null 2>&1; then
 	printf 'migration accepted invalid source address\n' >&2
+	exit 1
+fi
+if "$script" --transfer-mode relay 192.0.2.1 192.0.2.2 >/dev/null 2>&1; then
+	printf 'migration accepted an invalid transfer mode\n' >&2
 	exit 1
 fi
 
@@ -116,10 +143,26 @@ printf '%s\n' \
 	>"$tmp_root/backup/migration-fixture/migration.state"
 output="$(PATH="$tmp_root/bin:$PATH" "$script" --dry-run --resume --known-hosts "$tmp_root/known_hosts" --backup-dir "$tmp_root/backup" 192.0.2.1 192.0.2.2)"
 grep -Fq 'Restic backups will remain disabled for worker-1' <<<"$output"
+grep -Fq 'transfer mode: local (compressed tar.gz archive)' <<<"$output"
+
+# A legacy run stopped before transfer may adopt direct mode. Dry-run reports
+# the selected route but must not rewrite the old state file.
+output="$(PATH="$tmp_root/bin:$PATH" "$script" --dry-run --resume --transfer-mode direct --known-hosts "$tmp_root/known_hosts" --backup-dir "$tmp_root/backup" 192.0.2.1 192.0.2.2)"
+grep -Fq 'transfer mode: direct (compressed tar.gz archive)' <<<"$output"
+grep -Fqx 'VERSION=3' "$tmp_root/backup/migration-fixture/migration.state"
+
+# Once version 4 persists a route, resume cannot silently switch it.
+sed -i.bak 's/^VERSION=3$/VERSION=4/; /DISABLE_RESTIC_BACKUP=1/a\
+TRANSFER_MODE=direct' "$tmp_root/backup/migration-fixture/migration.state"
+rm -f -- "$tmp_root/backup/migration-fixture/migration.state.bak"
+if PATH="$tmp_root/bin:$PATH" "$script" --dry-run --resume --transfer-mode local --known-hosts "$tmp_root/known_hosts" --backup-dir "$tmp_root/backup" 192.0.2.1 192.0.2.2 >/dev/null 2>&1; then
+	printf 'migration allowed transfer mode to change during resume\n' >&2
+	exit 1
+fi
 
 # Storage policy cannot be changed after a migration has started. Version 2
 # state predates the option and therefore always means backups were not disabled.
-sed -i.bak 's/^VERSION=3$/VERSION=2/' "$tmp_root/backup/migration-fixture/migration.state"
+sed -i.bak 's/^VERSION=4$/VERSION=2/; /^TRANSFER_MODE=/d' "$tmp_root/backup/migration-fixture/migration.state"
 rm -f -- "$tmp_root/backup/migration-fixture/migration.state.bak"
 if PATH="$tmp_root/bin:$PATH" "$script" --dry-run --resume --disable-restic-backup --known-hosts "$tmp_root/known_hosts" --backup-dir "$tmp_root/backup" 192.0.2.1 192.0.2.2 >/dev/null 2>&1; then
 	printf 'migration allowed Restic policy to change during resume\n' >&2

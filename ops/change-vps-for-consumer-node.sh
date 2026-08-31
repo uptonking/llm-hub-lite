@@ -17,7 +17,8 @@ usage() {
 	cat <<'EOF'
 Usage: change-vps-for-consumer-node.sh [--dry-run] [--resume] [--assume-yes]
   [--strict-dns] [--disable-restic-backup] [--backup-dir PATH]
-  [--ssh-port PORT] [--known-hosts PATH] SOURCE_IP TARGET_IP
+  [--transfer-mode local|direct] [--ssh-port PORT] [--known-hosts PATH]
+  SOURCE_IP TARGET_IP
 
 DNS records must already be updated. DNS results are advisory by default because
 local VPN/proxy resolvers may synthesize answers; use --strict-dns to reject a
@@ -25,6 +26,11 @@ mismatch. The source is left stopped after a successful migration.
 
 --disable-restic-backup requires BACKUP_ENABLED=false in the source's committed
 node descriptor, disables the target backup timers, and verifies the setting.
+
+--transfer-mode local (the default) keeps a verified archive on this computer
+before uploading it. direct uses a temporary restricted SSH key so the source
+can send the compressed archive over the VPS-to-VPS route; the verified
+archive remains on the stopped source instead of being copied locally.
 EOF
 }
 die() {
@@ -48,6 +54,7 @@ valid_ipv4() {
 	IFS="$old_ifs"
 }
 valid_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+valid_sha256() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
 csv_has() {
 	local csv=",${1//[[:space:]]/},"
 	[[ "$csv" == *",$2,"* ]]
@@ -64,6 +71,8 @@ resume=0
 assume_yes=0
 strict_dns=0
 disable_restic_backup=0
+transfer_mode=local
+transfer_mode_explicit=0
 ssh_port=22
 backup_root="${HOME:-.}/backup-vps"
 known_hosts="${HOME:-.}/.ssh/known_hosts"
@@ -74,6 +83,12 @@ while (($#)); do
 	--assume-yes) assume_yes=1 ;;
 	--strict-dns) strict_dns=1 ;;
 	--disable-restic-backup) disable_restic_backup=1 ;;
+	--transfer-mode)
+		(($# >= 2)) || die '--transfer-mode requires local or direct'
+		transfer_mode="$2"
+		transfer_mode_explicit=1
+		shift
+		;;
 	--backup-dir)
 		(($# >= 2)) || die '--backup-dir requires a path'
 		backup_root="$2"
@@ -111,6 +126,7 @@ target_ip="$2"
 valid_ipv4 "$source_ip" || die "invalid source IPv4 address: $source_ip"
 valid_ipv4 "$target_ip" || die "invalid target IPv4 address: $target_ip"
 [[ "$source_ip" != "$target_ip" ]] || die 'source and target addresses must differ'
+case "$transfer_mode" in local | direct) ;; *) die '--transfer-mode must be local or direct' ;; esac
 [[ "$ssh_port" =~ ^[0-9]+$ && "$ssh_port" -ge 1 && "$ssh_port" -le 65535 ]] || die 'invalid SSH port'
 case "$backup_root" in
 / | /bin | /boot | /dev | /etc | /home | /opt | /proc | /root | /run | /sbin | /sys | /tmp | /usr | /var | '' | *$'\n'* | *$'\r'*) die "unsafe backup directory: $backup_root" ;;
@@ -123,11 +139,13 @@ have tar || die 'missing command: tar'
 have dig || die 'missing command: dig (DNS preflight is mandatory)'
 have sha256sum || have shasum || die 'missing SHA-256 utility: sha256sum or shasum'
 
-ssh_opts=(-p "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o ConnectTimeout=10)
-scp_opts=(-P "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o ConnectTimeout=10)
+ssh_opts=(-p "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+scp_opts=(-P "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+sftp_opts=(-P "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 ssh_source() { ssh "${ssh_opts[@]}" "root@$source_ip" "$@"; }
 ssh_target() { ssh "${ssh_opts[@]}" "root@$target_ip" "$@"; }
 scp_source() { scp "${scp_opts[@]}" "root@$source_ip:$1" "$2"; }
+scp_to_source() { scp "${scp_opts[@]}" "$1" "root@$source_ip:$2"; }
 scp_target() { scp "${scp_opts[@]}" "$1" "root@$target_ip:$2"; }
 
 state_file=''
@@ -140,6 +158,33 @@ leader_ip=''
 domain=''
 migration_succeeded=0
 source_quiesce_attempted=0
+transfer_credentials_active=0
+transfer_key_id=''
+transfer_key_local=''
+transfer_known_hosts_local=''
+transfer_key_remote=''
+transfer_known_hosts_remote=''
+cleanup_transfer_credentials() {
+	local marker
+	[[ "$transfer_credentials_active" == 1 ]] || return 0
+	marker="$transfer_key_id"
+	if [[ -n "$marker" ]]; then
+		ssh_target "set -Eeuo pipefail; file=/root/.ssh/authorized_keys; if [ -f \"\$file\" ]; then tmp=\$(mktemp /root/.ssh/authorized_keys.XXXXXX); awk -v marker='$marker' 'index(\$0, \" \" marker) == 0' \"\$file\" >\"\$tmp\"; chmod 600 \"\$tmp\"; mv -f \"\$tmp\" \"\$file\"; fi" >/dev/null 2>&1 || true
+	fi
+	if [[ -n "$transfer_key_remote" && -n "$transfer_known_hosts_remote" ]]; then
+		ssh_source "rm -f '$transfer_key_remote' '$transfer_known_hosts_remote'" >/dev/null 2>&1 || true
+	fi
+	[[ -z "$transfer_key_local" ]] || rm -f -- "$transfer_key_local" "$transfer_key_local.pub"
+	[[ -z "$transfer_known_hosts_local" ]] || rm -f -- "$transfer_known_hosts_local"
+	transfer_credentials_active=0
+}
+purge_stale_transfer_credentials() {
+	local marker="$transfer_key_id"
+	[[ -n "$marker" ]] || return 0
+	ssh_target "set -Eeuo pipefail; file=/root/.ssh/authorized_keys; if [ -f \"\$file\" ]; then tmp=\$(mktemp /root/.ssh/authorized_keys.XXXXXX); trap 'rm -f \"\$tmp\"' EXIT HUP INT TERM; awk -v marker='$marker' 'index(\$0, \" \" marker) == 0' \"\$file\" >\"\$tmp\"; chmod 600 \"\$tmp\"; mv -f \"\$tmp\" \"\$file\"; trap - EXIT HUP INT TERM; fi"
+	ssh_source "rm -f '$transfer_key_remote' '$transfer_known_hosts_remote'" >/dev/null 2>&1 || true
+	rm -f -- "$transfer_key_local" "$transfer_key_local.pub" "$transfer_known_hosts_local"
+}
 print_source_recovery() {
 	local recovery='platformctl maintenance end; for unit in /etc/systemd/system/platform-* /etc/systemd/system/platform.target; do [ -e "$unit" ] || continue; systemctl enable "${unit##*/}" >/dev/null 2>&1 || true; done; systemctl daemon-reload; systemctl enable --now platform.target'
 	printf 'migration: source recovery (only if the old VPS must be restored):\n'
@@ -147,6 +192,7 @@ print_source_recovery() {
 }
 migration_exit() {
 	local status="$?"
+	cleanup_transfer_credentials || true
 	if [[ "$status" -ne 0 && "$migration_succeeded" -ne 1 ]]; then
 		if ((dry_run)); then
 			printf 'migration: dry-run failed; no VPS state or local migration artifacts were changed\n' >&2
@@ -160,6 +206,7 @@ migration_exit() {
 		fi
 		printf 'migration: retain %s and use --resume after correcting the cause\n' "${run_dir:-the migration directory}" >&2
 	fi
+	return "$status"
 }
 trap migration_exit EXIT
 set_phase() {
@@ -168,7 +215,7 @@ set_phase() {
 	local temporary
 	temporary="$(mktemp "$state_file.XXXXXX")"
 	if ! {
-		printf 'VERSION=3\nPHASE=%s\nSOURCE_IP=%s\nTARGET_IP=%s\nNODE_ID=%s\nRELEASE_SHA=%s\nLEADER_IP=%s\nDOMAIN=%s\nDISABLE_RESTIC_BACKUP=%s\nRUN_DIR=%s\nARCHIVE=%s\n' "$phase" "$source_ip" "$target_ip" "$node_id" "$release_sha" "$leader_ip" "$domain" "$disable_restic_backup" "$run_dir" "$archive_local"
+		printf 'VERSION=4\nPHASE=%s\nSOURCE_IP=%s\nTARGET_IP=%s\nNODE_ID=%s\nRELEASE_SHA=%s\nLEADER_IP=%s\nDOMAIN=%s\nDISABLE_RESTIC_BACKUP=%s\nTRANSFER_MODE=%s\nRUN_DIR=%s\nARCHIVE=%s\n' "$phase" "$source_ip" "$target_ip" "$node_id" "$release_sha" "$leader_ip" "$domain" "$disable_restic_backup" "$transfer_mode" "$run_dir" "$archive_local"
 	} >"$temporary"; then
 		rm -f -- "$temporary"
 		die "unable to write migration state: $state_file"
@@ -186,7 +233,7 @@ phase_at_least() {
 	[[ "$n" -ge "$w" ]]
 }
 load_resume() {
-	local candidate matches=0 version stored_disable_restic_backup=0 requested_disable_restic_backup="$disable_restic_backup"
+	local candidate matches=0 version stored_disable_restic_backup=0 stored_transfer_mode=local requested_disable_restic_backup="$disable_restic_backup" requested_transfer_mode="$transfer_mode"
 	for candidate in "$backup_root"/*/migration.state; do
 		[[ -f "$candidate" ]] || continue
 		[[ ! -L "$candidate" ]] || continue
@@ -207,6 +254,10 @@ load_resume() {
 	case "$version" in
 	2) stored_disable_restic_backup=0 ;;
 	3) stored_disable_restic_backup="$(sed -n 's/^DISABLE_RESTIC_BACKUP=//p' "$state_file" | tail -n1)" ;;
+	4)
+		stored_disable_restic_backup="$(sed -n 's/^DISABLE_RESTIC_BACKUP=//p' "$state_file" | tail -n1)"
+		stored_transfer_mode="$(sed -n 's/^TRANSFER_MODE=//p' "$state_file" | tail -n1)"
+		;;
 	*) die 'unsupported migration state version' ;;
 	esac
 	[[ "$stored_disable_restic_backup" == 0 || "$stored_disable_restic_backup" == 1 ]] || die 'invalid Restic backup setting in migration state'
@@ -214,15 +265,28 @@ load_resume() {
 		die '--disable-restic-backup cannot be added to an existing migration'
 	fi
 	disable_restic_backup="$stored_disable_restic_backup"
+	if [[ "$version" == 4 ]]; then
+		case "$stored_transfer_mode" in local | direct) ;; *) die 'invalid transfer mode in migration state' ;; esac
+		if ((transfer_mode_explicit)) && [[ "$requested_transfer_mode" != "$stored_transfer_mode" ]]; then
+			die '--transfer-mode cannot be changed for this migration'
+		fi
+		transfer_mode="$stored_transfer_mode"
+	elif ((transfer_mode_explicit)); then
+		# Version 2/3 did not persist a transfer route. It is safe to choose direct
+		# only before either copy phase has completed.
+		[[ "$phase" == preflight || "$phase" == source-stopped || "$phase" == archive-created || "$requested_transfer_mode" == local ]] || die '--transfer-mode cannot be changed after archive transfer'
+		transfer_mode="$requested_transfer_mode"
+	fi
 	valid_phase "$phase" || die "invalid migration phase in state: $phase"
 	run_name="${run_dir##*/}"
 	[[ -d "$run_dir" && ! -L "$run_dir" && "$run_dir" == "$backup_root"/migration-* && "$run_name" =~ ^migration-[A-Za-z0-9._-]+$ && "$archive_local" == "$run_dir/node-migration.tar.gz" && "$node_id" =~ ^[a-z][a-z0-9-]*$ ]] || die 'resume metadata or artifacts are invalid'
 	valid_sha "$release_sha" || die 'resume release SHA is invalid'
 	valid_ipv4 "$leader_ip" || die 'resume Leader IP is invalid'
 	[[ -n "$domain" && "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || die 'resume domain is invalid'
-	if phase_at_least local-copy-verified; then
+	if [[ "$transfer_mode" == local ]] && phase_at_least local-copy-verified; then
 		[[ -s "$archive_local" && -s "$archive_local.sha256" ]] || die 'resume archive artifacts are missing'
 	fi
+	[[ "$version" == 4 || "$dry_run" == 1 ]] || set_phase "$phase"
 }
 if ((resume)); then
 	load_resume
@@ -232,6 +296,13 @@ else
 	[[ ! -e "$run_dir" ]] || die "migration run already exists: $run_dir"
 	state_file="$run_dir/migration.state"
 	archive_local="$run_dir/node-migration.tar.gz"
+fi
+if ! phase_at_least target-copy-verified; then
+	if [[ "$transfer_mode" == local ]]; then
+		have sftp || die 'local transfer requires sftp on this computer'
+	else
+		have ssh-keygen || die 'direct transfer requires ssh-keygen on this computer'
+	fi
 fi
 
 node_value() { ssh_source "sed -n 's/^$1=//p' /etc/llm-hub-lite/node.env 2>/dev/null | tail -n1"; }
@@ -280,6 +351,9 @@ if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; 
 	log 'checking source and target SSH identity, policy, health, storage, and DNS'
 	ssh_source 'true' >/dev/null
 	ssh_target 'true' >/dev/null
+	if [[ "$transfer_mode" == direct ]]; then
+		ssh_source 'command -v sftp >/dev/null 2>&1' || die 'direct transfer requires the SFTP client on the source VPS'
+	fi
 	source_arch="$(ssh_source 'uname -m')"
 	target_arch="$(ssh_target 'uname -m')"
 	[[ "$source_arch" == "$target_arch" ]] || die "architecture mismatch: source=$source_arch target=$target_arch"
@@ -322,10 +396,12 @@ if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; 
 	local_required_kb=$((managed_kb + managed_kb / 2 + 1048576))
 	source_free_kb="$(ssh_source "df -Pk /var/tmp | tail -n 1 | tr -s ' ' | cut -d ' ' -f 4")"
 	target_free_kb="$(ssh_target "df -Pk /root /opt | awk 'NR>1 { if (\$4 ~ /^[0-9]+$/ && (min == \"\" || \$4 < min)) min=\$4 } END {print min}'")"
-	local_free_kb="$(df -Pk "$(dirname "$backup_root")" | awk 'NR==2 {print $4}')"
 	[[ "$source_free_kb" =~ ^[0-9]+$ && "$source_free_kb" -ge "$source_required_kb" ]] || die 'source has insufficient free space for the migration archive'
 	[[ "$target_free_kb" =~ ^[0-9]+$ && "$target_free_kb" -ge "$target_required_kb" ]] || die 'target has insufficient free space for staging and extraction'
-	[[ "$local_free_kb" =~ ^[0-9]+$ && "$local_free_kb" -ge "$local_required_kb" ]] || die 'local backup volume has insufficient free space'
+	if [[ "$transfer_mode" == local ]]; then
+		local_free_kb="$(df -Pk "$(dirname "$backup_root")" | awk 'NR==2 {print $4}')"
+		[[ "$local_free_kb" =~ ^[0-9]+$ && "$local_free_kb" -ge "$local_required_kb" ]] || die 'local backup volume has insufficient free space'
+	fi
 	active_origins="$(discover_source_origins)"
 	[[ -n "$active_origins" ]] || die 'no active origin records were discovered'
 	while IFS='	' read -r origin app route; do
@@ -362,6 +438,7 @@ else
 fi
 if ((dry_run)); then
 	log "preflight passed for follower $node_id ($source_ip -> $target_ip)"
+	log "transfer mode: $transfer_mode (compressed tar.gz archive)"
 	((disable_restic_backup)) && log "Restic backups will remain disabled for $node_id"
 	log 'no source, target, DNS, or local migration state was changed'
 	exit 0
@@ -380,16 +457,234 @@ if ! phase_at_least source-stopped; then
 	set_phase source-stopped
 fi
 archive_remote="/var/tmp/llm-hub-lite-${node_id}-$(basename "$run_dir").tar.gz"
-target_dir="/root/backup-vps/$(basename "$run_dir")"
-verify_local_archive() {
-	local expected
-	[[ -s "$archive_local" && -s "$archive_local.sha256" ]] || die 'local archive artifacts are missing'
+target_root='/root/backup-vps'
+target_dir="$target_root/$(basename "$run_dir")"
+configure_direct_transfer_paths() {
+	transfer_key_id="llm-hub-lite-$run_name"
+	transfer_key_local="$run_dir/.direct-transfer-key"
+	transfer_known_hosts_local="$run_dir/.direct-target-known-hosts"
+	transfer_key_remote="/var/tmp/$transfer_key_id.key"
+	transfer_known_hosts_remote="/var/tmp/$transfer_key_id.known-hosts"
+}
+if [[ "$transfer_mode" == direct ]]; then
+	# A SIGKILL after upload can bypass the EXIT trap. Remove deterministic key
+	# artifacts before reusing a completed upload or starting another attempt.
+	configure_direct_transfer_paths
+	purge_stale_transfer_credentials
+fi
+local_archive_is_valid() {
+	local expected actual
+	[[ -f "$archive_local" && ! -L "$archive_local" && -f "$archive_local.sha256" && ! -L "$archive_local.sha256" ]] || return 1
 	expected="$(sed 's/[[:space:]].*//' "$archive_local.sha256")"
-	[[ "$expected" == "$(sha256_file "$archive_local")" ]] || die 'local archive checksum mismatch'
-	tar -tzf "$archive_local" >/dev/null || die 'local migration archive is unreadable'
+	valid_sha256 "$expected" || return 1
+	actual="$(sha256_file "$archive_local")"
+	[[ "$expected" == "$actual" ]] || return 1
+	tar -tzf "$archive_local" >/dev/null 2>&1
+}
+verify_local_archive() {
+	local_archive_is_valid || die 'local archive artifacts are missing, unsafe, unreadable, or fail checksum verification'
+}
+ensure_target_transfer_dir() {
+	ssh_target "set -Eeuo pipefail; for path in '$target_root' '$target_dir'; do if [ -L \"\$path\" ] || { [ -e \"\$path\" ] && [ ! -d \"\$path\" ]; }; then printf 'unsafe target migration directory: %s\\n' \"\$path\" >&2; exit 1; fi; done; install -d -m 700 '$target_dir'"
 }
 verify_target_archive() {
-	ssh_target "test -s '$target_dir/node-migration.tar.gz' -a -s '$target_dir/node-migration.tar.gz.sha256'; expected=\$(sed 's/[[:space:]].*//' '$target_dir/node-migration.tar.gz.sha256'); actual=\$(sha256sum '$target_dir/node-migration.tar.gz' | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""
+	ssh_target "set -Eeuo pipefail; test -d '$target_root' && test ! -L '$target_root'; test -d '$target_dir' && test ! -L '$target_dir'; archive='$target_dir/node-migration.tar.gz'; checksum=\"\${archive}.sha256\"; test -f \"\$archive\" && test ! -L \"\$archive\" && test -s \"\$archive\"; test -f \"\$checksum\" && test ! -L \"\$checksum\" && test -s \"\$checksum\"; expected=\$(sed 's/[[:space:]].*//' \"\$checksum\"); printf '%s\\n' \"\$expected\" | grep -Eq '^[0-9a-f]{64}\$'; actual=\$(sha256sum \"\$archive\" | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""
+}
+validate_target_archive_manifest() {
+	ssh_target "archive='$target_dir/node-migration.tar.gz' release_sha='$release_sha' bash -s" <<'REMOTE_VALIDATE_ARCHIVE'
+set -Eeuo pipefail
+manifest="${archive}.manifest"
+rm -f "$manifest"
+tar -tzf "$archive" >"$manifest"
+chmod 600 "$manifest"
+grep -Eq '^etc/llm-hub-lite/node\.env$' "$manifest" || { printf 'archive is missing the source node identity\n' >&2; exit 1; }
+grep -Eq "^opt/platform/control/releases/$release_sha(/|$)" "$manifest" || { printf 'archive is missing the source current release\n' >&2; exit 1; }
+while IFS= read -r link_target; do
+	case "$link_target" in *'..'*) printf 'unsafe archive symlink target: %s\n' "$link_target" >&2; exit 1 ;; esac
+	case "$link_target" in
+	/opt/apps/llm-hub-lite | /opt/apps/llm-hub-lite/* | /opt/platform | /opt/platform/* | /etc/llm-hub-lite | /etc/llm-hub-lite/*) ;;
+	/*) printf 'unsafe archive symlink target: %s\n' "$link_target" >&2; exit 1 ;;
+	esac
+done < <(tar -tvzf "$archive" | awk '/^l/ { sub(/^.* -> /, ""); print }')
+while IFS= read -r link_target; do
+	case "$link_target" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;;
+	*) printf 'unsafe archive hard-link target: %s\n' "$link_target" >&2; exit 1 ;;
+	esac
+	case "$link_target" in /* | *'..'*) printf 'unsafe archive hard-link target: %s\n' "$link_target" >&2; exit 1 ;; esac
+done < <(tar -tvzf "$archive" | awk '/^h/ { sub(/^.* link to /, ""); print }')
+while IFS= read -r path; do
+	case "$path" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;; *) printf 'unexpected archive path: %s\n' "$path" >&2; exit 1 ;; esac
+	case "$path" in /* | *'..'*) printf 'unsafe archive path: %s\n' "$path" >&2; exit 1 ;; esac
+	case "$path" in */collector-buffer | */collector-buffer/*) printf 'excluded collector buffer leaked into archive: %s\n' "$path" >&2; exit 1 ;; esac
+done <"$manifest"
+REMOTE_VALIDATE_ARCHIVE
+}
+adopt_legacy_local_partial() {
+	local stable="$archive_local.partial" candidate largest='' size largest_size=0
+	if [[ -e "$stable" || -L "$stable" ]]; then
+		if [[ -f "$stable" && ! -L "$stable" ]]; then
+			return 0
+		fi
+		log 'discarding an unsafe local partial archive'
+		rm -f -- "$stable"
+		[[ ! -e "$stable" && ! -L "$stable" ]] || die "unable to remove unsafe local partial archive: $stable"
+	fi
+	for candidate in "$archive_local.partial."*; do
+		[[ -f "$candidate" && ! -L "$candidate" ]] || continue
+		size="$(wc -c <"$candidate" | tr -d '[:space:]')"
+		[[ "$size" =~ ^[0-9]+$ ]] || continue
+		if ((size > largest_size)); then
+			largest="$candidate"
+			largest_size="$size"
+		fi
+	done
+	if [[ -n "$largest" ]]; then
+		log "adopting interrupted local transfer ($(basename "$largest"), $largest_size bytes)"
+		mv -f -- "$largest" "$stable"
+	fi
+}
+download_source_archive_resumable() {
+	local partial="$archive_local.partial" checksum_partial="$archive_local.sha256.partial" remote_size local_size attempt expected_hash
+	if local_archive_is_valid; then
+		log 'reusing the complete checksum-verified archive already on this computer'
+		rm -f -- "$partial" "$checksum_partial" "$archive_local.partial."* "$archive_local.sha256.partial."*
+		return 0
+	fi
+	rm -f -- "$archive_local" "$archive_local.sha256" "$checksum_partial"
+	adopt_legacy_local_partial
+	remote_size="$(ssh_source "stat -c %s '$archive_remote'")"
+	local_size=0
+	[[ ! -f "$partial" ]] || local_size="$(wc -c <"$partial" | tr -d '[:space:]')"
+	[[ "$remote_size" =~ ^[0-9]+$ && "$local_size" =~ ^[0-9]+$ ]] || die 'unable to determine archive transfer size'
+	if ((local_size > remote_size)); then
+		log 'discarding an oversized partial local archive'
+		rm -f -- "$partial"
+	fi
+	for attempt in 1 2; do
+		if ! (
+			cd -- "$run_dir"
+			printf 'reget %s %s\n' "$archive_remote" "$(basename "$partial")" | sftp -b - "${sftp_opts[@]}" "root@$source_ip"
+		); then
+			if ((attempt == 1)); then
+				log 'local archive download was interrupted; resuming once'
+				continue
+			fi
+			die 'local archive download failed twice; rerun with --resume to keep the partial transfer'
+		fi
+		rm -f -- "$checksum_partial"
+		if ! scp_source "$archive_remote.sha256" "$checksum_partial"; then
+			if ((attempt == 1)); then
+				log 'archive checksum download failed; retrying once'
+				continue
+			fi
+			die 'archive checksum download failed twice; rerun with --resume'
+		fi
+		chmod 600 "$partial" "$checksum_partial"
+		expected_hash="$(sed 's/[[:space:]].*//' "$checksum_partial")"
+		if valid_sha256 "$expected_hash" && [[ "$expected_hash" == "$(sha256_file "$partial")" ]]; then
+			mv -f -- "$partial" "$archive_local"
+			mv -f -- "$checksum_partial" "$archive_local.sha256"
+			rm -f -- "$archive_local.partial."* "$archive_local.sha256.partial."*
+			return 0
+		fi
+		if ((attempt == 1)); then
+			log 'partial local archive failed checksum verification; retrying once from zero'
+			rm -f -- "$partial" "$checksum_partial"
+		fi
+	done
+	die 'local archive checksum mismatch after a clean retry'
+}
+prepare_direct_transfer_credentials() {
+	local lookup public_key
+	ssh_source 'command -v sftp >/dev/null 2>&1' || die 'direct transfer requires the SFTP client on the source VPS'
+	configure_direct_transfer_paths
+	lookup="$target_ip"
+	[[ "$ssh_port" == 22 ]] || lookup="[$target_ip]:$ssh_port"
+	ssh-keygen -F "$lookup" -f "$known_hosts" 2>/dev/null | awk '!/^#/ && NF >= 3 {print}' >"$transfer_known_hosts_local"
+	[[ -s "$transfer_known_hosts_local" ]] || die "target host key is absent from known-hosts for direct transfer: $lookup"
+	rm -f -- "$transfer_key_local" "$transfer_key_local.pub"
+	ssh-keygen -q -t ed25519 -N '' -C "$transfer_key_id" -f "$transfer_key_local"
+	chmod 600 "$transfer_key_local" "$transfer_key_local.pub" "$transfer_known_hosts_local"
+	public_key="$(<"$transfer_key_local.pub")"
+	transfer_credentials_active=1
+	printf 'from="%s",restrict,command="internal-sftp" %s\n' "$source_ip" "$public_key" | ssh_target "set -Eeuo pipefail; umask 077; install -d -m 700 /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys; tmp=\$(mktemp /root/.ssh/authorized_keys.XXXXXX); trap 'rm -f \"\$tmp\"' EXIT HUP INT TERM; grep -Fv ' $transfer_key_id' /root/.ssh/authorized_keys >\"\$tmp\" || true; cat >>\"\$tmp\"; chmod 600 \"\$tmp\"; mv -f \"\$tmp\" /root/.ssh/authorized_keys; trap - EXIT HUP INT TERM"
+	scp_to_source "$transfer_key_local" "$transfer_key_remote"
+	scp_to_source "$transfer_known_hosts_local" "$transfer_known_hosts_remote"
+	ssh_source "chmod 600 '$transfer_key_remote' '$transfer_known_hosts_remote'; printf 'pwd\\n' | sftp -q -b - -P '$ssh_port' -i '$transfer_key_remote' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='$transfer_known_hosts_remote' -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 root@'$target_ip' >/dev/null"
+}
+transfer_archive_direct() {
+	local attempt
+	ensure_target_transfer_dir
+	# Direct-mode partials are deliberately not resumed. A fresh upload avoids
+	# combining bytes from separate attempts or from the former local route.
+	rm -f -- "$archive_local.partial" "$archive_local.sha256.partial" "$archive_local.partial."* "$archive_local.sha256.partial."*
+	ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.partial.'* '$target_dir/node-migration.tar.gz.sha256.partial' '$target_dir/node-migration.tar.gz.sha256.partial.'*"
+	if verify_target_archive >/dev/null 2>&1; then
+		log 'reusing the complete checksum-verified archive already on the target'
+		return 0
+	fi
+	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256' '$target_dir/node-migration.tar.gz.manifest'"
+	prepare_direct_transfer_credentials
+	for attempt in 1 2; do
+		if ! ssh_source "set -Eeuo pipefail; printf 'put %s %s\\nput %s %s\\n' '$archive_remote' '$target_dir/node-migration.tar.gz.partial' '$archive_remote.sha256' '$target_dir/node-migration.tar.gz.sha256' | sftp -b - -P '$ssh_port' -i '$transfer_key_remote' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='$transfer_known_hosts_remote' -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 root@'$target_ip'"; then
+			if ((attempt == 1)); then
+				log 'direct archive transfer was interrupted; deleting partials and retrying once from zero'
+				ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'"
+				continue
+			fi
+			die 'direct archive transfer failed twice; rerun with --resume to start a clean transfer'
+		fi
+		if ssh_target "set -Eeuo pipefail; test -f '$target_dir/node-migration.tar.gz.partial' && test ! -L '$target_dir/node-migration.tar.gz.partial'; test -f '$target_dir/node-migration.tar.gz.sha256' && test ! -L '$target_dir/node-migration.tar.gz.sha256'; expected=\$(sed 's/[[:space:]].*//' '$target_dir/node-migration.tar.gz.sha256'); printf '%s\\n' \"\$expected\" | grep -Eq '^[0-9a-f]{64}\$'; actual=\$(sha256sum '$target_dir/node-migration.tar.gz.partial' | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""; then
+			ssh_target "set -Eeuo pipefail; chmod 600 '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'; mv -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz'"
+			purge_stale_transfer_credentials
+			transfer_credentials_active=0
+			return 0
+		fi
+		if ((attempt == 1)); then
+			log 'direct archive failed checksum verification; deleting partials and retrying once from zero'
+			ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'"
+		fi
+	done
+	die 'direct archive checksum mismatch after a clean retry'
+}
+upload_local_archive_resumable() {
+	local local_size remote_size attempt
+	verify_local_archive
+	ensure_target_transfer_dir
+	if verify_target_archive >/dev/null 2>&1; then
+		log 'reusing the complete checksum-verified archive already on the target'
+		return 0
+	fi
+	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256' '$target_dir/node-migration.tar.gz.manifest'"
+	local_size="$(wc -c <"$archive_local" | tr -d '[:space:]')"
+	remote_size="$(ssh_target "set -Eeuo pipefail; partial='$target_dir/node-migration.tar.gz.partial'; if [ -L \"\$partial\" ]; then rm -f \"\$partial\"; fi; if [ -e \"\$partial\" ] && [ ! -f \"\$partial\" ]; then printf 'unsafe target partial archive: %s\\n' \"\$partial\" >&2; exit 1; fi; if [ -f \"\$partial\" ]; then stat -c %s \"\$partial\"; else printf '0\\n'; fi")"
+	[[ "$local_size" =~ ^[0-9]+$ && "$remote_size" =~ ^[0-9]+$ ]] || die 'unable to determine local upload size'
+	if ((remote_size > local_size)); then
+		log 'discarding an oversized partial archive on the target'
+		ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial'"
+	fi
+	for attempt in 1 2; do
+		if ! (
+			cd -- "$run_dir"
+			printf 'reput %s %s\nput %s %s\n' "$(basename "$archive_local")" "$target_dir/node-migration.tar.gz.partial" "$(basename "$archive_local.sha256")" "$target_dir/node-migration.tar.gz.sha256" |
+				sftp -b - "${sftp_opts[@]}" "root@$target_ip"
+		); then
+			if ((attempt == 1)); then
+				log 'target archive upload was interrupted; resuming once'
+				continue
+			fi
+			die 'target archive upload failed twice; rerun with --resume to keep the partial transfer'
+		fi
+		if ssh_target "set -Eeuo pipefail; test -f '$target_dir/node-migration.tar.gz.partial' && test ! -L '$target_dir/node-migration.tar.gz.partial'; test -f '$target_dir/node-migration.tar.gz.sha256' && test ! -L '$target_dir/node-migration.tar.gz.sha256'; chmod 600 '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'; expected=\$(sed 's/[[:space:]].*//' '$target_dir/node-migration.tar.gz.sha256'); printf '%s\\n' \"\$expected\" | grep -Eq '^[0-9a-f]{64}\$'; actual=\$(sha256sum '$target_dir/node-migration.tar.gz.partial' | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""; then
+			ssh_target "set -Eeuo pipefail; mv -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz'"
+			return 0
+		fi
+		if ((attempt == 1)); then
+			log 'target partial failed checksum verification; retrying once from zero'
+			ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'"
+		fi
+	done
+	die 'target archive checksum mismatch after a clean retry'
 }
 verify_target_identity() {
 	ssh_target "test \"\$(sed -n 's/^NODE_ID=//p' /etc/llm-hub-lite/node.env | tail -n1)\" = '$node_id'; test \"\$(readlink /opt/platform/control/current | sed 's#.*/##')\" = '$release_sha'; if [ '$disable_restic_backup' = 1 ]; then test \"\$(sed -n 's/^BACKUP_ENABLED=//p' /etc/llm-hub-lite/node.env | tail -n1)\" = false; fi"
@@ -410,41 +705,40 @@ verify_target_health() {
 	done
 	die 'target platform health did not pass after retries; inspect target platformctl diagnose output'
 }
-if phase_at_least local-copy-verified; then verify_local_archive; fi
+if [[ "$transfer_mode" == local ]] && phase_at_least local-copy-verified; then verify_local_archive; fi
 if [[ "$phase" == target-copy-verified ]]; then verify_target_archive; fi
 if phase_at_least target-extracted; then
 	verify_target_identity
 	# A crash immediately after advancing the extraction phase may occur before
 	# its cleanup. Repeating this removal is safe and preserves low disk usage.
-	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256'"
+	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256' '$target_dir/node-migration.tar.gz.manifest'"
 fi
 if ! phase_at_least archive-created; then
-	log 'creating the managed-state archive on the stopped source'
-	ssh_source "set -Eeuo pipefail; archive='$archive_remote'; if [ -s \"\$archive\" ] && [ -s \"\$archive.sha256\" ] && [ \"\$(sed 's/[[:space:]].*//' \"\$archive.sha256\")\" = \"\$(sha256sum \"\$archive\" | sed 's/[[:space:]].*//')\" ]; then exit 0; fi; rm -f \"\$archive\" \"\$archive.sha256\"; tar --ignore-failed-read --numeric-owner --xattrs --acls --selinux -czf \"\$archive\" -C / --exclude='collector-buffer' --exclude='collector-buffer/*' --exclude='opt/platform/observer/collector-buffer' --exclude='opt/platform/*/collector-buffer' --exclude='opt/platform/*/*/collector-buffer' --exclude='opt/platform/*restic*' --exclude='opt/platform/*/restic*' --exclude='etc/llm-hub-lite/maintenance' --exclude='etc/llm-hub-lite/node-retirement.*' --exclude='etc/llm-hub-lite/firewall-reconcile.request' --exclude='opt/apps/llm-hub-lite/shared/runtime/transaction.*' --exclude='opt/platform/control/*/transaction.*' --exclude='opt/apps/llm-hub-lite/shared/logs' opt/apps/llm-hub-lite opt/platform etc/llm-hub-lite; chown root:root \"\$archive\"; chmod 600 \"\$archive\"; (cd /var/tmp && sha256sum \"\$(basename \"\$archive\")\" >\"\$(basename \"\$archive\").sha256\"); test \"\$(sed 's/[[:space:]].*//' \"\$archive.sha256\")\" = \"\$(sha256sum \"\$archive\" | sed 's/[[:space:]].*//')\""
+	log 'creating the gzip-compressed managed-state archive on the stopped source'
+	ssh_source "set -Eeuo pipefail; archive='$archive_remote'; if [ -s \"\$archive\" ] && [ -s \"\$archive.sha256\" ] && [ \"\$(sed 's/[[:space:]].*//' \"\$archive.sha256\")\" = \"\$(sha256sum \"\$archive\" | sed 's/[[:space:]].*//')\" ]; then exit 0; fi; rm -f \"\$archive\" \"\$archive.sha256\"; tar --numeric-owner --xattrs --acls --selinux -czf \"\$archive\" -C / --exclude='collector-buffer' --exclude='collector-buffer/*' --exclude='opt/platform/observer/collector-buffer' --exclude='opt/platform/*/collector-buffer' --exclude='opt/platform/*/*/collector-buffer' --exclude='opt/platform/*restic*' --exclude='opt/platform/*/restic*' --exclude='etc/llm-hub-lite/maintenance' --exclude='etc/llm-hub-lite/node-retirement.*' --exclude='etc/llm-hub-lite/firewall-reconcile.request' --exclude='opt/apps/llm-hub-lite/shared/runtime/transaction.*' --exclude='opt/platform/control/*/transaction.*' --exclude='opt/apps/llm-hub-lite/shared/logs' opt/apps/llm-hub-lite opt/platform etc/llm-hub-lite; chown root:root \"\$archive\"; chmod 600 \"\$archive\"; (cd /var/tmp && sha256sum \"\$(basename \"\$archive\")\" >\"\$(basename \"\$archive\").sha256\"); test \"\$(sed 's/[[:space:]].*//' \"\$archive.sha256\")\" = \"\$(sha256sum \"\$archive\" | sed 's/[[:space:]].*//')\""
 	set_phase archive-created
 fi
-if ! phase_at_least local-copy-verified; then
+if [[ "$transfer_mode" == local ]] && ! phase_at_least local-copy-verified; then
 	log 'verifying the local checksum and archive manifest'
-	archive_partial="$archive_local.partial.$$"
-	checksum_partial="$archive_local.sha256.partial.$$"
-	rm -f -- "$archive_partial" "$checksum_partial"
-	scp_source "$archive_remote" "$archive_partial"
-	scp_source "$archive_remote.sha256" "$checksum_partial"
-	chmod 600 "$archive_partial" "$checksum_partial"
-	expected_hash="$(sed 's/[[:space:]].*//' "$checksum_partial")"
-	[[ "$expected_hash" == "$(sha256_file "$archive_partial")" ]] || die 'local archive checksum mismatch'
-	mv -f -- "$archive_partial" "$archive_local"
-	mv -f -- "$checksum_partial" "$archive_local.sha256"
+	download_source_archive_resumable
+	rm -f -- "$run_dir/manifest.txt"
 	tar -tzf "$archive_local" >"$run_dir/manifest.txt"
 	chmod 600 "$run_dir/manifest.txt"
 	grep -Eq '^etc/llm-hub-lite/node\.env$' "$run_dir/manifest.txt" || die 'archive is missing the source node identity'
 	grep -Eq "^opt/platform/control/releases/$release_sha(/|$)" "$run_dir/manifest.txt" || die 'archive is missing the source current release'
 	while IFS= read -r link_target; do
+		case "$link_target" in *'..'*) die "unsafe archive symlink target: $link_target" ;; esac
 		case "$link_target" in
 		/opt/apps/llm-hub-lite | /opt/apps/llm-hub-lite/* | /opt/platform | /opt/platform/* | /etc/llm-hub-lite | /etc/llm-hub-lite/*) ;;
-		/* | *'..'*) die "unsafe archive symlink target: $link_target" ;;
+		/*) die "unsafe archive symlink target: $link_target" ;;
 		esac
 	done < <(tar -tvzf "$archive_local" | awk '/^l/ { sub(/^.* -> /, ""); print }')
+	while IFS= read -r link_target; do
+		case "$link_target" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;;
+		*) die "unsafe archive hard-link target: $link_target" ;;
+		esac
+		case "$link_target" in /* | *'..'*) die "unsafe archive hard-link target: $link_target" ;; esac
+	done < <(tar -tvzf "$archive_local" | awk '/^h/ { sub(/^.* link to /, ""); print }')
 	while IFS= read -r path; do
 		case "$path" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;; *) die "unexpected archive path: $path" ;; esac
 		case "$path" in /* | *'..'*) die "unsafe archive path: $path" ;; esac
@@ -453,20 +747,24 @@ if ! phase_at_least local-copy-verified; then
 	set_phase local-copy-verified
 fi
 if ! phase_at_least target-copy-verified; then
-	log 'copying the verified archive to the fresh target'
-	ssh_target "install -d -m 700 '$target_dir'"
-	scp_target "$archive_local" "$target_dir/node-migration.tar.gz"
-	scp_target "$archive_local.sha256" "$target_dir/node-migration.tar.gz.sha256"
-	ssh_target "chmod 600 '$target_dir/'*; expected=\$(sed 's/[[:space:]].*//' '$target_dir/node-migration.tar.gz.sha256'); actual=\$(sha256sum '$target_dir/node-migration.tar.gz' | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""
+	if [[ "$transfer_mode" == direct ]]; then
+		log 'copying the compressed archive directly from source to target'
+		transfer_archive_direct
+	else
+		log 'copying the verified archive from this computer to the fresh target'
+		upload_local_archive_resumable
+	fi
+	verify_target_archive
+	validate_target_archive_manifest
 	set_phase target-copy-verified
 fi
 if ! phase_at_least target-extracted; then
 	log 'validating and extracting managed state on the target'
 	ssh_target "set -Eeuo pipefail; stage='$target_dir/stage'; rm -rf \"\$stage\"; install -d -m 700 \"\$stage\"; tar -xzf '$target_dir/node-migration.tar.gz' -C \"\$stage\" --no-same-owner; test \"\$(sed -n 's/^NODE_ID=//p' \"\$stage/etc/llm-hub-lite/node.env\" | tail -n1)\" = '$node_id'; test \"\$(readlink \"\$stage/opt/platform/control/current\" | sed 's#.*/##')\" = '$release_sha'; tar -xzf '$target_dir/node-migration.tar.gz' -C / --same-owner --numeric-owner --xattrs --acls --selinux; rm -rf \"\$stage\""
 	set_phase target-extracted
-	# The local archive is the resumable copy. Free scarce target disk before
-	# bootstrap pulls images and builds the deployment runner.
-	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256'"
+	# The source archive (and, in local mode, the local archive) remains the
+	# recovery copy. Free scarce target disk before bootstrap pulls images.
+	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256' '$target_dir/node-migration.tar.gz.manifest'"
 fi
 if ! phase_at_least bootstrap-complete; then
 	log 'installing and running the exact repair bootstrap on the target'
@@ -497,5 +795,10 @@ fi
 migration_succeeded=1
 log "migration complete for $node_id"
 ((disable_restic_backup)) && log 'Restic backups and backup maintenance timers are disabled on the target'
-log "archive retained at $run_dir; remove it manually after verification"
+if [[ "$transfer_mode" == local ]]; then
+	log "archive retained at $run_dir; remove it manually after verification"
+else
+	log "compressed archive retained on source at $archive_remote until source cleanup"
+	log "local migration metadata retained at $run_dir; no full local archive was created"
+fi
 log 'on the old VPS, copy ops/clean-vps.sh outside managed paths and run it manually'
