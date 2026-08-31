@@ -11,6 +11,7 @@ grep -Fq -- '--assume-yes' "$script"
 grep -Fq -- '--backup-dir' "$script"
 grep -Fq -- '--known-hosts' "$script"
 grep -Fq -- '--strict-dns' "$script"
+grep -Fq -- '--disable-restic-backup' "$script"
 grep -Fq 'DNS checks are advisory' "$script"
 grep -Fq 'scp_opts=(-P "$ssh_port"' "$script"
 grep -Fq 'StrictHostKeyChecking=yes' "$script"
@@ -45,6 +46,11 @@ grep -Fq 'bootstrap_source="$repo_root/ops/bootstrap-vps.sh"' "$script"
 grep -Fq 'migration: FAILED during phase' "$script"
 grep -Fq 'preflight failed; no VPS state was changed' "$script"
 grep -Fq 'unsupported migration state version' "$script"
+grep -Fq 'DISABLE_RESTIC_BACKUP=%s' "$script"
+grep -Fq 'requires BACKUP_ENABLED=false in the deployed' "$script"
+grep -Fq 'requires BACKUP_ENABLED=false in the source runtime' "$script"
+grep -Fq 'systemctl disable --now platform-backup.timer platform-backup-prune.timer platform-backup-check.timer' "$script"
+grep -Fq 'Restic backups and backup maintenance timers are disabled on the target' "$script"
 grep -Fq 'if phase_at_least local-copy-verified' "$script"
 grep -Fq 'Restic path is inside an archived managed root' "$script"
 grep -Fq 'platform units, backup state, or networks were found' "$script"
@@ -96,7 +102,7 @@ exit 0
 EOF
 chmod 700 "$tmp_root/bin/ssh"
 printf '%s\n' \
-	'VERSION=2' \
+	'VERSION=3' \
 	'PHASE=archive-created' \
 	'SOURCE_IP=192.0.2.1' \
 	'TARGET_IP=192.0.2.2' \
@@ -104,8 +110,19 @@ printf '%s\n' \
 	'RELEASE_SHA=0123456789012345678901234567890123456789' \
 	'LEADER_IP=192.0.2.254' \
 	'DOMAIN=aichorage.de' \
+	'DISABLE_RESTIC_BACKUP=1' \
 	"RUN_DIR=$tmp_root/backup/migration-fixture" \
 	"ARCHIVE=$tmp_root/backup/migration-fixture/node-migration.tar.gz" \
 	>"$tmp_root/backup/migration-fixture/migration.state"
-PATH="$tmp_root/bin:$PATH" "$script" --dry-run --resume --known-hosts "$tmp_root/known_hosts" --backup-dir "$tmp_root/backup" 192.0.2.1 192.0.2.2 >/dev/null
+output="$(PATH="$tmp_root/bin:$PATH" "$script" --dry-run --resume --known-hosts "$tmp_root/known_hosts" --backup-dir "$tmp_root/backup" 192.0.2.1 192.0.2.2)"
+grep -Fq 'Restic backups will remain disabled for worker-1' <<<"$output"
+
+# Storage policy cannot be changed after a migration has started. Version 2
+# state predates the option and therefore always means backups were not disabled.
+sed -i.bak 's/^VERSION=3$/VERSION=2/' "$tmp_root/backup/migration-fixture/migration.state"
+rm -f -- "$tmp_root/backup/migration-fixture/migration.state.bak"
+if PATH="$tmp_root/bin:$PATH" "$script" --dry-run --resume --disable-restic-backup --known-hosts "$tmp_root/known_hosts" --backup-dir "$tmp_root/backup" 192.0.2.1 192.0.2.2 >/dev/null 2>&1; then
+	printf 'migration allowed Restic policy to change during resume\n' >&2
+	exit 1
+fi
 printf 'change-vps migration checks passed\n'

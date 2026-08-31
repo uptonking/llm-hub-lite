@@ -16,11 +16,15 @@ bootstrap_source="$repo_root/ops/bootstrap-vps.sh"
 usage() {
 	cat <<'EOF'
 Usage: change-vps-for-consumer-node.sh [--dry-run] [--resume] [--assume-yes]
-  [--strict-dns] [--backup-dir PATH] [--ssh-port PORT] [--known-hosts PATH] SOURCE_IP TARGET_IP
+  [--strict-dns] [--disable-restic-backup] [--backup-dir PATH]
+  [--ssh-port PORT] [--known-hosts PATH] SOURCE_IP TARGET_IP
 
 DNS records must already be updated. DNS results are advisory by default because
 local VPN/proxy resolvers may synthesize answers; use --strict-dns to reject a
 mismatch. The source is left stopped after a successful migration.
+
+--disable-restic-backup requires BACKUP_ENABLED=false in the source's committed
+node descriptor, disables the target backup timers, and verifies the setting.
 EOF
 }
 die() {
@@ -59,6 +63,7 @@ dry_run=0
 resume=0
 assume_yes=0
 strict_dns=0
+disable_restic_backup=0
 ssh_port=22
 backup_root="${HOME:-.}/backup-vps"
 known_hosts="${HOME:-.}/.ssh/known_hosts"
@@ -68,6 +73,7 @@ while (($#)); do
 	--resume) resume=1 ;;
 	--assume-yes) assume_yes=1 ;;
 	--strict-dns) strict_dns=1 ;;
+	--disable-restic-backup) disable_restic_backup=1 ;;
 	--backup-dir)
 		(($# >= 2)) || die '--backup-dir requires a path'
 		backup_root="$2"
@@ -162,7 +168,7 @@ set_phase() {
 	local temporary
 	temporary="$(mktemp "$state_file.XXXXXX")"
 	if ! {
-		printf 'VERSION=2\nPHASE=%s\nSOURCE_IP=%s\nTARGET_IP=%s\nNODE_ID=%s\nRELEASE_SHA=%s\nLEADER_IP=%s\nDOMAIN=%s\nRUN_DIR=%s\nARCHIVE=%s\n' "$phase" "$source_ip" "$target_ip" "$node_id" "$release_sha" "$leader_ip" "$domain" "$run_dir" "$archive_local"
+		printf 'VERSION=3\nPHASE=%s\nSOURCE_IP=%s\nTARGET_IP=%s\nNODE_ID=%s\nRELEASE_SHA=%s\nLEADER_IP=%s\nDOMAIN=%s\nDISABLE_RESTIC_BACKUP=%s\nRUN_DIR=%s\nARCHIVE=%s\n' "$phase" "$source_ip" "$target_ip" "$node_id" "$release_sha" "$leader_ip" "$domain" "$disable_restic_backup" "$run_dir" "$archive_local"
 	} >"$temporary"; then
 		rm -f -- "$temporary"
 		die "unable to write migration state: $state_file"
@@ -180,7 +186,7 @@ phase_at_least() {
 	[[ "$n" -ge "$w" ]]
 }
 load_resume() {
-	local candidate matches=0 version
+	local candidate matches=0 version stored_disable_restic_backup=0 requested_disable_restic_backup="$disable_restic_backup"
 	for candidate in "$backup_root"/*/migration.state; do
 		[[ -f "$candidate" ]] || continue
 		[[ ! -L "$candidate" ]] || continue
@@ -198,7 +204,16 @@ load_resume() {
 	domain="$(sed -n 's/^DOMAIN=//p' "$state_file" | tail -n1)"
 	run_dir="$(sed -n 's/^RUN_DIR=//p' "$state_file" | tail -n1)"
 	archive_local="$(sed -n 's/^ARCHIVE=//p' "$state_file" | tail -n1)"
-	[[ "$version" == 2 ]] || die 'unsupported migration state version'
+	case "$version" in
+	2) stored_disable_restic_backup=0 ;;
+	3) stored_disable_restic_backup="$(sed -n 's/^DISABLE_RESTIC_BACKUP=//p' "$state_file" | tail -n1)" ;;
+	*) die 'unsupported migration state version' ;;
+	esac
+	[[ "$stored_disable_restic_backup" == 0 || "$stored_disable_restic_backup" == 1 ]] || die 'invalid Restic backup setting in migration state'
+	if [[ "$requested_disable_restic_backup" == 1 && "$stored_disable_restic_backup" != 1 ]]; then
+		die '--disable-restic-backup cannot be added to an existing migration'
+	fi
+	disable_restic_backup="$stored_disable_restic_backup"
 	valid_phase "$phase" || die "invalid migration phase in state: $phase"
 	run_name="${run_dir##*/}"
 	[[ -d "$run_dir" && ! -L "$run_dir" && "$run_dir" == "$backup_root"/migration-* && "$run_name" =~ ^migration-[A-Za-z0-9._-]+$ && "$archive_local" == "$run_dir/node-migration.tar.gz" && "$node_id" =~ ^[a-z][a-z0-9-]*$ ]] || die 'resume metadata or artifacts are invalid'
@@ -276,6 +291,12 @@ if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; 
 	[[ -n "$leader_node_id" && "$node_id" != "$leader_node_id" ]] || die 'refusing to migrate the Leader node'
 	inventory_state="$(ssh_source "sed -n 's/^NODE_STATE=//p' /opt/platform/control/current/config/cluster/nodes/$node_id.env 2>/dev/null | tail -n1")"
 	[[ "$inventory_state" == active ]] || die "source inventory is not active: $inventory_state"
+	if ((disable_restic_backup)); then
+		inventory_backup_enabled="$(ssh_source "sed -n 's/^BACKUP_ENABLED=//p' /opt/platform/control/current/config/cluster/nodes/$node_id.env 2>/dev/null | tail -n1")"
+		[[ "$inventory_backup_enabled" == false ]] || die "--disable-restic-backup requires BACKUP_ENABLED=false in the deployed $node_id descriptor"
+		runtime_backup_enabled="$(node_value BACKUP_ENABLED)"
+		[[ "$runtime_backup_enabled" == false ]] || die "--disable-restic-backup requires BACKUP_ENABLED=false in the source runtime node configuration"
+	fi
 	release_sha="$(ssh_source "readlink /opt/platform/control/current 2>/dev/null | sed 's#.*/##'")"
 	valid_sha "$release_sha" || die 'source current release is not a full Git SHA'
 	leader_ip="$(node_value LEADER_PUBLIC_IP)"
@@ -341,6 +362,7 @@ else
 fi
 if ((dry_run)); then
 	log "preflight passed for follower $node_id ($source_ip -> $target_ip)"
+	((disable_restic_backup)) && log "Restic backups will remain disabled for $node_id"
 	log 'no source, target, DNS, or local migration state was changed'
 	exit 0
 fi
@@ -370,7 +392,7 @@ verify_target_archive() {
 	ssh_target "test -s '$target_dir/node-migration.tar.gz' -a -s '$target_dir/node-migration.tar.gz.sha256'; expected=\$(sed 's/[[:space:]].*//' '$target_dir/node-migration.tar.gz.sha256'); actual=\$(sha256sum '$target_dir/node-migration.tar.gz' | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""
 }
 verify_target_identity() {
-	ssh_target "test \"\$(sed -n 's/^NODE_ID=//p' /etc/llm-hub-lite/node.env | tail -n1)\" = '$node_id'; test \"\$(readlink /opt/platform/control/current | sed 's#.*/##')\" = '$release_sha'"
+	ssh_target "test \"\$(sed -n 's/^NODE_ID=//p' /etc/llm-hub-lite/node.env | tail -n1)\" = '$node_id'; test \"\$(readlink /opt/platform/control/current | sed 's#.*/##')\" = '$release_sha'; if [ '$disable_restic_backup' = 1 ]; then test \"\$(sed -n 's/^BACKUP_ENABLED=//p' /etc/llm-hub-lite/node.env | tail -n1)\" = false; fi"
 }
 verify_target_health() {
 	local attempt
@@ -389,8 +411,13 @@ verify_target_health() {
 	die 'target platform health did not pass after retries; inspect target platformctl diagnose output'
 }
 if phase_at_least local-copy-verified; then verify_local_archive; fi
-if phase_at_least target-copy-verified; then verify_target_archive; fi
-if phase_at_least target-extracted; then verify_target_identity; fi
+if [[ "$phase" == target-copy-verified ]]; then verify_target_archive; fi
+if phase_at_least target-extracted; then
+	verify_target_identity
+	# A crash immediately after advancing the extraction phase may occur before
+	# its cleanup. Repeating this removal is safe and preserves low disk usage.
+	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256'"
+fi
 if ! phase_at_least archive-created; then
 	log 'creating the managed-state archive on the stopped source'
 	ssh_source "set -Eeuo pipefail; archive='$archive_remote'; if [ -s \"\$archive\" ] && [ -s \"\$archive.sha256\" ] && [ \"\$(sed 's/[[:space:]].*//' \"\$archive.sha256\")\" = \"\$(sha256sum \"\$archive\" | sed 's/[[:space:]].*//')\" ]; then exit 0; fi; rm -f \"\$archive\" \"\$archive.sha256\"; tar --ignore-failed-read --numeric-owner --xattrs --acls --selinux -czf \"\$archive\" -C / --exclude='collector-buffer' --exclude='collector-buffer/*' --exclude='opt/platform/observer/collector-buffer' --exclude='opt/platform/*/collector-buffer' --exclude='opt/platform/*/*/collector-buffer' --exclude='opt/platform/*restic*' --exclude='opt/platform/*/restic*' --exclude='etc/llm-hub-lite/maintenance' --exclude='etc/llm-hub-lite/node-retirement.*' --exclude='etc/llm-hub-lite/firewall-reconcile.request' --exclude='opt/apps/llm-hub-lite/shared/runtime/transaction.*' --exclude='opt/platform/control/*/transaction.*' --exclude='opt/apps/llm-hub-lite/shared/logs' opt/apps/llm-hub-lite opt/platform etc/llm-hub-lite; chown root:root \"\$archive\"; chmod 600 \"\$archive\"; (cd /var/tmp && sha256sum \"\$(basename \"\$archive\")\" >\"\$(basename \"\$archive\").sha256\"); test \"\$(sed 's/[[:space:]].*//' \"\$archive.sha256\")\" = \"\$(sha256sum \"\$archive\" | sed 's/[[:space:]].*//')\""
@@ -437,6 +464,9 @@ if ! phase_at_least target-extracted; then
 	log 'validating and extracting managed state on the target'
 	ssh_target "set -Eeuo pipefail; stage='$target_dir/stage'; rm -rf \"\$stage\"; install -d -m 700 \"\$stage\"; tar -xzf '$target_dir/node-migration.tar.gz' -C \"\$stage\" --no-same-owner; test \"\$(sed -n 's/^NODE_ID=//p' \"\$stage/etc/llm-hub-lite/node.env\" | tail -n1)\" = '$node_id'; test \"\$(readlink \"\$stage/opt/platform/control/current\" | sed 's#.*/##')\" = '$release_sha'; tar -xzf '$target_dir/node-migration.tar.gz' -C / --same-owner --numeric-owner --xattrs --acls --selinux; rm -rf \"\$stage\""
 	set_phase target-extracted
+	# The local archive is the resumable copy. Free scarce target disk before
+	# bootstrap pulls images and builds the deployment runner.
+	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256'"
 fi
 if ! phase_at_least bootstrap-complete; then
 	log 'installing and running the exact repair bootstrap on the target'
@@ -448,16 +478,24 @@ if ! phase_at_least bootstrap-complete; then
 	scp_target "$bootstrap_local" /root/llm-hub-lite-bootstrap.sh
 	ssh_target "chmod 700 /root/llm-hub-lite-bootstrap.sh; test \"\$(sha256sum /root/llm-hub-lite-bootstrap.sh | sed 's/[[:space:]].*//')\" = '$bootstrap_hash'"
 	ssh_target "NODE_ID='$node_id' LEADER_PUBLIC_IP='$leader_ip' DOMAIN_NAME='$domain' BOOTSTRAP_MODE=repair BOOTSTRAP_ASSUME_YES=1 BOOTSTRAP_SKIP_SOURCE_UPDATE=1 BOOTSTRAP_SKIP_POST_BACKUP=1 BOOTSTRAP_RELEASE_SHA='$release_sha' /root/llm-hub-lite-bootstrap.sh"
+	if ((disable_restic_backup)); then
+		log 'disabling Restic backup timers on the target'
+		ssh_target "set -Eeuo pipefail; test \"\$(sed -n 's/^BACKUP_ENABLED=//p' /etc/llm-hub-lite/node.env | tail -n1)\" = false; systemctl disable --now platform-backup.timer platform-backup-prune.timer platform-backup-check.timer >/dev/null"
+	fi
 	set_phase bootstrap-complete
 fi
 if ! phase_at_least verification-complete; then
 	log 'verifying target platform health and source shutdown'
-	ssh_target "test \"\$(sed -n 's/^NODE_ID=//p' /etc/llm-hub-lite/node.env | tail -n1)\" = '$node_id'; test \"\$(readlink /opt/platform/control/current | sed 's#.*/##')\" = '$release_sha'"
+	verify_target_identity
+	if ((disable_restic_backup)); then
+		ssh_target 'test "$(systemctl is-enabled platform-backup.timer 2>/dev/null || true)" = disabled; test "$(systemctl is-enabled platform-backup-prune.timer 2>/dev/null || true)" = disabled; test "$(systemctl is-enabled platform-backup-check.timer 2>/dev/null || true)" = disabled'
+	fi
 	verify_target_health
 	ssh_source 'test -z "$(docker ps --filter label=com.aichorage.platform=llm-hub-lite -q)"; test -f /etc/llm-hub-lite/maintenance'
 	set_phase verification-complete
 fi
 migration_succeeded=1
 log "migration complete for $node_id"
+((disable_restic_backup)) && log 'Restic backups and backup maintenance timers are disabled on the target'
 log "archive retained at $run_dir; remove it manually after verification"
 log 'on the old VPS, copy ops/clean-vps.sh outside managed paths and run it manually'

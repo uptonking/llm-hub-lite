@@ -38,10 +38,17 @@ ops/change-vps-for-consumer-node.sh \
 
 Use `--dry-run` to perform only SSH, identity, target-safety, health, and DNS
 checks without creating migration state. Use `--strict-dns` to make the DNS
-checks blocking. Use `--resume --backup-dir ~/backup-vps`
-
-after a transient failure; exactly one matching run is required, and verified
+checks blocking. Use `--resume --backup-dir ~/backup-vps` after a transient
+failure; exactly one matching run is required, and verified
 artifacts and completed phases are rechecked before reuse.
+
+For a node whose committed descriptor sets `BACKUP_ENABLED=false`, pass
+`--disable-restic-backup`. The option is off by default. It refuses to proceed
+unless the source is already running a release with that policy, persists the
+choice across `--resume`, and disables the snapshot, prune, and repository-check
+timers on the target. This is the required mode for the small worker-3 VPS.
+Commit and deploy the descriptor change to the source before running the
+migration; the preflight checks both the deployed release and runtime copy.
 
 The archive is stored at `~/backup-vps/<migration>/` with mode 700 (archive and
 manifest mode 600). It preserves application databases (including SQLite WAL
@@ -49,6 +56,78 @@ files and PGlite), releases, certificates, Woodpecker/Beszel identities,
 Observer durable data, and runtime secrets. It excludes local Restic
 repositories/caches, the Observer collector buffer, maintenance markers,
 transaction state, and ephemeral application logs.
+After extraction, the target-side archive is removed before bootstrap to free
+space; the verified local archive remains available for resume and recovery.
+
+## Worker-3 Example
+
+Worker-3 runs the singleton Flowy consumer. Its PGlite database and runtime
+secrets are migrated with the managed-state archive. Before cutover, point the
+DNS-only `worker3-flowy-origin.aichorage.de` record to the target VPS, while
+leaving the public `flowy.aichorage.de` record routed through the Leader.
+
+First commit and deploy the worker-3 `BACKUP_ENABLED=false` descriptor change.
+Set `SOURCE_IP` and `TARGET_IP` to the worker's old and new addresses, then run:
+
+```sh
+SOURCE_IP='replace-with-old-worker-3-ip'
+TARGET_IP='replace-with-new-worker-3-ip'
+
+ops/change-vps-for-consumer-node.sh \
+  --dry-run \
+  --disable-restic-backup \
+  --backup-dir "$HOME/backup-vps" \
+  --known-hosts "$HOME/.ssh/known_hosts" \
+  "$SOURCE_IP" "$TARGET_IP"
+
+ops/change-vps-for-consumer-node.sh \
+  --assume-yes \
+  --disable-restic-backup \
+  --backup-dir "$HOME/backup-vps" \
+  --known-hosts "$HOME/.ssh/known_hosts" \
+  "$SOURCE_IP" "$TARGET_IP"
+```
+
+If a post-quiesce step fails, correct the reported cause and repeat the second
+command with `--resume`. The stored migration state retains the backup choice,
+but repeating `--disable-restic-backup` makes the intended mode explicit.
+
+After the command reports success, verify the migrated node and its disabled
+backup policy:
+
+```sh
+ssh "root@$TARGET_IP" '
+  platformctl status
+  platformctl health
+  platformctl diagnose foundation
+  platformctl diagnose consumers
+  grep "^BACKUP_ENABLED=false$" /etc/llm-hub-lite/node.env
+  systemctl is-enabled \
+    platform-backup.timer \
+    platform-backup-prune.timer \
+    platform-backup-check.timer
+  docker ps
+'
+```
+
+All three timer results must be `disabled`. Then verify the Leader-routed
+public service and cluster control surfaces:
+
+```sh
+curl -fsS https://flowy.aichorage.de/api/v1/health
+curl -fsS https://status.aichorage.de/api/health
+curl -fsS https://ci.aichorage.de/ >/dev/null
+
+LEADER_IP='replace-with-leader-ip'
+WORKER_1_IP='replace-with-worker-1-ip'
+WORKER_2_IP='replace-with-worker-2-ip'
+for ip in "$LEADER_IP" "$WORKER_1_IP" "$WORKER_2_IP" "$TARGET_IP"; do
+  ssh "root@$ip" 'platformctl health'
+done
+```
+
+Also confirm that worker-3 is connected in the Beszel and Woodpecker user
+interfaces before cleaning the old VPS.
 
 ## Verify
 
@@ -58,7 +137,7 @@ origins. Public checks remain manual because some records may be
 proxied through Cloudflare:
 
 ```sh
-ssh root@targetIp'platformctl status; platformctl health; docker ps'
+ssh root@targetIp 'platformctl status; platformctl health; docker ps'
 dig +short worker1-chat-origin.aichorage.de
 dig +short observer-ingest.aichorage.de
 curl -fsS https://ci.aichorage.de/

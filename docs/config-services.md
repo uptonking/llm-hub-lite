@@ -516,10 +516,10 @@ Docker restart policies, live-restore, `platform-recovery.service` , and the rec
 Production snapshots use an initialized local Restic repository by default and include runtime configuration, Caddy certificates, Woodpecker/Beszel SQLite online backups, PGlite state, release pointers, and application data without deleting live data. When `RESTIC_REMOTE_ENABLED=true` , the same snapshot is also written to the verified remote repository; set `PRODUCTION_REQUIRE_REMOTE_BACKUP=true` to fail closed when that off-host copy is unavailable. The scheduled timer wakes every 15 minutes for reboot recovery, but `reason=scheduled` snapshots are throttled to one per hour by `RESTIC_SCHEDULE_INTERVAL=3600` ; manual, pre-deployment, post-bootstrap, and recovery snapshots remain immediate. Restic uses a persistent mode-700 cache, one reader, portable `auto` compression, `--skip-if-unchanged` when supported, and low CPU/I/O priority ( `nice` / `ionice` ) to reduce contention with consumer services. Older Restic clients that cannot use a newer requested compression mode automatically fall back to `auto` ; clients without `--skip-if-unchanged` continue without that optional optimization. Override these `RESTIC_*` settings in the root-only `.env.prod` only after measuring the impact.
 
 Nodes with very small disks may set `BACKUP_ENABLED=false` in their committed
-node descriptor (worker-2 is the current example). Their backup timer and
-pre-deployment snapshots exit cleanly without invoking Restic; this removes
-local recovery coverage for that node, so keep important data in the app's
-remote provider or configure an off-host backup strategy separately.
+node descriptor (worker-3 are the current examples). Their backup
+timer and pre-deployment snapshots exit cleanly without invoking Restic; this
+removes local recovery coverage for that node, so keep important data in the
+app's remote provider or configure an off-host backup strategy separately.
 If a bootstrap reports `invalid compression mode` , the installed Restic client is older than the configured mode. Copy the current `ops/bootstrap-vps.sh` to the host and rerun bootstrap; it normalizes the mode to a supported value and persists it in `.env.prod` . The error occurs before a snapshot is written, so do not delete or reinitialize the remote repository. Verify the repair with `platformctl backup snapshot manual` ; inspect remote snapshots with the configured Restic credentials or use `RESTORE_SOURCE=remote platformctl restore extract latest` when a restore test is appropriate.
 Local-only snapshots are the default. Enable the explicit production backup gate when your recovery policy requires an off-host copy.
 
