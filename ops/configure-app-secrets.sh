@@ -171,6 +171,7 @@ fi
 
 cluster_keys="$(env_value CLUSTER_SECRET_KEYS "$manifest")"
 node_keys="$(env_value NODE_SECRET_KEYS "$manifest")"
+upstream_mode="$(env_value UPSTREAM_MODE "$manifest")"
 generated_keys="$(env_value GENERATED_SECRET_KEYS "$manifest")"
 generated_bytes="$(env_value GENERATED_SECRET_BYTES "$manifest")"
 secret_regexes="$(env_value SECRET_REGEXES "$manifest")"
@@ -340,7 +341,15 @@ if [[ "$local_node" == "$leader_node" ]]; then
 	write_secrets "$cluster_keys,$conditional_keys" "$app_env" 1
 	printf 'Reconciled Leader-owned cluster secrets for %s.\n' "$app_id"
 else
-	write_secrets "$cluster_keys,$conditional_keys" "$app_env"
+	write_secrets "$cluster_keys" "$app_env"
+	if [[ "$upstream_mode" == singleton ]]; then
+		# Singleton conditional credentials are target-local and must be loaded
+		# after committed config.env values.  The runtime file is the final
+		# Compose env-file and also keeps these credentials off the Leader.
+		write_secrets "$conditional_keys" "$runtime_file"
+	else
+		write_secrets "$conditional_keys" "$app_env"
+	fi
 	write_secrets "$node_keys" "$runtime_file"
 	printf 'Reconciled application secrets for %s on %s.\n' "$app_id" "$local_node"
 	if ((target_node_explicit)) && ! csv_has "$nodes" "$local_node"; then

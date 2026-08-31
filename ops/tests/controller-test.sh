@@ -57,6 +57,7 @@ for manifest in "$repo_root"/apps/*/manifest.env; do
 done
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/bootstrap-vps.sh"
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/configure-app-secrets.sh"
+grep -Fq 'write_secrets "$conditional_keys" "$runtime_file"' "$repo_root/ops/configure-app-secrets.sh"
 grep -q '^LEADER_NODE_ID=leader$' "$repo_root/config/cluster/policy.env"
 grep -q '^NODE_IDS=leader,worker-1,worker-2,worker-3$' "$repo_root/config/cluster/policy.env"
 grep -q '^REPO_SLUG=uptonking/llm-hub-lite$' "$repo_root/config/cluster/policy.env"
