@@ -1,9 +1,6 @@
 # Follower VPS Migration
 
-`ops/change-vps-for-consumer-node.sh` moves an active follower to a fresh VPS
-while retaining its logical node ID, application data, generated routes,
-foundation identities, and runtime secrets. The source is deliberately left
-stopped after the cutover so Woodpecker and Beszel do not run twice.
+`ops/change-vps-for-consumer-node.sh` moves an active follower to a fresh VPS while retaining its logical node ID, application data, generated routes, foundation identities, and runtime secrets. The source is deliberately left stopped after the cutover so Woodpecker and Beszel do not run twice.
 
 ## Before You Start
 
@@ -15,8 +12,10 @@ Leader. Public records such as `ci` , `status` , and public app names may be
 Cloudflare-proxied and are checked manually after the cutover.
 
 The target must be a new VPS reachable as `root` ; the source must be healthy.
-Pre-populate both VPS host keys in the operator's SSH known-hosts file; the
-command uses strict host-key verification and never accepts new keys.
+If reusing a VPS that was cleaned with `clean-vps.sh` , remove its preserved local Restic tree first ( `/opt/backups/llm-hub-lite` ). Migration intentionally
+does not copy local Restic data, and the target freshness check rejects that
+tree so an old node's backup state cannot be reused accidentally.
+Pre-populate both VPS host keys in the operator's SSH known-hosts file; the command uses strict host-key verification and never accepts new keys.
 
 DNS checks are advisory by default. This allows operation from VPN/proxy
 environments that synthesize DNS answers (for example, `198.18.0.0/15` ). The
@@ -54,8 +53,8 @@ transaction state, and ephemeral application logs.
 ## Verify
 
 The command verifies target identity, release SHA, `platformctl health` , the
-policy-selected foundation and consumer containers, and that the source has no
-managed containers. Public checks remain manual because some records may be
+policy-selected foundation and consumer containers, and that the source has no managed containers. It derives every origin from the enabled manifest route groups, including multi-route consumers such as LibreChat's public and admin
+origins. Public checks remain manual because some records may be
 proxied through Cloudflare:
 
 ```sh

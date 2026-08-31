@@ -220,6 +220,47 @@ else
 fi
 
 node_value() { ssh_source "sed -n 's/^$1=//p' /etc/llm-hub-lite/node.env 2>/dev/null | tail -n1"; }
+discover_source_origins() {
+	# A consumer manifest may expose one origin (singleton apps) or several
+	# origins (LibreChat's public and admin routes). Read route groups so every
+	# enabled origin on the node is checked before DNS cutover.
+	ssh_source "node_id='$node_id' bash -s" <<'REMOTE_ORIGIN_DISCOVERY'
+set -Eeuo pipefail
+current=/opt/platform/control/current
+node_file=/etc/llm-hub-lite/node.env
+csv_has() { case ",${1//[[:space:]]/}," in *",$2,"*) return 0 ;; *) return 1 ;; esac; }
+for manifest in "$current"/apps/*/manifest.env; do
+	[ -f "$manifest" ] || continue
+	app="${manifest%/manifest.env}"
+	app="${app##*/}"
+	rel="$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)"
+	policy="$current/config/$rel"
+	[ "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" = true ] || continue
+	nodes="$(sed -n 's/^NODES=//p' "$policy" | tail -n1)"
+	csv_has "$nodes" "$node_id" || continue
+	groups="$(sed -n 's/^ROUTE_GROUPS=//p' "$manifest" | tail -n1)"
+	[ -n "$groups" ] || continue
+	while IFS= read -r group; do
+		[ -n "$group" ] || continue
+		IFS='|' read -r public_key origin_key upstream_key <<EOF_GROUP
+$group
+EOF_GROUP
+		printf '%s\n' "$origin_key" | grep -Eq '^[A-Z][A-Z0-9_]*$' || {
+			printf 'invalid origin key for %s: %s\n' "$app" "$origin_key" >&2
+			exit 1
+		}
+		origin="$(sed -n "s/^$origin_key=//p" "$node_file" | tail -n1)"
+		[ -n "$origin" ] || {
+			printf 'missing origin value for %s/%s\n' "$app" "$origin_key" >&2
+			exit 1
+		}
+		printf '%s\t%s\t%s\n' "$origin" "$app" "${public_key:-route}"
+	done <<EOF_GROUPS
+$(printf '%s\n' "$groups" | tr ';' '\n')
+EOF_GROUPS
+done | sort -u
+REMOTE_ORIGIN_DISCOVERY
+}
 if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; then
 	log 'checking source and target SSH identity, policy, health, storage, and DNS'
 	ssh_source 'true' >/dev/null
@@ -243,11 +284,15 @@ if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; 
 	domain="$(ssh_source "sed -n 's/^DOMAIN_NAME=//p' /opt/apps/llm-hub-lite/shared/.env.prod 2>/dev/null | tail -n1")"
 	domain="${domain:-aichorage.de}"
 	printf '%s\n' "$domain" | grep -Eq '^[A-Za-z0-9.-]+$' || die 'invalid configured domain'
-	if ! ssh_source 'exec 8>/run/lock/llm-hub-lite/platform.lock; flock -n 8'; then die 'source has an active deployment or platform transaction; retry after it finishes'; fi
-	ssh_source 'platformctl health >/dev/null'
+	# Let platformctl hold the read lock while it checks health. This both waits
+	# for an in-flight deployment to finish and closes the race where a new
+	# transaction starts between a separate lock probe and the health call.
+	if ! ssh_source 'PLATFORM_READ_LOCK_WAIT=120 platformctl health >/dev/null'; then
+		die 'source has an active deployment or platform transaction, or is unhealthy; retry after it finishes'
+	fi
 	if ssh_target 'test -e /opt/platform || test -L /opt/platform || test -e /opt/apps/llm-hub-lite || test -L /opt/apps/llm-hub-lite || test -e /etc/llm-hub-lite || test -L /etc/llm-hub-lite'; then die 'target is not a fresh VPS (managed roots were found)'; fi
 	if ssh_target 'command -v docker >/dev/null 2>&1 && test -n "$(docker ps -aq --filter label=com.aichorage.platform=llm-hub-lite 2>/dev/null)"'; then die 'target is not a fresh VPS (managed containers were found)'; fi
-	if ssh_target 'test -e /root/llm-hub-lite-bootstrap.sh || test -e /root/backup-vps || for path in /etc/systemd/system/platform-*; do test -e "$path" && exit 0; done; command -v docker >/dev/null 2>&1 && docker network ls --format "{{.Name}}" 2>/dev/null | grep -Eq "^(platform_edge|foundation-(woodpecker|observer)_private|app-[a-z0-9-]+_private)$"'; then die 'target is not a fresh VPS (bootstrap artifacts, platform units, backup state, or networks were found)'; fi
+	if ssh_target 'test -e /root/llm-hub-lite-bootstrap.sh || test -e /root/backup-vps || test -e /opt/backups/llm-hub-lite || test -L /opt/backups/llm-hub-lite || for path in /etc/systemd/system/platform-*; do test -e "$path" && exit 0; done; command -v docker >/dev/null 2>&1 && docker network ls --format "{{.Name}}" 2>/dev/null | grep -Eq "^(platform_edge|foundation-(woodpecker|observer)_private|app-[a-z0-9-]+_private)$"'; then die 'target is not a fresh VPS (bootstrap artifacts, platform units, backup state, or networks were found)'; fi
 	ssh_source 'check_root(){ case "$1" in ""|/opt/apps/llm-hub-lite|/opt/apps/llm-hub-lite/*|/opt/platform|/opt/platform/*) return 0;; *) printf "unsupported managed data root: %s\n" "$1" >&2; return 1;; esac; }; check_restic_path(){ case "$1" in ""|auto|false|true|s3:*|rest:*|b2:*|rclone:*|azure:*|gs:*|swift:*|sftp:*) return 0;; /opt/apps/llm-hub-lite|/opt/apps/llm-hub-lite/*|/opt/platform|/opt/platform/*|/etc/llm-hub-lite|/etc/llm-hub-lite/*) printf "Restic path is inside an archived managed root: %s\n" "$1" >&2; return 1;; esac; }; for spec in "/opt/apps/llm-hub-lite/shared/.env.prod:DATA_ROOT" "/opt/platform/foundation/env/caddy.env:CADDY_DATA_ROOT" "/opt/platform/foundation/env/woodpecker.env:WOODPECKER_DATA_ROOT" "/opt/platform/foundation/env/beszel.env:BESZEL_DATA_ROOT" "/opt/platform/foundation/env/observer.env:OBSERVER_DATA_ROOT"; do file=${spec%%:*}; key=${spec#*:}; [ -r "$file" ] || continue; value=$(sed -n "s/^$key=//p" "$file" | tail -n1); check_root "$value" || exit 1; done; for file in /etc/llm-hub-lite/platform.env /opt/apps/llm-hub-lite/shared/.env.prod; do [ -r "$file" ] || continue; for key in RESTIC_REPOSITORY RESTIC_CACHE_DIR RESTIC_STAGE_ROOT BACKUP_ROOT; do value=$(sed -n "s/^$key=//p" "$file" | tail -n1); check_restic_path "$value" || exit 1; done; done'
 	managed_kb="$(ssh_source 'total=0; for path in /opt/apps/llm-hub-lite /opt/platform /etc/llm-hub-lite; do set -- $(du -sk -x "$path" 2>/dev/null || true); case "${1:-}" in *[!0-9]*|"") ;; *) total=$((total + $1));; esac; done; printf "%s\n" "$total"')"
 	[[ "$managed_kb" =~ ^[0-9]+$ ]] || die 'unable to estimate managed state size'
@@ -260,12 +305,13 @@ if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; 
 	[[ "$source_free_kb" =~ ^[0-9]+$ && "$source_free_kb" -ge "$source_required_kb" ]] || die 'source has insufficient free space for the migration archive'
 	[[ "$target_free_kb" =~ ^[0-9]+$ && "$target_free_kb" -ge "$target_required_kb" ]] || die 'target has insufficient free space for staging and extraction'
 	[[ "$local_free_kb" =~ ^[0-9]+$ && "$local_free_kb" -ge "$local_required_kb" ]] || die 'local backup volume has insufficient free space'
-	active_origins="$(ssh_source "node_id='$node_id'; current=/opt/platform/control/current; node_file=/etc/llm-hub-lite/node.env; csv_has(){ case ,\${1//[[:space:]]/}, in *,$2,*) return 0;; esac; }; for manifest in \"\$current\"/apps/*/manifest.env; do [ -f \"\$manifest\" ] || continue; app=\${manifest%/manifest.env}; app=\${app##*/}; rel=\$(sed -n 's/^POLICY_FILE=//p' \"\$manifest\" | tail -n1); policy=\"\$current/config/\$rel\"; [ \"\$(sed -n 's/^ENABLED=//p' \"\$policy\" | tail -n1)\" = true ] || continue; nodes=\$(sed -n 's/^NODES=//p' \"\$policy\" | tail -n1); csv_has \"\$nodes\" \"\$node_id\" || continue; key=\$(sed -n 's/^ORIGIN_HOST_KEY=//p' \"\$manifest\" | tail -n1); [ -n \"\$key\" ] || continue; origin=\$(sed -n \"s/^\$key=//p\" \"\$node_file\" | tail -n1); [ -n \"\$origin\" ] && printf '%s\\t%s\\n' \"\$origin\" \"\$app\"; done")"
+	active_origins="$(discover_source_origins)"
 	[[ -n "$active_origins" ]] || die 'no active origin records were discovered'
-	while IFS='	' read -r origin app; do
+	while IFS='	' read -r origin app route; do
 		[[ "$origin" =~ ^[A-Za-z0-9.-]+$ ]] || die "invalid origin hostname for $app"
 		resolved_a="$(dig +short A "$origin" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
 		resolved_aaaa="$(dig +short AAAA "$origin" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
+		log "DNS: $origin ($app/${route:-route}) A=${resolved_a:-<none>} AAAA=${resolved_aaaa:-<none>}"
 		if ! printf '%s\n' "$resolved_a" | tr ' ' '\n' | grep -Fxq "$target_ip" || [[ -n "$resolved_aaaa" ]]; then
 			if ((strict_dns)); then
 				die "DNS for $origin does not match target $target_ip (A: ${resolved_a:-<none>}; AAAA: ${resolved_aaaa:-<none>})"
@@ -308,7 +354,7 @@ fi
 if ! phase_at_least source-stopped; then
 	log 'quiescing source services under the platform lock'
 	source_quiesce_attempted=1
-	ssh_source 'set -Eeuo pipefail; exec 9>/run/lock/llm-hub-lite/platform.lock; flock -x 9; export PLATFORM_LOCK_HELD=1; platformctl maintenance begin vps-migration; for unit in /etc/systemd/system/platform-* /etc/systemd/system/platform.target; do [ -e "$unit" ] || continue; systemctl disable --now "${unit##*/}" >/dev/null 2>&1 || true; done; platformctl stop all; sync; test -z "$(docker ps --filter label=com.aichorage.platform=llm-hub-lite -q)"'
+	ssh_source 'set -Eeuo pipefail; exec 9>/run/lock/llm-hub-lite/platform.lock; flock -w 120 -x 9 || { printf "timed out waiting for source platform lock\n" >&2; exit 1; }; export PLATFORM_LOCK_HELD=1; platformctl maintenance begin vps-migration; for unit in /etc/systemd/system/platform-* /etc/systemd/system/platform.target; do [ -e "$unit" ] || continue; systemctl disable --now "${unit##*/}" >/dev/null 2>&1 || true; done; platformctl stop all; sync; test -z "$(docker ps --filter label=com.aichorage.platform=llm-hub-lite -q)"'
 	set_phase source-stopped
 fi
 archive_remote="/var/tmp/llm-hub-lite-${node_id}-$(basename "$run_dir").tar.gz"
