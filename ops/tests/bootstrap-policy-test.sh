@@ -118,7 +118,7 @@ grep -Fq 'Skipping image for disabled or inactive service' "$bootstrap"
 grep -Fq 'merge_image_manifest' "$bootstrap"
 grep -Fq 'prune_stale_image_keys' "$bootstrap"
 image_function="$(sed -n '/^csv_contains() {/,/^}/p; /^bootstrap_foundation_enabled() {/,/^}/p; /^app_policy_file() {/,/^}/p; /^app_enabled() {/,/^}/p; /^app_nodes() /p; /^app_target() {/,/^}/p; /^app_active_on_node() {/,/^}/p; /^image_key_declared() {/,/^}/p; /^image_required() {/,/^}/p' "$bootstrap")"
-image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bash -c '
+image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bootstrap_tree="$repo_root" bash -c '
 	set -Eeuo pipefail
 	eval "$IMAGE_FUNCTION"
 	NODE_ROLE=follower NODE_ID=worker-1 NODE_STATE=active
@@ -137,7 +137,7 @@ grep -Fqx 'CURSORAPI_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'OBSERVER_IMAGE=skipped' <<<"$image_selection"
 grep -Fqx 'OBSERVER_LOG_PROXY_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$image_selection"
-leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bash -c '
+leader_image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" bootstrap_tree="$repo_root" bash -c '
 	set -Eeuo pipefail
 	eval "$IMAGE_FUNCTION"
 	NODE_ROLE=leader NODE_ID=leader NODE_STATE=active
@@ -158,7 +158,7 @@ grep -Fqx 'OBSERVER_LOG_SHIPPER_IMAGE=required' <<<"$leader_image_selection"
 image_cleanup_helpers="$(sed -n '/^image_key_declared() {/,/^}/p; /^prune_stale_image_keys() {/,/^}/p' "$bootstrap")"
 stale_image_file="$(mktemp)"
 printf 'CPAPI_IMAGE=current\nCLIPROXY_IMAGE=legacy\n# retained comment\n' >"$stale_image_file"
-IMAGE_CLEANUP_HELPERS="$image_cleanup_helpers" SOURCE_ROOT="$repo_root" bash -c '
+IMAGE_CLEANUP_HELPERS="$image_cleanup_helpers" SOURCE_ROOT="$repo_root" bootstrap_tree="$repo_root" bash -c '
 	set -Eeuo pipefail
 	eval "$IMAGE_CLEANUP_HELPERS"
 	prune_stale_image_keys "$1"
@@ -169,12 +169,18 @@ grep -Fqx '# retained comment' "$stale_image_file"
 rm -f -- "$stale_image_file"
 grep -Fq 'missing cluster policy' "$bootstrap"
 grep -Fq 'BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-first}"' "$bootstrap"
+grep -Fq 'BOOTSTRAP_SKIP_POST_BACKUP="${BOOTSTRAP_SKIP_POST_BACKUP:-0}"' "$bootstrap"
+grep -Fq 'BOOTSTRAP_RELEASE_SHA="${BOOTSTRAP_RELEASE_SHA:-}"' "$bootstrap"
+grep -Fq 'BOOTSTRAP_RELEASE_SHA must be a full 40-character hexadecimal Git commit' "$bootstrap"
+grep -Fq 'BOOTSTRAP_SKIP_POST_BACKUP must be 0 or 1' "$bootstrap"
+grep -Fq 'requested bootstrap release is not installed' "$bootstrap"
+grep -Fq 'Skipping bootstrap post-backup by request' "$bootstrap"
 grep -Fq 'BOOTSTRAP_MODE must be first or repair' "$bootstrap"
 grep -Fq "CLUSTER_CONFIG_VERSION=//p' \"\$policy_file\"" "$bootstrap"
 grep -Fq 'NODE_STATE="$(sed -n' "$bootstrap"
 grep -Fq 'cannot bootstrap a node in $NODE_STATE state' "$bootstrap"
 grep -Fq 'BOOTSTRAP_MODE=repair requires an existing node installation' "$bootstrap"
-grep -Fq 'find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env' "$bootstrap"
+grep -Fq 'find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env' "$bootstrap"
 grep -Fq 'prepare_application_secrets()' "$bootstrap"
 grep -Fq 'persist_application_secrets()' "$bootstrap"
 grep -Fq "s/^CLUSTER_SECRET_KEYS=//p" "$bootstrap"
@@ -237,8 +243,8 @@ target_start_line="$(grep -n '^start_platform_target ' "$bootstrap" | tail -n1 |
 	exit 1
 }
 grep -Fq 'OBSERVER_LOG_PROXY_STREAM_TIMEOUT=$(observer_default_value OBSERVER_LOG_PROXY_STREAM_TIMEOUT 24h)' "$bootstrap"
-grep -Fq 'for foundation_file in "$SOURCE_ROOT"/compose/foundation/*' "$bootstrap"
-grep -Fq 'for foundation_file in "$SOURCE_ROOT"/compose/foundation/manifests/*.env' "$bootstrap"
+grep -Fq 'for foundation_file in "$bootstrap_tree"/compose/foundation/*' "$bootstrap"
+grep -Fq 'for foundation_file in "$bootstrap_tree"/compose/foundation/manifests/*.env' "$bootstrap"
 grep -Fq "printf 'Services\\n  Foundation:" "$bootstrap"
 grep -Fq "printf 'Endpoints\\n'" "$bootstrap"
 grep -Fq "printf '\\nNext tasks\\n'" "$bootstrap"
@@ -282,7 +288,7 @@ leader_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summary
 	set -Eeuo pipefail
 	eval "$SUMMARY_HELPERS"
 	eval "$SUMMARY_FUNCTION"
-	SOURCE_ROOT="'"$repo_root"'" app_env="'"$summary_env"'" NODE_ID=leader NODE_ROLE=leader DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
+	SOURCE_ROOT="'"$repo_root"'" bootstrap_tree="'"$repo_root"'" app_env="'"$summary_env"'" NODE_ID=leader NODE_ROLE=leader DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
 	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"
@@ -294,7 +300,7 @@ follower_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summa
 	set -Eeuo pipefail
 	eval "$SUMMARY_HELPERS"
 	eval "$SUMMARY_FUNCTION"
-	SOURCE_ROOT="'"$repo_root"'" app_env="'"$summary_env"'" NODE_ID=worker-1 NODE_ROLE=follower DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
+	SOURCE_ROOT="'"$repo_root"'" bootstrap_tree="'"$repo_root"'" app_env="'"$summary_env"'" NODE_ID=worker-1 NODE_ROLE=follower DOMAIN_NAME=example.test CONFIG_ROOT=/etc/example inventory_file="$INVENTORY_FILE"
 	librechat_enabled=1 newapi_enabled=0 cpapi_enabled=0 aichorouter_enabled=0
 	print_bootstrap_summary
 ')"

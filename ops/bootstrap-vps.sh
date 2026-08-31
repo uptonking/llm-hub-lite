@@ -15,6 +15,8 @@ REPO_URL="${REPO_URL:-https://github.com/uptonking/llm-hub-lite.git}"
 REPO_SLUG="${REPO_SLUG:-uptonking/llm-hub-lite}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-first}"
+BOOTSTRAP_SKIP_POST_BACKUP="${BOOTSTRAP_SKIP_POST_BACKUP:-0}"
+BOOTSTRAP_RELEASE_SHA="${BOOTSTRAP_RELEASE_SHA:-}"
 APP_ROOT="${APP_ROOT:-/opt/apps/llm-hub-lite}"
 PLATFORM_ROOT="${PLATFORM_ROOT:-/opt/platform}"
 SOURCE_ROOT="${SOURCE_ROOT:-$PLATFORM_ROOT/source}"
@@ -104,6 +106,10 @@ truthy() { [[ "$1" == true || "$1" == TRUE || "$1" == 1 ]]; }
 ((BOOTSTRAP_ENDPOINT_RETRIES <= 3)) || die 'BOOTSTRAP_ENDPOINT_RETRIES must be between 0 and 3'
 [[ "$BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || die 'BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS must be an integer'
 ((BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS >= 1 && BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS <= 60)) || die 'BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS must be between 1 and 60 seconds'
+[[ "$BOOTSTRAP_SKIP_POST_BACKUP" == 0 || "$BOOTSTRAP_SKIP_POST_BACKUP" == 1 ]] || die 'BOOTSTRAP_SKIP_POST_BACKUP must be 0 or 1'
+if [[ -n "$BOOTSTRAP_RELEASE_SHA" ]]; then
+	[[ "$BOOTSTRAP_RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || die 'BOOTSTRAP_RELEASE_SHA must be a full 40-character hexadecimal Git commit'
+fi
 start_platform_target() {
 	local wait_seconds="$1" elapsed=0 state
 	# Recovery is already performed by the foreground sync above. Queue the
@@ -147,12 +153,12 @@ csv_contains() {
 }
 bootstrap_foundation_enabled() {
 	local component="$1" manifest roles policy_rel enabled mandatory
-	manifest="$SOURCE_ROOT/compose/foundation/manifests/$component.env"
+	manifest="$bootstrap_tree/compose/foundation/manifests/$component.env"
 	[[ -f "$manifest" ]] || return 1
 	roles="$(sed -n 's/^ROLES=//p' "$manifest" | tail -n1)"
 	csv_contains "$roles" "$NODE_ROLE" || return 1
 	policy_rel="$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)"
-	enabled="$(sed -n 's/^ENABLED=//p' "$SOURCE_ROOT/config/$policy_rel" | tail -n1)"
+	enabled="$(sed -n 's/^ENABLED=//p' "$bootstrap_tree/config/$policy_rel" | tail -n1)"
 	mandatory="$(sed -n 's/^MANDATORY=//p' "$manifest" | tail -n1)"
 	[[ "$mandatory" != true || "$enabled" == true ]] || die "mandatory foundation service is disabled: $component"
 	[[ "$enabled" == true ]]
@@ -202,7 +208,7 @@ normalize_restic_features() {
 }
 image_key_declared() {
 	local key="$1" manifest image_key
-	for manifest in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
+	for manifest in "$bootstrap_tree"/compose/foundation/manifests/*.env; do
 		[[ -f "$manifest" ]] || continue
 		for image_key in $(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1); do
 			[[ "$image_key" == "$key" ]] && return 0
@@ -212,13 +218,13 @@ image_key_declared() {
 		while IFS= read -r image_key; do
 			[[ "$image_key" == "$key" ]] && return 0
 		done < <(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1 | tr ' ' '\n')
-	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+	done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
 	return 1
 }
 image_required() {
 	local key="$1" manifest image_key app_id component
 	image_key_declared "$key" || die "image key is not declared by a manifest: $key"
-	for manifest in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
+	for manifest in "$bootstrap_tree"/compose/foundation/manifests/*.env; do
 		[[ -f "$manifest" ]] || continue
 		component="$(sed -n 's/^COMPONENT_ID=//p' "$manifest" | tail -n1)"
 		for image_key in $(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1); do
@@ -232,7 +238,7 @@ image_required() {
 			app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 			app_active_on_node "$app_id" && return 0
 		done < <(sed -n 's/^IMAGE_KEYS=//p' "$manifest" | tail -n1 | tr ' ' '\n')
-	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+	done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
 	return 1
 }
 valid_ipv4() {
@@ -800,7 +806,7 @@ fi
 git_fetch_bootstrap() {
 	local attempt
 	for attempt in 1 2 3 4 5; do
-		if git -C "$SOURCE_ROOT" fetch --prune origin "$MAIN_BRANCH"; then
+		if git -C "$source_checkout_root" fetch --prune origin "$MAIN_BRANCH"; then
 			return 0
 		fi
 		((attempt < 5)) || die "unable to fetch $MAIN_BRANCH after $attempt attempts"
@@ -809,12 +815,12 @@ git_fetch_bootstrap() {
 	done
 }
 git_clone_bootstrap() {
-	local attempt clone_root="${SOURCE_ROOT}.bootstrap.$$"
-	[[ ! -e "$SOURCE_ROOT" ]] || die "source root already exists but is not a Git checkout: $SOURCE_ROOT"
+	local attempt clone_root="${source_checkout_root}.bootstrap.$$"
+	[[ ! -e "$source_checkout_root" ]] || die "source root already exists but is not a Git checkout: $source_checkout_root"
 	for attempt in 1 2 3 4 5; do
 		rm -rf -- "$clone_root"
 		if git clone --branch "$MAIN_BRANCH" --single-branch "$source_repo_url" "$clone_root"; then
-			mv -- "$clone_root" "$SOURCE_ROOT"
+			mv -- "$clone_root" "$source_checkout_root"
 			return 0
 		fi
 		((attempt < 5)) || die "unable to clone $MAIN_BRANCH after $attempt attempts"
@@ -823,18 +829,28 @@ git_clone_bootstrap() {
 	done
 }
 
+source_checkout_root="$SOURCE_ROOT"
 if [[ "${BOOTSTRAP_SKIP_SOURCE_UPDATE:-0}" == 1 ]]; then
-	[[ -d "$SOURCE_ROOT/.git" ]] || die "SOURCE_ROOT is not a Git checkout: $SOURCE_ROOT"
+	[[ -d "$source_checkout_root/.git" ]] || die "SOURCE_ROOT is not a Git checkout: $source_checkout_root"
 else
-	if [[ ! -d "$SOURCE_ROOT/.git" ]]; then git_clone_bootstrap; else
-		git -C "$SOURCE_ROOT" remote set-url origin "$source_repo_url"
+	if [[ ! -d "$source_checkout_root/.git" ]]; then git_clone_bootstrap; else
+		git -C "$source_checkout_root" remote set-url origin "$source_repo_url"
 		git_fetch_bootstrap
-		git -C "$SOURCE_ROOT" checkout --quiet "$MAIN_BRANCH"
-		git -C "$SOURCE_ROOT" reset --hard --quiet "origin/$MAIN_BRANCH"
+		git -C "$source_checkout_root" checkout --quiet "$MAIN_BRANCH"
+		git -C "$source_checkout_root" reset --hard --quiet "origin/$MAIN_BRANCH"
 	fi
 fi
 
-policy_file="$SOURCE_ROOT/config/cluster/policy.env"
+# A migration can provide an already-installed release tree. Use it for every
+# policy, manifest, foundation, and runner read while retaining the checkout
+# path above for Git operations and source-update compatibility.
+bootstrap_tree="$SOURCE_ROOT"
+if [[ -n "$BOOTSTRAP_RELEASE_SHA" ]]; then
+	bootstrap_tree="$CONTROL_ROOT/releases/$BOOTSTRAP_RELEASE_SHA"
+	[[ -d "$bootstrap_tree/config/cluster" ]] || die "requested bootstrap release is not installed: $bootstrap_tree"
+fi
+
+policy_file="$bootstrap_tree/config/cluster/policy.env"
 [[ -f "$policy_file" ]] || die "missing cluster policy: $policy_file"
 [[ "$(sed -n 's/^CLUSTER_CONFIG_VERSION=//p' "$policy_file" | tail -n1)" == 3 ]] || die 'unsupported cluster policy version'
 if [[ -z "$NODE_ID" && "$BOOTSTRAP_MODE" == repair && -r "$CONFIG_ROOT/node.env" ]]; then
@@ -885,8 +901,8 @@ NODE_ROLE=leader
 [[ "$NODE_ID" == "$leader_node_id" ]] || NODE_ROLE=follower
 app_policy_file() {
 	local app="$1" rel
-	rel="$(sed -n 's/^POLICY_FILE=//p' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)"
-	printf '%s/config/%s\n' "$SOURCE_ROOT" "$rel"
+	rel="$(sed -n 's/^POLICY_FILE=//p' "$bootstrap_tree/apps/$app/manifest.env" | tail -n1)"
+	printf '%s/config/%s\n' "$bootstrap_tree" "$rel"
 }
 app_enabled() {
 	local app="$1" file
@@ -901,7 +917,7 @@ app_nodes() { sed -n 's/^NODES=//p' "$(app_policy_file "$1")" | tail -n1; }
 app_target() {
 	local app="$1" nodes
 	nodes="$(app_nodes "$app")"
-	[[ "$(sed -n 's/^UPSTREAM_MODE=//p' "$SOURCE_ROOT/apps/$app/manifest.env" | tail -n1)" == singleton && -n "$nodes" && "$nodes" != *,* ]] || return 1
+	[[ "$(sed -n 's/^UPSTREAM_MODE=//p' "$bootstrap_tree/apps/$app/manifest.env" | tail -n1)" == singleton && -n "$nodes" && "$nodes" != *,* ]] || return 1
 	printf '%s\n' "$nodes"
 }
 app_active_on_node() {
@@ -911,7 +927,7 @@ app_active_on_node() {
 	[[ "${NODE_STATE:-}" == active ]] || return 1
 	csv_contains "$(app_nodes "$app")" "$NODE_ID"
 }
-inventory_file="$SOURCE_ROOT/config/cluster/nodes/$NODE_ID.env"
+inventory_file="$bootstrap_tree/config/cluster/nodes/$NODE_ID.env"
 [[ -f "$inventory_file" ]] || die "node is absent from cluster inventory: $NODE_ID"
 [[ "$(sed -n 's/^NODE_ID=//p' "$inventory_file" | tail -n1)" == "$NODE_ID" ]] || die "node inventory identity mismatch: $NODE_ID"
 NODE_STATE="$(sed -n 's/^NODE_STATE=//p' "$inventory_file" | tail -n1)"
@@ -1055,7 +1071,7 @@ prepare_application_secrets() {
 			regex="$(manifest_secret_regex "$manifest" "$key")"
 			prompt_required "$key" "$app_id node-local $key" 1 "$min_length" "$regex"
 		done < <(printf '%s\n' "$keys" | tr ',' '\n')
-	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+	done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 }
 prepare_application_secrets
 if bootstrap_foundation_enabled observer-controller; then
@@ -1127,7 +1143,7 @@ while IFS= read -r manifest; do
 		[[ -n "$public_key" && -n "$public_host" ]] || continue
 		set_derived_key "$app_env" "$public_key" "https://$public_host.$DOMAIN_NAME" "$previous_app_domain" "https://$public_host."
 	done < <(sed -n 's/^PUBLIC_ENDPOINTS=//p' "$manifest" | tail -n1 | tr ';' '\n')
-done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 
 # App tuning is committed in apps/<id>/config.env and may be overridden only
 # by a committed per-node override. Remove keys written by older bootstraps so
@@ -1137,7 +1153,7 @@ while IFS= read -r manifest; do
 	while IFS= read -r config_key; do
 		[[ -n "$config_key" ]] && remove_key "$app_env" "$config_key"
 	done < <(sed -n 's/^ENV_KEYS=//p' "$manifest" | tail -n1 | tr ',' '\n')
-done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 
 chmod 600 "$app_env"
 
@@ -1175,7 +1191,7 @@ persist_application_secrets() {
 			[[ -n "$value" ]] || die "node-local application secret was not prepared: $app_id/$key"
 			set_key_if_changed "$runtime_file" "$key" "$value"
 		done < <(printf '%s\n' "$keys" | tr ',' '\n')
-	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+	done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 }
 persist_application_secrets
 
@@ -1299,8 +1315,8 @@ observer_token_value="$OBSERVER_INGEST_TOKEN"
 # in observer.env still win; generated domains and credentials remain explicit.
 observer_default_value() {
 	local key="$1" fallback="$2" value=''
-	if [[ -r "$SOURCE_ROOT/ops/foundation/observer.env.example" ]]; then
-		value="$(sed -n "s/^${key}=//p" "$SOURCE_ROOT/ops/foundation/observer.env.example" | tail -n1)"
+	if [[ -r "$bootstrap_tree/ops/foundation/observer.env.example" ]]; then
+		value="$(sed -n "s/^${key}=//p" "$bootstrap_tree/ops/foundation/observer.env.example" | tail -n1)"
 	fi
 	printf '%s\n' "${value:-$fallback}"
 }
@@ -1422,8 +1438,8 @@ fi
 restic_password="$CONFIG_ROOT/restic-password"
 [[ -s "$restic_password" ]] || openssl rand -base64 48 >"$restic_password"
 chmod 600 "$restic_password"
-merge_image_manifest "$SOURCE_ROOT/ops/images.foundation.prod.env" "$CONFIG_ROOT/images.foundation.env"
-merge_image_manifest "$SOURCE_ROOT/ops/images.apps.prod.env" "$CONFIG_ROOT/images.apps.env"
+merge_image_manifest "$bootstrap_tree/ops/images.foundation.prod.env" "$CONFIG_ROOT/images.foundation.env"
+merge_image_manifest "$bootstrap_tree/ops/images.apps.prod.env" "$CONFIG_ROOT/images.apps.env"
 prune_stale_image_keys "$CONFIG_ROOT/images.foundation.env"
 prune_stale_image_keys "$CONFIG_ROOT/images.apps.env"
 
@@ -1437,11 +1453,11 @@ if [[ "$NODE_ROLE" == leader ]]; then
 	set_key "$CONFIG_ROOT/shared-secrets.env" OBSERVER_INGEST_TOKEN "$(sed -n 's/^OBSERVER_INGEST_TOKEN=//p' "$observer_env" | tail -n1)"
 fi
 
-sha="$(git -C "$SOURCE_ROOT" rev-parse "origin/$MAIN_BRANCH" 2>/dev/null || git -C "$SOURCE_ROOT" rev-parse HEAD)"
+sha="${BOOTSTRAP_RELEASE_SHA:-$(git -C "$source_checkout_root" rev-parse "origin/$MAIN_BRANCH" 2>/dev/null || git -C "$source_checkout_root" rev-parse HEAD)}"
 release="$CONTROL_ROOT/releases/$sha"
 [[ -e "$release" ]] || {
 	install -d -m 700 "$release"
-	git -C "$SOURCE_ROOT" archive "$sha" | tar -x -C "$release"
+	git -C "$source_checkout_root" archive "$sha" | tar -x -C "$release"
 }
 ln -sfn "$release" "$CONTROL_ROOT/current"
 install -d -m 700 "$APP_ROOT"
@@ -1458,13 +1474,13 @@ for descriptor in "$release"/apps/*; do
 	install -m 600 "$descriptor/manifest.env" "$CONTROL_ROOT/descriptors/$descriptor_id/manifest.env"
 done
 install -d -o root -g root -m 700 "$FOUNDATION_ROOT/manifests"
-for foundation_file in "$SOURCE_ROOT"/compose/foundation/*; do
+for foundation_file in "$bootstrap_tree"/compose/foundation/*; do
 	[[ -f "$foundation_file" ]] || continue
 	foundation_mode=600
 	[[ "$foundation_file" == *.sh ]] && foundation_mode=700
 	install -o root -g root -m "$foundation_mode" "$foundation_file" "$FOUNDATION_ROOT/$(basename "$foundation_file")"
 done
-for foundation_file in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
+for foundation_file in "$bootstrap_tree"/compose/foundation/manifests/*.env; do
 	[[ -f "$foundation_file" ]] || continue
 	install -o root -g root -m 600 "$foundation_file" "$FOUNDATION_ROOT/manifests/$(basename "$foundation_file")"
 done
@@ -1494,7 +1510,7 @@ for pair in \
 	set_key "$platform_env" "${pair%%=*}" "${pair#*=}"
 done
 
-for unit in "$SOURCE_ROOT"/ops/systemd/*; do install -o root -g root -m 644 "$unit" /etc/systemd/system/; done
+for unit in "$bootstrap_tree"/ops/systemd/*; do install -o root -g root -m 644 "$unit" /etc/systemd/system/; done
 systemctl daemon-reload
 while IFS='=' read -r image_key image_ref; do
 	[[ -n "$image_key" && "$image_key" != \#* ]] || continue
@@ -1504,13 +1520,13 @@ while IFS='=' read -r image_key image_ref; do
 	}
 	pull_image "$image_ref"
 done < <(cat "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/images.apps.env")
-runner_base_image="$(sed -n 's/^FROM \([^ ]*\).*$/\1/p' "$SOURCE_ROOT/ops/deploy-runner/Dockerfile" | head -n1)"
+runner_base_image="$(sed -n 's/^FROM \([^ ]*\).*$/\1/p' "$bootstrap_tree/ops/deploy-runner/Dockerfile" | head -n1)"
 [[ -n "$runner_base_image" ]] || die 'unable to determine deployment runner base image'
 pull_image "$runner_base_image"
 docker build --pull=false --build-arg COMPOSE_ARCH="$compose_arch" --build-arg COMPOSE_SHA256="$compose_sha256" \
-	--build-arg APK_LOCK_SHA256_AMD64="$(sha256sum "$SOURCE_ROOT/ops/deploy-runner/apk-packages.lock.amd64" | awk '{print $1}')" \
-	--build-arg APK_LOCK_SHA256_ARM64="$(sha256sum "$SOURCE_ROOT/ops/deploy-runner/apk-packages.lock.arm64" | awk '{print $1}')" \
-	-t llm-hub-lite/deploy-runner:current "$SOURCE_ROOT/ops/deploy-runner"
+	--build-arg APK_LOCK_SHA256_AMD64="$(sha256sum "$bootstrap_tree/ops/deploy-runner/apk-packages.lock.amd64" | awk '{print $1}')" \
+	--build-arg APK_LOCK_SHA256_ARM64="$(sha256sum "$bootstrap_tree/ops/deploy-runner/apk-packages.lock.arm64" | awk '{print $1}')" \
+	-t llm-hub-lite/deploy-runner:current "$bootstrap_tree/ops/deploy-runner"
 runner_image_id="$(docker image inspect --format '{{.Id}}' llm-hub-lite/deploy-runner:current)"
 [[ -n "$runner_image_id" ]] || die 'deployment runner image was not created'
 set_key "$platform_env" PLATFORM_RUNNER_IMAGE_ID "$runner_image_id"
@@ -1546,7 +1562,11 @@ systemctl enable platform.target platform-firewall.service platform-firewall.tim
 # so clear those stale systemd result flags without starting another recovery
 # transaction while the bootstrap lock is held.
 systemctl reset-failed platform.target platform-network.service platform-recovery.service >/dev/null 2>&1 || true
-PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot post-bootstrap
+if [[ "$BOOTSTRAP_SKIP_POST_BACKUP" == 1 ]]; then
+	printf 'Skipping bootstrap post-backup by request (BOOTSTRAP_SKIP_POST_BACKUP=1)\n'
+else
+	PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl backup snapshot post-bootstrap
+fi
 
 # The remaining systemd operations launch platformctl in independent
 # processes, so they must run after the bootstrap lock is closed. No later
@@ -1571,7 +1591,7 @@ print_bootstrap_summary() {
 	foundation='none'
 	consumers='none'
 	disabled='none'
-	for manifest in "$SOURCE_ROOT"/compose/foundation/manifests/*.env; do
+	for manifest in "$bootstrap_tree"/compose/foundation/manifests/*.env; do
 		[[ -f "$manifest" ]] || continue
 		component="$(sed -n 's/^COMPONENT_ID=//p' "$manifest" | tail -n1)"
 		bootstrap_foundation_enabled "$component" || continue
@@ -1593,7 +1613,7 @@ print_bootstrap_summary() {
 		else
 			[[ "$disabled" == none ]] && disabled="$display_name (not on this node)" || disabled+=", $display_name (not on this node)"
 		fi
-	done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+	done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 	for display_name in "${local_consumers[@]-}"; do
 		[[ -n "$display_name" ]] || continue
 		[[ "$consumers" == none ]] && consumers="$display_name" || consumers+=", $display_name"
@@ -1630,7 +1650,7 @@ print_bootstrap_summary() {
 				printf '  %s: %s (%s)\n' "$route_label" "$public_host" "$availability_note"
 				route_index=$((route_index + 1))
 			done < <(printf '%s\n' "$groups" | tr ';' '\n')
-		done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+		done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 	else
 		if [[ "$consumers" != none ]]; then
 			while IFS= read -r manifest; do
@@ -1653,7 +1673,7 @@ print_bootstrap_summary() {
 					printf '  %s origin: https://%s\n' "$route_label" "$origin_host"
 					route_index=$((route_index + 1))
 				done < <(printf '%s\n' "$groups" | tr ';' '\n')
-			done < <(find "$SOURCE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+			done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 		else
 			printf '  No consumer endpoints are enabled on this node.\n'
 		fi

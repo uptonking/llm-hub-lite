@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Run the repository test suites with deterministic, bounded scheduling.
-# Suites use isolated temporary roots; bounded parallel batches reduce local
-# and CI wall-clock time without allowing Docker-heavy tests to overwhelm a
-# developer laptop.
+# Run the repository test suites with bounded, input-ordered scheduling.
+# Suites use isolated temporary roots; a bounded worker queue reduces local and
+# CI wall-clock time without allowing Docker-heavy tests to overwhelm a
+# developer laptop. The queue avoids Bash 4-only `wait -n` so macOS Bash 3.2
+# remains supported.
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -13,7 +14,7 @@ fast)
 	# Keep the two Git/worktree-heavy suites in their dedicated CI jobs and out
 	# of the default local loop.
 	tests=(
-		backup-test clean-vps-test configure-cluster-node-test controller-test
+		backup-test change-vps-test clean-vps-test configure-cluster-node-test controller-test
 		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
 		observer-ingest-test observer-log-proxy-test observer-vector-test
 		platform-submit-test restore-test secret-validation-test stack-test
@@ -22,7 +23,7 @@ fast)
 	;;
 full)
 	tests=(
-		backup-test bootstrap-policy-test clean-vps-test configure-cluster-node-test
+		backup-test bootstrap-policy-test change-vps-test clean-vps-test configure-cluster-node-test
 		controller-test cursorapi-release-test deployment-rollback-test
 		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
 		observer-ingest-test observer-log-proxy-test observer-vector-test
@@ -54,8 +55,16 @@ fi
 printf 'test profile: %s (parallelism=%s; suites=%s)\n' "$profile" "$parallelism" "${#tests[@]}"
 
 log_root="$(mktemp -d "${TMPDIR:-/tmp}/llm-hub-lite-tests.XXXXXX")"
+active_pids=()
+active_names=()
+active_logs=()
 # shellcheck disable=SC2329 # invoked indirectly via `trap cleanup EXIT` below
 cleanup() {
+	local pid
+	for pid in "${active_pids[@]:-}"; do
+		[[ -n "$pid" ]] || continue
+		kill "$pid" 2>/dev/null || true
+	done
 	rm -rf -- "$log_root"
 }
 trap cleanup EXIT
@@ -70,44 +79,69 @@ run_one() {
 	end="$(date +%s)"
 	printf '%s\n' "$rc" >"$log_file.rc"
 	printf '%s\n' "$((end - start))" >"$log_file.duration"
+	# Publish completion only after the result and duration are fully written.
+	: >"$log_file.done"
 	return "$rc"
 }
 
 overall_rc=0
 total="${#tests[@]}"
-offset=0
-while ((offset < total)); do
-	pids=()
-	batch_names=()
-	batch_logs=()
-	for ((slot = 0; slot < parallelism && offset + slot < total; slot++)); do
-		test_name="${tests[offset + slot]}"
-		log_file="$log_root/$slot.log"
-		printf '\n>>> %s\n' "$test_name"
-		run_one "$test_name" "$log_file" &
-		pids+=("$!")
-		batch_names+=("$test_name")
-		batch_logs+=("$log_file")
+started=0
+finished=0
+active_count=0
+while ((finished < total)); do
+	# Fill every available slot in input order.
+	while ((started < total && active_count < parallelism)); do
+		for ((slot = 0; slot < parallelism; slot++)); do
+			[[ -z "${active_pids[slot]:-}" ]] || continue
+			test_name="${tests[started]}"
+			log_file="$log_root/$started.log"
+			printf '\n>>> %s\n' "$test_name"
+			run_one "$test_name" "$log_file" &
+			active_pids[slot]="$!"
+			active_names[slot]="$test_name"
+			active_logs[slot]="$log_file"
+			started=$((started + 1))
+			active_count=$((active_count + 1))
+			break
+		done
 	done
-	for ((slot = 0; slot < ${#pids[@]}; slot++)); do
-		set +e
-		wait "${pids[slot]}"
-		rc=$?
-		set -e
-		cat "${batch_logs[slot]}"
-		duration="$(cat "${batch_logs[slot]}.duration" 2>/dev/null || printf '?')"
-		printf '<<< %s (%ss)\n' "${batch_names[slot]}" "$duration"
-		if ((rc != 0)); then
-			((overall_rc == 0)) && overall_rc="$rc"
-			printf 'FAILED: %s (exit %s)\n' "${batch_names[slot]}" "$rc" >&2
+
+	progress=0
+	for ((slot = 0; slot < parallelism; slot++)); do
+		pid="${active_pids[slot]:-}"
+		[[ -n "$pid" ]] || continue
+		log_file="${active_logs[slot]}"
+		# A completed marker means wait can now reap the child without blocking.
+		if [[ -f "$log_file.done" ]] || ! kill -0 "$pid" 2>/dev/null; then
+			if [[ ! -f "$log_file.done" ]]; then
+				printf 'test runner: %s exited before publishing its result\n' "${active_names[slot]}" >&2
+			fi
+			set +e
+			wait "$pid"
+			rc=$?
+			set -e
+			cat "$log_file"
+			duration="$(cat "$log_file.duration" 2>/dev/null || printf '?')"
+			printf '<<< %s (%ss)\n' "${active_names[slot]}" "$duration"
+			if ((rc != 0)); then
+				((overall_rc == 0)) && overall_rc="$rc"
+				printf 'FAILED: %s (exit %s)\n' "${active_names[slot]}" "$rc" >&2
+			fi
+			active_pids[slot]=''
+			active_names[slot]=''
+			active_logs[slot]=''
+			active_count=$((active_count - 1))
+			finished=$((finished + 1))
+			progress=1
 		fi
 	done
-	offset=$((offset + ${#pids[@]}))
+	((finished == total || progress == 1)) || sleep 0.1
 done
 end_all="$(date +%s)"
 if ((overall_rc == 0)); then
 	printf '\nall tests passed (%ss)\n' "$((end_all - start_all))"
 else
-	printf '\nTESTS FAILED (first exit %s; elapsed %ss)\n' "$overall_rc" "$((end_all - start_all))" >&2
+	printf '\nTESTS FAILED (first observed exit %s; elapsed %ss)\n' "$overall_rc" "$((end_all - start_all))" >&2
 fi
 exit "$overall_rc"

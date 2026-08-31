@@ -93,6 +93,7 @@ credentials and password in protected local files. This checkout uses
 `./restic-r2.env` for the R2 S3 credentials; that filename is ignored by Git.
 The Restic repositories use the `llm-hub-lite-backups` bucket and a separate
 prefix for each stable node:
+If MongoDB Atlas is used, remember to add related vps ip to the `IP Access List` .
 
 ```bash
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
@@ -360,7 +361,10 @@ transition `draining -> retired` and run the generated
 `node-retire-<node-id>` workflow before decommissioning the VPS. To replace a
 VPS without changing logical placement, ensure the old host is stopped, update
 its origin DNS records to the replacement IP, and bootstrap the replacement
-with the same stable `NODE_ID` ; IP addresses never enter Git.
+with the same stable `NODE_ID` ; IP addresses never enter Git. For a complete
+state-preserving cutover, use
+[docs/vps-migration.md](docs/vps-migration.md) and
+`ops/change-vps-for-consumer-node.sh`.
 
 After bootstrapping the Leader, copy the root-only
 `/etc/llm-hub-lite/beszel-enrollment.env` bundle to each follower (or pass its
@@ -617,8 +621,8 @@ same Woodpecker build; no SSH fan-out is required for routine delivery.
 ## Testing
 
 Use `ops/tests/run-all.sh fast` for the local feedback loop and
-`ops/tests/run-all.sh full` before release. Suites run in bounded parallel
-batches ( `TEST_PARALLELISM=2` on macOS by default, `4` on Linux); set
+`ops/tests/run-all.sh full` before release. Suites run in a bounded worker
+queue (`TEST_PARALLELISM=2` on macOS by default, `4` on Linux); set
 `TEST_PARALLELISM=1` to diagnose an order-sensitive failure. CI runs the fast
 profile with two workers and keeps deployment and platform-controller suites in
 isolated jobs.

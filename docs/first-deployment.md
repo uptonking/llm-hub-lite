@@ -10,16 +10,18 @@ and let Woodpecker run the generated deployment workflows.
   application records point to the Leader; `observer-ingest.<domain>` also
   points directly to the Leader and must not be proxied by Cloudflare.
 - Restic is local-only by default. For off-host recovery, set
-  `RESTIC_REMOTE_ENABLED=true`, provide a verified repository and password
-  file, and optionally set `PRODUCTION_REQUIRE_REMOTE_BACKUP=true`.
+`RESTIC_REMOTE_ENABLED=true` , provide a verified repository and password
+  file, and optionally set `PRODUCTION_REQUIRE_REMOTE_BACKUP=true` .
 - The repository contains the final logical inventory in
-  `config/cluster/nodes/`. Node IDs are stable labels and are not VPS IPs.
+`config/cluster/nodes/` . Node IDs are stable labels and are not VPS IPs.
 - Prepare the shared secret bundle from the Leader before bootstrapping a
   Follower. Keep it root-readable only.
+- If MongoDB Atlas is used, remember to add related vps ip to the `IP Access List` .
 
 ## Bootstrap order
 
 Copy the reviewed `ops/bootstrap-vps.sh` to `/root/llm-hub-lite-bootstrap.sh`
+
 on each VPS. Run the Leader first, then each Follower. Use `ssh -tt` when
 prompts are expected; use `BOOTSTRAP_ASSUME_YES=1` only to skip role
 confirmation, not to bypass required secrets.
@@ -36,22 +38,22 @@ ssh -tt root@<worker-1> \
    /root/llm-hub-lite-bootstrap.sh'
 ```
 
-Repeat the second command for every configured Follower (`worker-1`,
-`worker-2`, `worker-3`, ...). Supply
-`RESTIC_REMOTE_PASSWORD_FILE`, `RESTIC_REMOTE_ENV_FILE`,
-`PLATFORM_SECRET_BUNDLE_FILE`, or corresponding environment variables when
+Repeat the second command for every configured Follower ( `worker-1` ,
+`worker-2` , `worker-3` , ...). Supply
+`RESTIC_REMOTE_PASSWORD_FILE` , `RESTIC_REMOTE_ENV_FILE` ,
+`PLATFORM_SECRET_BUNDLE_FILE` , or corresponding environment variables when
 running non-interactively. Never generate shared secrets independently on
 different nodes. The Leader owns Woodpecker, Beszel Hub, and Observer;
 Followers run worker components and only consumers selected by app policy.
 
 On a Follower, `shared-secrets.env` is authoritative for cluster-wide
 Woodpecker credentials. If a partial or older installation left different
-values in `foundation/env/woodpecker.env`, bootstrap replaces those local
+values in `foundation/env/woodpecker.env` , bootstrap replaces those local
 values with the supplied bundle and recreates the worker. The Leader keeps the stricter mismatch check so an established cluster secret cannot be changed by accident.
 
 The Beszel enrollment bundle is authoritative for the Follower's agent key and
 token as well. Matching files are left untouched; stale or partial files are
-moved to `/opt/platform/beszel/secrets/orphaned/`, replaced from the bundle, and
+moved to `/opt/platform/beszel/secrets/orphaned/` , replaced from the bundle, and
 the Beszel worker is recreated.
 
 Bootstrap and the daily deployment controller also remove image keys that are
@@ -65,7 +67,7 @@ the reboot units. It then releases its platform lock and queues
 bounded so an unhealthy consumer cannot leave the SSH session waiting for the
 full recovery timeout. A message that recovery continues in the background is
 normal. Inspect it with `systemctl status platform-recovery.service` and
-`journalctl -u platform-recovery.service -n 200 --no-pager`.
+`journalctl -u platform-recovery.service -n 200 --no-pager` .
 The final public endpoint probes are warning-only and bounded to one retry by
 default; use `BOOTSTRAP_ENDPOINT_RETRIES` and
 `BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS` when a slower network needs more time.
@@ -84,7 +86,7 @@ curl -fsS https://status.<domain>/api/health
 curl -fsS https://observer.<domain>/healthz
 ```
 
-If a Follower is still `joining`, it receives foundation services and the
+If a Follower is still `joining` , it receives foundation services and the
 Observer collector but no consumer. Promote it only after local health passes:
 
 ```bash
@@ -100,15 +102,15 @@ returns to push-driven reconciliation. Follower IP changes are DNS/origin
 updates and do not change logical placement IDs.
 
 Flowy (Activepieces) is enabled by default on `worker-3` at
-`https://flowy.<domain>`. It uses a single PGlite volume, in-memory Redis, one
+`https://flowy.<domain>` . It uses a single PGlite volume, in-memory Redis, one
 worker, and bounded CPU/RAM. The production profile uses Cloudflare R2 for
-execution files (`FLOWY_FILE_STORAGE_LOCATION=S3`) while keeping metadata in
+execution files ( `FLOWY_FILE_STORAGE_LOCATION=S3` ) while keeping metadata in
 PGlite. Provision the four `FLOWY_S3_*` values with the generated
 `consumer-secrets-flowy-worker-3` workflow before the first Flowy deployment.
 
 Review the generated workflows in Woodpecker. For each secret workflow, create
 a manual pipeline on `main` and set its `MANUAL_WORKFLOW` variable to the
-exact workflow name (for example, `consumer-secrets-librechat-worker-1`); the
+exact workflow name (for example, `consumer-secrets-librechat-worker-1` ); the
 selector prevents unrelated manual workflows from running. Confirm each
 consumer's stage, publish, and stop jobs. From this point onward, routine
 changes are `git push` followed by the appropriate Woodpecker workflow. Do not
