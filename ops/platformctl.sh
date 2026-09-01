@@ -2709,10 +2709,17 @@ EOF
 	((checked > 0)) || die "consumer has no origins to check: $id"
 }
 consumer_origin_smoke() {
-	local d
+	local d journal release
 	d="$(consumer_descriptor "$1")"
 	if [[ "$(app_upstream_mode "$d")" == singleton ]]; then
-		singleton_origin_smoke "$(basename "$d")"
+		if [[ "$(app_ingress_mode "$d")" == direct ]]; then
+			direct_smoke "$(basename "$d")"
+			journal="$(singleton_transition_file "$d")"
+			release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
+			if [[ "$(transition_value RELEASE_SHA "$journal")" == "$release" ]]; then transition_set "$journal" PHASE origin-healthy; fi
+		else
+			singleton_origin_smoke "$(basename "$d")"
+		fi
 	else
 		consumer_origin_smoke_generic "$d"
 	fi
