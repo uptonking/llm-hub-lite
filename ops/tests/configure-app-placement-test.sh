@@ -49,8 +49,11 @@ grep -Fq '/usr/local/bin/configure-app-secrets wabase --target-node worker-4 --e
 grep -Fq 'consumer-stage-wabase-worker-4' "$activation/.woodpecker/consumer-publish-wabase.yml"
 grep -Fq 'consumer-publish-wabase' "$activation/.woodpecker/consumer-stop-wabase-worker-1.yml"
 grep -Fq 'SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=wabase' "$activation/.woodpecker/consumer-finalize-wabase-worker-4.yml"
-grep -Fq 'migrate-app-identity.sh prepare wabase' "$activation/.woodpecker/consumer-stage-wabase-worker-4.yml"
-grep -Fq 'migrate-app-identity.sh finalize wabase' "$activation/.woodpecker/consumer-finalize-wabase-worker-4.yml"
+if grep -Fq 'migrate-app-identity.sh' "$activation/.woodpecker/consumer-stage-wabase-worker-4.yml" \
+	"$activation/.woodpecker/consumer-finalize-wabase-worker-4.yml"; then
+	printf 'completed Wabase rename still generated identity migration commands\n' >&2
+	exit 1
+fi
 
 active_active="$(make_fixture active-active)"
 run_placement "$active_active" librechat worker-2,worker-1 >/dev/null

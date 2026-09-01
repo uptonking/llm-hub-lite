@@ -192,9 +192,11 @@ generate_fixture "$wabase_opt_in"
 [[ -f "$wabase_opt_in/workflows/consumer-finalize-wabase-worker-4.yml" ]]
 [[ -f "$wabase_opt_in/workflows/consumer-secrets-wabase-worker-4.yml" ]]
 [[ ! -e "$wabase_opt_in/workflows/consumer-secrets-wabase-leader.yml" ]]
-grep -Fq 'migrate-app-identity.sh prepare wabase' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml"
-grep -Fq 'migrate-app-identity.sh rollback wabase' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml"
-grep -Fq 'migrate-app-identity.sh finalize wabase' "$wabase_opt_in/workflows/consumer-finalize-wabase-worker-4.yml"
+if grep -Fq 'migrate-app-identity.sh' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml" \
+	"$wabase_opt_in/workflows/consumer-finalize-wabase-worker-4.yml"; then
+	printf 'completed Wabase rename still generated identity migration commands\n' >&2
+	exit 1
+fi
 secret_line="$(grep -n -- '--ensure-generated' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml" | cut -d: -f1)"
 stage_line="$(grep -n 'platform-submit consumer-stage' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml" | cut -d: -f1)"
 [[ -n "$secret_line" && -n "$stage_line" && "$secret_line" -lt "$stage_line" ]]

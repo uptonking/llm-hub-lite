@@ -108,6 +108,8 @@ grep -Fq 'mem_limit: ${WABASE_MEMORY_LIMIT:-1500m}' "$repo_root/apps/wabase/comp
 grep -Fq 'cpus: ${WABASE_CPUS:-0.9}' "$repo_root/apps/wabase/compose.yml"
 grep -Fq 'GRIST_SQLITE_MODE: ${WABASE_SQLITE_MODE:-wal}' "$repo_root/apps/wabase/compose.yml"
 grep -Fq "status?ready=1&db=1" "$repo_root/apps/wabase/compose.yml"
+grep -Fq 'header_up Host {$WABASE_SITE}' "$repo_root/apps/wabase/route.follower.caddy"
+grep -Fq 'header_up X-Forwarded-Host {$WABASE_SITE}' "$repo_root/apps/wabase/route.follower.caddy"
 grep -Fq 'stage_validation_runtime_config "$release" "$validation_config"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'CONFIG_ROOT="$validation_config" APPS_ROOT="$release/apps"' "$repo_root/ops/deploy-controller.sh"
 grep -q '^CONDITIONAL_SECRET_KEYS=FLOWY_FILE_STORAGE_LOCATION=S3|FLOWY_S3_ENDPOINT,FLOWY_S3_BUCKET,FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"

@@ -46,4 +46,3 @@ steps:
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
       - DEPLOY_DEBUG_LEVEL=off SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=wabase /usr/local/bin/platform-submit consumer-stop "$CI_COMMIT_SHA"
-      - bash /opt/platform/control/current/ops/migrate-app-identity.sh finalize wabase
