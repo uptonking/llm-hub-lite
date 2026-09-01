@@ -1,6 +1,7 @@
 bash=5.2.37-r0
 curl=8.14.1-r2
 git=2.47.2-r0
+openssl=3.3.7-r0
 restic=0.17.3-r5
 sqlite=3.48.0-r4
 tar=1.35-r2
