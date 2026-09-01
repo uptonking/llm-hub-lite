@@ -300,6 +300,17 @@ apply_control_sync() {
 		write_control_sync_state failed "$sha" "$old_sha" 'unable to update current control pointer' || true
 		die 'unable to update current control pointer'
 	fi
+	if ! PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" prune-app-endpoints; then
+		if [[ -n "$old_current" ]]; then
+			atomic_link "$old_current" "$CURRENT" || die 'endpoint metadata cleanup failed and the previous control pointer could not be restored'
+		else
+			rm -f -- "$CURRENT"
+		fi
+		rollback_control_sync_metadata "$stage"
+		rm -rf -- "$stage"
+		write_control_sync_state failed "$sha" "$old_sha" 'unable to prune retired app endpoint metadata' || true
+		die 'unable to prune retired app endpoint metadata'
+	fi
 	rm -rf -- "$stage"
 	write_control_sync_state succeeded "$sha" "$old_sha"
 	CONTROL_SYNC_ACTIVE=0

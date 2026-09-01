@@ -2722,7 +2722,7 @@ if [[ "${PLATFORMCTL_LIBRARY:-0}" != 1 ]]; then
 	validate-observer | observer-smoke) ;;
 	*) acquire_lock ;;
 	esac
-	case "$op" in validate) [[ "${2:-}" == --check ]] && VALIDATE_CHECK=1 validate || validate ;; status) [[ "${2:-}" == --json ]] && printf '{"node":"%s","role":"%s","state":"%s"}\n' "$(node_id)" "$(node_role)" "$(node_state)" || {
+	case "$op" in validate) [[ "${2:-}" == --check ]] && VALIDATE_CHECK=1 validate || validate ;; prune-app-endpoints) cleanup_stale_app_endpoint_env ;; status) [[ "${2:-}" == --json ]] && printf '{"node":"%s","role":"%s","state":"%s"}\n' "$(node_id)" "$(node_role)" "$(node_state)" || {
 		printf 'node=%s role=%s state=%s\n' "$(node_id)" "$(node_role)" "$(node_state)"
 		health
 	} ;; health) health ;; recover) recover "${2:-}" ;; retire-node) retire_node ;; ensure-network) ensure_network ;; start) [[ "${2:-all}" == all ]] && start_all_projects || start_project "$2" ;; sync) sync "${2:-all}" ;; stop) [[ "${2:-all}" == all ]] && stop_all_projects || stop_project "$2" ;; restart | recreate) if [[ "${2:-all}" == all ]]; then reconcile_all_projects "$op"; else [[ "$op" == restart ]] && restart_project "$2" || recreate_project "$2"; fi ;; singleton-switch)
@@ -2768,6 +2768,6 @@ if [[ "${PLATFORMCTL_LIBRARY:-0}" != 1 ]]; then
 	validate-observer) validate_observer_env ;;
 	observer-smoke) observer_smoke ;;
 	observer-collector-status) observer_collector_status ;;
-	diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|validate-observer|status|health|diagnose|recover|retire-node|ensure-network|start|sync|restart|recreate|stop|consumer-origin-smoke|consumer-publish|consumer-stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|observer-collector-status|maintenance|reload|backup|restore}' ;; esac
+	diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|validate-observer|prune-app-endpoints|status|health|diagnose|recover|retire-node|ensure-network|start|sync|restart|recreate|stop|consumer-origin-smoke|consumer-publish|consumer-stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|observer-collector-status|maintenance|reload|backup|restore}' ;; esac
 	if ((read_only_lock == 1)); then release_read_lock; fi
 fi

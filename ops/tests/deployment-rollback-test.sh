@@ -202,6 +202,9 @@ export GIT_CONFIG_KEY_1=protocol.file.allow
 export GIT_CONFIG_VALUE_1=always
 
 sha1="$(git -C "$work" rev-parse HEAD)"
+bash "$repo_root/ops/deploy-controller.sh" control-sync "$sha1" >/dev/null
+grep -qx 'prune-app-endpoints' "$tmp/platformctl.log"
+: >"$tmp/platformctl.log"
 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha1" >/dev/null
 current_release="$(readlink "$platform_root/control/current")"
 [[ "$current_release" == "$platform_root/control/releases/$sha1" ]]
