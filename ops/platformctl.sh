@@ -1060,7 +1060,13 @@ validate_descriptor() {
 		fi
 		((node_count == 1)) || die "singleton app must target exactly one follower: $d"
 		if app_in_reconcile_scope "$d"; then
-			singleton_runtime_env_ready "$d" || die "missing runtime env file for active singleton app: $d"
+			# A first deployment may intentionally provision runtime credentials in
+			# the staging workflow. That workflow runs on the selected follower and
+			# receives protected Woodpecker secrets without exposing them to the
+			# Leader control plane.
+			if [[ "$(descriptor_value "$d" RUNTIME_ENV_PROVISION)" != stage ]]; then
+				singleton_runtime_env_ready "$d" || die "missing runtime env file for active singleton app: $d"
+			fi
 		fi
 		;;
 	*) die "unsupported UPSTREAM_MODE in $d/manifest.env" ;;

@@ -43,6 +43,11 @@ steps:
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
+    environment:
+      VERGE_AUTH_PASSWORD:
+        from_secret: verge_auth_password
+      VERGE_CLOUDFLARE_API_TOKEN:
+        from_secret: verge_cloudflare_api_token
     commands:
       - /usr/local/bin/configure-app-secrets verge --target-node worker-4 --ensure-generated
       - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=verge /usr/local/bin/platform-submit consumer-stage "$CI_COMMIT_SHA"
