@@ -1,0 +1,6 @@
+{$NODE_WABASE_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy wabase:8484 {
+    flush_interval -1
+  }
+}

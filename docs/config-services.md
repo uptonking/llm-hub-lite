@@ -140,20 +140,27 @@ active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/fl
 `/opt/backups/llm-hub-lite/stage` by default rather than `/run` , because VPS
 `/run` is commonly a small tmpfs that cannot hold the PGlite directory.
 
-Wobase is the Grist OSS singleton at `wobase.aichorage.de`, reserved for
-`worker-4`. Its initial policy remains disabled while worker-4 is `joining`.
-After foundation verification, activate the node and app together with
-`ops/configure-cluster-node.sh state worker-4 active` followed by
-`ops/configure-app-placement.sh wobase worker-4 --enable` in the same operator
-checkout and commit. Wobase runs
+Wabase is the Grist OSS singleton at `wabase.aichorage.de`, enabled on active
+`worker-4`. A fresh follower must pass foundation verification before it is
+activated and selected with `ops/configure-app-placement.sh`. Wabase runs
 one `gristlabs/grist-oss` container with `/persist/home.sqlite3` and
 `/persist/docs/*.grist`, WAL mode, one document worker, warning-level logging,
 and no Redis or PostgreSQL. The container is capped at `1500m`, `0.9` CPU, and
 256 processes; the Node heap is capped at 768 MB. Protected Quick Setup starts
 with `GRIST_IN_SERVICE=false`; the session and boot keys are generated only in
-`/etc/llm-hub-lite/wobase.env`. After setup, commit
-`WOBASE_IN_SERVICE=true`. A placement change intentionally starts fresh and
+`/etc/llm-hub-lite/wabase.env`. After setup, commit
+`WABASE_IN_SERVICE=true`. A placement change intentionally starts fresh and
 archives the previous local data.
+
+An intentional singleton identity rename may declare the temporary
+`IDENTITY_MIGRATION_*` manifest contract. The generated target stage then runs
+`ops/migrate-app-identity.sh`: it stops the source Compose project, atomically
+moves the data directory, converts only the declared environment-key prefix,
+and leaves a guarded compatibility symlink for rollback. The final target job
+removes the source env, symlink, and private network only after the existing
+origin health gate succeeds. Conflicting source and target paths fail closed;
+the migration fields are removed in a follow-up release after live
+verification.
 
 Cursorapi packages `cursor-api-proxy` and a checksum-pinned Cursor Agent into the repository-owned `ghcr.io/uptonking/cursor-api-proxy` image because the upstream project does not publish a deployable image. It is an ephemeral singleton on `worker-1` by default, with no database, persistent volume, host port, or Docker socket. Its read-only non-root container is capped at `512m` memory, `0.50` CPU, and 128 processes. Moving it to another follower is a fresh deployment; no local application data is copied. `CURSORAPI_CURSOR_API_KEY` maps to upstream `CURSOR_API_KEY` and must be entered manually from the Cursor account credential. `CURSORAPI_BRIDGE_API_KEY` protects all public `/v1/*` requests and should be generated with `openssl rand -hex 32` . The public route exposes only `/v1/*` and the unauthenticated `/healthz` ; the upstream dashboard and `/api/*` control endpoints remain private. Clients use `https://cursorapi.aichorage.de/v1` as their base URL and `CURSORAPI_BRIDGE_API_KEY` as the API key. Cursorapi images are never built by GitHub Actions, Woodpecker, bootstrap, or
 the normal deployment controller. To publish a reviewed upstream revision

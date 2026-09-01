@@ -5,15 +5,15 @@ when:
     branch: main
     path:
       include:
-        - apps/wobase/**
-        - config/cluster/apps/wobase.policy
-        - config/cluster/overrides/**/wobase.env
-        - apps/wobase/route*.caddy
-        - apps/wobase/images.lock.env
+        - apps/wabase/**
+        - config/cluster/apps/wabase.policy
+        - config/cluster/overrides/**/wabase.env
+        - apps/wabase/route*.caddy
+        - apps/wabase/images.lock.env
       on_empty: false
 
 depends_on:
-  - consumer-stage-wobase-worker-4
+  - consumer-stage-wabase-worker-4
   - control-sync-leader
   - name: foundation-reconcile-leader
     optional: true
@@ -45,4 +45,4 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
-      - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=wobase /usr/local/bin/platform-submit consumer-publish "$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=wabase /usr/local/bin/platform-submit consumer-publish "$CI_COMMIT_SHA"

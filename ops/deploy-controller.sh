@@ -612,14 +612,47 @@ validate_application_image_locks() {
 	done < <(find "$release/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
 }
 
+stage_validation_runtime_config() {
+	local release="$1" destination="$2" manifest runtime_rel source_rel source_prefix target_prefix source target tmp
+	install -d -m 700 "$destination"
+	if [[ -f "$CONFIG_ROOT/platform.env" && ! -L "$CONFIG_ROOT/platform.env" ]]; then
+		install -m 600 "$CONFIG_ROOT/platform.env" "$destination/platform.env"
+	fi
+	while IFS= read -r manifest; do
+		[[ -f "$manifest" ]] || continue
+		runtime_rel="$(env_value RUNTIME_ENV_FILE "$manifest")"
+		[[ -n "$runtime_rel" ]] || continue
+		[[ "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die "unsafe RUNTIME_ENV_FILE in candidate release: $manifest"
+		target="$destination/$runtime_rel"
+		install -d -m 700 "$(dirname "$target")"
+		if [[ -f "$CONFIG_ROOT/$runtime_rel" && ! -L "$CONFIG_ROOT/$runtime_rel" ]]; then
+			install -m 600 "$CONFIG_ROOT/$runtime_rel" "$target"
+			continue
+		fi
+		[[ -n "$(env_value IDENTITY_MIGRATION_FROM_APP_ID "$manifest")" ]] || continue
+		source_rel="$(env_value IDENTITY_MIGRATION_FROM_RUNTIME_ENV_FILE "$manifest")"
+		source_prefix="$(env_value IDENTITY_MIGRATION_FROM_ENV_PREFIX "$manifest")"
+		target_prefix="$(env_value IDENTITY_MIGRATION_TO_ENV_PREFIX "$manifest")"
+		[[ "$source_rel" != /* && "$source_rel" != *..* && "$source_rel" =~ ^[A-Za-z0-9._/-]+$ ]] || die "unsafe identity migration runtime env in candidate release: $manifest"
+		[[ "$source_prefix" =~ ^[A-Z][A-Z0-9_]*$ && "$target_prefix" =~ ^[A-Z][A-Z0-9_]*$ && "$source_prefix" != "$target_prefix" ]] || die "invalid identity migration prefixes in candidate release: $manifest"
+		source="$CONFIG_ROOT/$source_rel"
+		[[ -f "$source" && ! -L "$source" ]] || continue
+		tmp="$(mktemp "$target.XXXXXX")"
+		sed "s/^${source_prefix}_/${target_prefix}_/" "$source" >"$tmp"
+		chmod 600 "$tmp"
+		mv -f -- "$tmp" "$target"
+	done < <(find "$release/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)
+}
+
 validate_release() {
-	local release="$1" runtime foundation_validate control_validate image_apps image_foundation
+	local release="$1" runtime foundation_validate control_validate validation_config image_apps image_foundation
 	[[ -f "$release/ops/platformctl.sh" && -d "$release/apps" && -d "$release/config" ]] || die 'release is missing platform files'
 	validate_application_image_locks "$release"
 	install -d -m 700 "$APP_ROOT/shared/runtime"
 	runtime="$(mktemp -d "$APP_ROOT/shared/runtime/validate.XXXXXX")"
 	foundation_validate="$(mktemp -d "$APP_ROOT/shared/runtime/foundation-validate.XXXXXX")"
 	control_validate="$(mktemp -d "$APP_ROOT/shared/runtime/control-validate.XXXXXX")"
+	validation_config="$control_validate/runtime-config"
 	image_apps="$control_validate/images.apps.env"
 	image_foundation="$control_validate/images.foundation.env"
 	ln -s "$release" "$control_validate/current"
@@ -628,10 +661,11 @@ validate_release() {
 	install -d -m 700 "$foundation_validate/env"
 	cp -a "$FOUNDATION_ROOT/env/." "$foundation_validate/env/" 2>/dev/null || true
 	install -d -m 700 "$control_validate/config/cluster/nodes"
+	stage_validation_runtime_config "$release" "$validation_config"
 	cp -a "$release/config/cluster/." "$control_validate/config/cluster/"
 	sync_node_config "$release" "$control_validate/node.env"
 	copy_foundation_payload "$release" "$foundation_validate"
-	if ! PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$control_validate" APPS_ROOT="$release/apps" RUNTIME_ROOT="$runtime" \
+	if ! PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$control_validate" CONFIG_ROOT="$validation_config" APPS_ROOT="$release/apps" RUNTIME_ROOT="$runtime" \
 		APP_ENV="$APP_ENV" APP_IMAGE_ENV="$image_apps" FOUNDATION_IMAGE_ENV="$image_foundation" \
 		FOUNDATION_ROOT="$foundation_validate" FOUNDATION_ENV_ROOT="$foundation_validate/env" NODE_CONFIG_FILE="$control_validate/node.env" CLUSTER_POLICY_FILE="$control_validate/config/cluster/policy.env" \
 		PLATFORM_TEST_MODE="$PLATFORM_TEST_MODE" PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" PLATFORM_TEST_SKIP_SYNC_VALIDATION="$PLATFORM_TEST_SKIP_SYNC_VALIDATION" PLATFORM_TEST_SKIP_RENDER="$PLATFORM_TEST_SKIP_RENDER" PLATFORM_TEST_SKIP_COMPOSE_INSPECTION="$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" PLATFORM_TEST_FAST_VALIDATE="$PLATFORM_TEST_FAST_VALIDATE" PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR" PLATFORM_TEST_SKIP_CLUSTER_VALIDATION="$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" \

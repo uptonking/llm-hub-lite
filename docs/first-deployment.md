@@ -108,9 +108,10 @@ execution files ( `FLOWY_FILE_STORAGE_LOCATION=S3` ) while keeping metadata in
 PGlite. Provision the four `FLOWY_S3_*` values with the generated
 `consumer-secrets-flowy-worker-3` workflow before the first Flowy deployment.
 
-Worker-4 is intentionally committed as `joining`, with Wobase disabled and
-`BACKUP_ENABLED=false`. Bootstrap it with `NODE_ID=worker-4`, then verify
-foundation health and confirm the backup timers are disabled:
+Worker-4 is committed as active with Wabase enabled and
+`BACKUP_ENABLED=false`. On a replacement or fresh host, bootstrap it with
+`NODE_ID=worker-4`, then verify foundation health and confirm the backup timers
+are disabled before allowing its generated consumer stage to run:
 
 ```bash
 ssh root@<worker-4> \
@@ -120,24 +121,25 @@ ssh root@<worker-4> \
    test "$(systemctl is-enabled platform-backup-check.timer 2>/dev/null || true)" = disabled'
 ```
 
-After that gate, prepare one reviewed activation commit:
+For a newly added follower that is still `joining`, prepare one reviewed
+activation commit after that gate:
 
 ```bash
 ops/configure-cluster-node.sh state worker-4 active
-ops/configure-app-placement.sh wobase worker-4 --enable
+ops/configure-app-placement.sh wabase worker-4 --enable
 ops/generate-woodpecker-workflows.sh --check
 ```
 
 The helpers update inventory, policy, and workflows transactionally. Review
 and push them together. The target stage creates
-the two node-local Wobase secrets before Compose validation; no repository
+the two node-local Wabase secrets before Compose validation; no repository
 secret is required. Publication succeeds only after
-`worker4-wobase-origin.<domain>/status?ready=1&db=1` is healthy.
+`worker4-wabase-origin.<domain>/status?ready=1&db=1` is healthy.
 
-Retrieve `WOBASE_BOOT_KEY` from `/etc/llm-hub-lite/wobase.env` as root and
-complete Protected Quick Setup at `https://wobase.<domain>/boot`. Then change
-`WOBASE_IN_SERVICE=true` in `apps/wobase/config.env`, validate, and deploy that
-follow-up commit. Wobase uses local SQLite and has no Restic coverage while
+Retrieve `WABASE_BOOT_KEY` from `/etc/llm-hub-lite/wabase.env` as root and
+complete Protected Quick Setup at `https://wabase.<domain>/boot`. Then change
+`WABASE_IN_SERVICE=true` in `apps/wabase/config.env`, validate, and deploy that
+follow-up commit. Wabase uses local SQLite and has no Restic coverage while
 worker-4 remains opted out; changing its singleton target is a fresh deployment.
 
 Review the generated workflows in Woodpecker. For each secret workflow, create

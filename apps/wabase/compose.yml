@@ -1,0 +1,47 @@
+name: app-wabase
+services:
+  wabase:
+    image: ${WABASE_IMAGE:?WABASE_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: ${WABASE_MEMORY_LIMIT:-1500m}
+    cpus: ${WABASE_CPUS:-0.9}
+    pids_limit: ${WABASE_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: wabase
+      com.aichorage.component: app-wabase
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      GRIST_SESSION_SECRET: ${WABASE_SESSION_SECRET:?WABASE_SESSION_SECRET must be set}
+      GRIST_BOOT_KEY: ${WABASE_BOOT_KEY:?WABASE_BOOT_KEY must be set}
+      GRIST_IN_SERVICE: ${WABASE_IN_SERVICE:-false}
+      GRIST_DATA_DIR: /persist/docs
+      GRIST_INST_DIR: /persist
+      TYPEORM_DATABASE: /persist/home.sqlite3
+      GRIST_SQLITE_MODE: ${WABASE_SQLITE_MODE:-wal}
+      DOC_WORKER_COUNT: ${WABASE_DOC_WORKER_COUNT:-1}
+      GRIST_LOG_LEVEL: ${WABASE_LOG_LEVEL:-warn}
+      GRIST_TELEMETRY_LEVEL: ${WABASE_TELEMETRY_LEVEL:-off}
+      GRIST_ALLOW_AUTOMATIC_VERSION_CHECKING: ${WABASE_ALLOW_AUTOMATIC_VERSION_CHECKING:-false}
+      GRIST_LOG_HTTP: ${WABASE_LOG_HTTP:-false}
+      GRIST_LOG_API_DETAILS: ${WABASE_LOG_API_DETAILS:-false}
+      GRIST_MAX_PARALLEL_REQUESTS_PER_DOC: ${WABASE_MAX_PARALLEL_REQUESTS_PER_DOC:-2}
+      GRIST_MAX_UPLOAD_IMPORT_MB: ${WABASE_MAX_UPLOAD_IMPORT_MB:-32}
+      GRIST_MAX_UPLOAD_ATTACHMENT_MB: ${WABASE_MAX_UPLOAD_ATTACHMENT_MB:-32}
+      NODE_OPTIONS: ${WABASE_NODE_OPTIONS:---no-deprecation --max-old-space-size=768}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/wabase:/persist
+    networks: [wabase_private, platform_edge]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 'http://127.0.0.1:8484/status?ready=1&db=1' | grep -Fq 'is alive'"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+networks:
+  wabase_private:
+    name: app-wabase_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

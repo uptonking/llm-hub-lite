@@ -5,11 +5,11 @@ when:
     branch: main
     path:
       include:
-        - apps/wobase/**
-        - config/cluster/apps/wobase.policy
-        - config/cluster/overrides/**/wobase.env
-        - apps/wobase/route*.caddy
-        - apps/wobase/images.lock.env
+        - apps/wabase/**
+        - config/cluster/apps/wabase.policy
+        - config/cluster/overrides/**/wabase.env
+        - apps/wabase/route*.caddy
+        - apps/wabase/images.lock.env
       on_empty: false
 
 depends_on:
@@ -44,5 +44,6 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
-      - /usr/local/bin/configure-app-secrets wobase --target-node worker-4 --ensure-generated
-      - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=wobase /usr/local/bin/platform-submit consumer-stage "$CI_COMMIT_SHA"
+      - bash /opt/platform/control/current/ops/migrate-app-identity.sh prepare wabase
+      - /usr/local/bin/configure-app-secrets wabase --target-node worker-4 --ensure-generated
+      - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=wabase /usr/local/bin/platform-submit consumer-stage "$CI_COMMIT_SHA" || { status=$?; rollback_status=0; IDENTITY_MIGRATION_MANIFEST=/opt/platform/control/releases/"$CI_COMMIT_SHA"/apps/wabase/manifest.env bash /opt/platform/control/releases/"$CI_COMMIT_SHA"/ops/migrate-app-identity.sh rollback wabase || rollback_status=$?; /usr/local/bin/platformctl recover || true; if [ "$rollback_status" -ne 0 ]; then exit "$rollback_status"; fi; exit "$status"; }

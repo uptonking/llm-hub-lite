@@ -181,19 +181,22 @@ generate_fixture "$opt_in"
 [[ -f "$opt_in/workflows/consumer-stage-pigeon-worker-2.yml" ]]
 [[ -f "$opt_in/workflows/consumer-publish-pigeon.yml" ]]
 
-wobase_opt_in="$(make_fixture wobase-opt-in)"
-sed 's/^NODE_STATE=.*/NODE_STATE=active/' "$wobase_opt_in/config/cluster/nodes/worker-4.env" >"$wobase_opt_in/worker-4.env"
-mv "$wobase_opt_in/worker-4.env" "$wobase_opt_in/config/cluster/nodes/worker-4.env"
-sed 's/^ENABLED=.*/ENABLED=true/' "$wobase_opt_in/config/cluster/apps/wobase.policy" >"$wobase_opt_in/wobase.policy"
-mv "$wobase_opt_in/wobase.policy" "$wobase_opt_in/config/cluster/apps/wobase.policy"
-generate_fixture "$wobase_opt_in"
-[[ -f "$wobase_opt_in/workflows/consumer-stage-wobase-worker-4.yml" ]]
-[[ -f "$wobase_opt_in/workflows/consumer-publish-wobase.yml" ]]
-[[ -f "$wobase_opt_in/workflows/consumer-finalize-wobase-worker-4.yml" ]]
-[[ -f "$wobase_opt_in/workflows/consumer-secrets-wobase-worker-4.yml" ]]
-[[ ! -e "$wobase_opt_in/workflows/consumer-secrets-wobase-leader.yml" ]]
-secret_line="$(grep -n -- '--ensure-generated' "$wobase_opt_in/workflows/consumer-stage-wobase-worker-4.yml" | cut -d: -f1)"
-stage_line="$(grep -n 'platform-submit consumer-stage' "$wobase_opt_in/workflows/consumer-stage-wobase-worker-4.yml" | cut -d: -f1)"
+wabase_opt_in="$(make_fixture wabase-opt-in)"
+sed 's/^NODE_STATE=.*/NODE_STATE=active/' "$wabase_opt_in/config/cluster/nodes/worker-4.env" >"$wabase_opt_in/worker-4.env"
+mv "$wabase_opt_in/worker-4.env" "$wabase_opt_in/config/cluster/nodes/worker-4.env"
+sed 's/^ENABLED=.*/ENABLED=true/' "$wabase_opt_in/config/cluster/apps/wabase.policy" >"$wabase_opt_in/wabase.policy"
+mv "$wabase_opt_in/wabase.policy" "$wabase_opt_in/config/cluster/apps/wabase.policy"
+generate_fixture "$wabase_opt_in"
+[[ -f "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml" ]]
+[[ -f "$wabase_opt_in/workflows/consumer-publish-wabase.yml" ]]
+[[ -f "$wabase_opt_in/workflows/consumer-finalize-wabase-worker-4.yml" ]]
+[[ -f "$wabase_opt_in/workflows/consumer-secrets-wabase-worker-4.yml" ]]
+[[ ! -e "$wabase_opt_in/workflows/consumer-secrets-wabase-leader.yml" ]]
+grep -Fq 'migrate-app-identity.sh prepare wabase' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml"
+grep -Fq 'migrate-app-identity.sh rollback wabase' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml"
+grep -Fq 'migrate-app-identity.sh finalize wabase' "$wabase_opt_in/workflows/consumer-finalize-wabase-worker-4.yml"
+secret_line="$(grep -n -- '--ensure-generated' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml" | cut -d: -f1)"
+stage_line="$(grep -n 'platform-submit consumer-stage' "$wabase_opt_in/workflows/consumer-stage-wabase-worker-4.yml" | cut -d: -f1)"
 [[ -n "$secret_line" && -n "$stage_line" && "$secret_line" -lt "$stage_line" ]]
 [[ -f "$opt_in/workflows/consumer-stop-pigeon-worker-1.yml" ]]
 [[ ! -e "$opt_in/workflows/consumer-stop-pigeon-worker-2.yml" ]]

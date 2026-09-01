@@ -5,7 +5,7 @@ Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, LibreC
 ## Architecture
 
 The committed inventory is in `config/cluster/` . The current Leader has stable
-node ID `leader` ; it runs Caddy, Woodpecker server, a trusted deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node IDs `worker-1` through `worker-4` ; they run Caddy, Woodpecker workers, Beszel agents, and consumer applications. Worker-4 is committed in `joining` state until its first bootstrap is verified. The IDs are stable labels; the role is selected only by
+node ID `leader` ; it runs Caddy, Woodpecker server, a trusted deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node IDs `worker-1` through `worker-4` ; they run Caddy, Woodpecker workers, Beszel agents, and consumer applications. Worker-4 is active, with scheduled Restic work disabled by committed policy. The IDs are stable labels; the role is selected only by
 `LEADER_NODE_ID` in the policy.
 
 Caddy is installed on every node. Public DNS names point to the Leader. The
@@ -68,9 +68,8 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - Pigeon package retained but disabled
 - Follower worker-3:
     - Flowy (Activepieces)
-- Follower worker-4 (joining):
-    - Foundation services only until activation
-    - Wobase (Grist) reserved but disabled
+- Follower worker-4:
+    - Wabase (Grist) singleton
     - Scheduled Restic work disabled by policy
 
 SSH is used only for this one-time host bootstrap. Before starting, prepare the
@@ -82,8 +81,8 @@ and `observer` point to the Leader. Add `observer-ingest` as a DNS-only record
 directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
 origins using the `worker1-` prefix point to Worker 1, while the stable-ID
 `worker2-` origin records point to Worker 2. The
-`worker4-wobase-origin.<domain>` record points to Worker 4, while
-`wobase.<domain>` points to the Leader. Pigeon origin records are not
+`worker4-wabase-origin.<domain>` record points to Worker 4, while
+`wabase.<domain>` points to the Leader. Pigeon origin records are not
 required while it is disabled; create the selected Follower's DNS-only origin
 before opting it in. The `leader` stable ID is the public Leader and therefore
 does not need a private origin record for ingress.

@@ -10,7 +10,7 @@ for node_file in "$repo_root"/config/cluster/nodes/*.env; do
 	grep -Fxq 'AICHOROUTER_SITE=http://aichorouter.localhost' "$tmp/$node/app-env/aichorouter.env"
 	grep -Fxq 'LIBRECHAT_SITE=http://chat.localhost' "$tmp/$node/app-env/librechat.env"
 	grep -Fxq 'LIBRECHAT_ADMIN_SITE=http://chat-admin.localhost' "$tmp/$node/app-env/librechat.env"
-	grep -Fxq 'WOBASE_SITE=http://wobase.localhost' "$tmp/$node/app-env/wobase.env"
+	grep -Fxq 'WABASE_SITE=http://wabase.localhost' "$tmp/$node/app-env/wabase.env"
 done
 # A malformed policy must not silently enable a consumer in local mode. Keep
 # this check independent of Docker by validating the generated routes only.

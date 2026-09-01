@@ -31,24 +31,26 @@ expect_failure() {
 activation="$(make_fixture activation)"
 sed 's/^NODE_STATE=.*/NODE_STATE=joining/' "$activation/config/cluster/nodes/worker-4.env" >"$activation/worker-4.env"
 mv "$activation/worker-4.env" "$activation/config/cluster/nodes/worker-4.env"
-run_placement "$activation" wobase worker-4 --disable >/dev/null
-grep -Fxq 'ENABLED=false' "$activation/config/cluster/apps/wobase.policy"
-grep -Fxq 'NODES=worker-4' "$activation/config/cluster/apps/wobase.policy"
-[[ ! -e "$activation/.woodpecker/consumer-stage-wobase-worker-4.yml" ]]
+run_placement "$activation" wabase worker-4 --disable >/dev/null
+grep -Fxq 'ENABLED=false' "$activation/config/cluster/apps/wabase.policy"
+grep -Fxq 'NODES=worker-4' "$activation/config/cluster/apps/wabase.policy"
+[[ ! -e "$activation/.woodpecker/consumer-stage-wabase-worker-4.yml" ]]
 expect_failure 'enabled app target is not an active follower: worker-4/joining' \
-	run_placement "$activation" wobase --enable
-grep -Fxq 'ENABLED=false' "$activation/config/cluster/apps/wobase.policy"
+	run_placement "$activation" wabase --enable
+grep -Fxq 'ENABLED=false' "$activation/config/cluster/apps/wabase.policy"
 
 sed 's/^NODE_STATE=.*/NODE_STATE=active/' "$activation/config/cluster/nodes/worker-4.env" >"$activation/worker-4.env"
 mv "$activation/worker-4.env" "$activation/config/cluster/nodes/worker-4.env"
-run_placement "$activation" wobase --enable >/dev/null
-grep -Fxq 'ENABLED=true' "$activation/config/cluster/apps/wobase.policy"
-grep -Fxq 'NODES=worker-4' "$activation/config/cluster/apps/wobase.policy"
-grep -Fq 'node: worker-4' "$activation/.woodpecker/consumer-stage-wobase-worker-4.yml"
-grep -Fq '/usr/local/bin/configure-app-secrets wobase --target-node worker-4 --ensure-generated' "$activation/.woodpecker/consumer-stage-wobase-worker-4.yml"
-grep -Fq 'consumer-stage-wobase-worker-4' "$activation/.woodpecker/consumer-publish-wobase.yml"
-grep -Fq 'consumer-publish-wobase' "$activation/.woodpecker/consumer-stop-wobase-worker-1.yml"
-grep -Fq 'SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=wobase' "$activation/.woodpecker/consumer-finalize-wobase-worker-4.yml"
+run_placement "$activation" wabase --enable >/dev/null
+grep -Fxq 'ENABLED=true' "$activation/config/cluster/apps/wabase.policy"
+grep -Fxq 'NODES=worker-4' "$activation/config/cluster/apps/wabase.policy"
+grep -Fq 'node: worker-4' "$activation/.woodpecker/consumer-stage-wabase-worker-4.yml"
+grep -Fq '/usr/local/bin/configure-app-secrets wabase --target-node worker-4 --ensure-generated' "$activation/.woodpecker/consumer-stage-wabase-worker-4.yml"
+grep -Fq 'consumer-stage-wabase-worker-4' "$activation/.woodpecker/consumer-publish-wabase.yml"
+grep -Fq 'consumer-publish-wabase' "$activation/.woodpecker/consumer-stop-wabase-worker-1.yml"
+grep -Fq 'SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=wabase' "$activation/.woodpecker/consumer-finalize-wabase-worker-4.yml"
+grep -Fq 'migrate-app-identity.sh prepare wabase' "$activation/.woodpecker/consumer-stage-wabase-worker-4.yml"
+grep -Fq 'migrate-app-identity.sh finalize wabase' "$activation/.woodpecker/consumer-finalize-wabase-worker-4.yml"
 
 active_active="$(make_fixture active-active)"
 run_placement "$active_active" librechat worker-2,worker-1 >/dev/null

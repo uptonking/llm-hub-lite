@@ -419,8 +419,10 @@ conditional_secret_keys() {
 }
 
 render_consumer_stage() {
-	local app="$1" node="$2" dependency="$3" file
+	local app="$1" node="$2" dependency="$3" file manifest migration_from
 	file="$output/consumer-stage-$app-$node.yml"
+	manifest="$root/apps/$app/manifest.env"
+	migration_from="$(env_value IDENTITY_MIGRATION_FROM_APP_ID "$manifest")"
 	write_consumer_header "$file" "$app" "$node" "$dependency"
 	cat >>"$file" <<EOF
   stage:
@@ -428,11 +430,26 @@ render_consumer_stage() {
     pull: false
 EOF
 	write_volumes >>"$file"
-	cat >>"$file" <<EOF
+	if [[ -n "$migration_from" ]]; then
+		cat >>"$file" <<EOF
     commands:
+      - bash /opt/platform/control/current/ops/migrate-app-identity.sh prepare $app
+EOF
+	else
+		printf '    commands:\n' >>"$file"
+	fi
+	cat >>"$file" <<EOF
       - /usr/local/bin/configure-app-secrets $app --target-node $node --ensure-generated
+EOF
+	if [[ -n "$migration_from" ]]; then
+		cat >>"$file" <<EOF
+      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA" || { status=\$?; rollback_status=0; IDENTITY_MIGRATION_MANIFEST=/opt/platform/control/releases/"\$CI_COMMIT_SHA"/apps/$app/manifest.env bash /opt/platform/control/releases/"\$CI_COMMIT_SHA"/ops/migrate-app-identity.sh rollback $app || rollback_status=\$?; /usr/local/bin/platformctl recover || true; if [ "\$rollback_status" -ne 0 ]; then exit "\$rollback_status"; fi; exit "\$status"; }
+EOF
+	else
+		cat >>"$file" <<EOF
       - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA"
 EOF
+	fi
 }
 
 render_consumer_publish() {
@@ -468,8 +485,10 @@ EOF
 }
 
 render_consumer_finalize() {
-	local app="$1" node="$2" dependency="$3" file
+	local app="$1" node="$2" dependency="$3" file manifest migration_from
 	file="$output/consumer-finalize-$app-$node.yml"
+	manifest="$root/apps/$app/manifest.env"
+	migration_from="$(env_value IDENTITY_MIGRATION_FROM_APP_ID "$manifest")"
 	write_consumer_header "$file" "$app" "$node" "$dependency"
 	cat >>"$file" <<EOF
   finalize:
@@ -481,10 +500,13 @@ EOF
     commands:
       - DEPLOY_DEBUG_LEVEL=$deploy_debug_level SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
 EOF
+	if [[ -n "$migration_from" ]]; then
+		printf '      - bash /opt/platform/control/current/ops/migrate-app-identity.sh finalize %s\n' "$app" >>"$file"
+	fi
 }
 
 render_consumer_workflows() {
-	local manifest="$1" app placement upstream policy_file enabled nodes node previous='' publish_name seen='' count=0 undesired='' primary_key primary target cluster_keys node_keys conditional_keys secret_keys
+	local manifest="$1" app placement upstream policy_file enabled nodes node previous='' publish_name seen='' count=0 undesired='' primary_key primary target cluster_keys node_keys conditional_keys secret_keys migration_from key migration_value
 	app="$(env_value APP_ID "$manifest")"
 	placement="$(env_value PLACEMENT "$manifest")"
 	upstream="$(env_value UPSTREAM_MODE "$manifest")"
@@ -520,6 +542,14 @@ render_consumer_workflows() {
 		;;
 	*) die "unsupported UPSTREAM_MODE for $app: $upstream" ;;
 	esac
+	migration_from="$(env_value IDENTITY_MIGRATION_FROM_APP_ID "$manifest")"
+	if [[ -n "$migration_from" ]]; then
+		[[ "$upstream" == singleton && "$migration_from" =~ ^[a-z][a-z0-9-]*$ && "$migration_from" != "$app" ]] || die "invalid identity migration source: $app/$migration_from"
+		for key in IDENTITY_MIGRATION_FROM_DATA_ROOT_REL IDENTITY_MIGRATION_FROM_RUNTIME_ENV_FILE IDENTITY_MIGRATION_FROM_COMPOSE_PROJECT IDENTITY_MIGRATION_FROM_NETWORK IDENTITY_MIGRATION_FROM_ENV_PREFIX IDENTITY_MIGRATION_TO_ENV_PREFIX IDENTITY_MIGRATION_TO_NETWORK; do
+			migration_value="$(env_value "$key" "$manifest")"
+			[[ -n "$migration_value" ]] || die "identity migration requires $key: $app"
+		done
+	fi
 	if [[ "$app" == newapi && "$enabled" == true ]]; then
 		for primary_key in NEW_API_MIGRATION_NODE_ID NEW_API_BACKUP_NODE_ID; do
 			primary="$(env_value "$primary_key" "$policy_file")"

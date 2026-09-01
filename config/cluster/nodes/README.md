@@ -11,10 +11,9 @@ and only that Follower is deployed. Pigeon retains a `worker-2` target but is di
 policy, so it has no runtime placement or workflow. Flowy (Activepieces) is an
 enabled PGlite-backed singleton on the active `worker-3` by default. Singleton
 local state is intentionally not replicated; its default DB file storage is
-local, while R2 can be enabled explicitly for durable object storage. Wobase
-(Grist) is reserved for `worker-4`, which remains `joining` until its foundation
-bootstrap is verified. Wobase is disabled during that phase and worker-4 has
-`BACKUP_ENABLED=false`, so its Restic timers remain disabled. OpenObserve is a
+local, while R2 can be enabled explicitly for durable object storage. Wabase
+(Grist) is enabled on active `worker-4`. That node has `BACKUP_ENABLED=false`,
+so its Restic timers remain disabled. OpenObserve is a
 Leader foundation service. Every node runs its read-only Docker socket proxy
 and Vector shipper; each shipper forwards platform-labelled container logs to
 the Leader's `observer-ingest` endpoint and keeps a bounded transient buffer

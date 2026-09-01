@@ -20,10 +20,10 @@ done
 if [ -n "$target" ]; then
   staged="$target${TEST_BACKUP_STAGE_ROOT:?}/sqlite"
   mkdir -p "$staged"
-  artifact=wobase-document.grist
+  artifact=wabase-document.grist
   [ "${RESTIC_FIXTURE_CORRUPT:-0}" = 1 ] && artifact=corrupt.grist
   : >"$staged/$artifact"
-  printf 'wobase\twobase\tdocs/Quarterly Plan.grist\t%s\n' "$artifact" >"$staged/map.tsv"
+  printf 'wabase\twabase\tdocs/Quarterly Plan.grist\t%s\n' "$artifact" >"$staged/map.tsv"
 fi
 EOF
 cat >"$tmp/bin/sqlite3" <<'EOF'
@@ -51,7 +51,7 @@ grep -Fq "repository=$tmp/remote-repository" "$tmp/restic.log"
 grep -Fq "password=$tmp/config/restic-remote-password" "$tmp/restic.log"
 grep -Fq 'args=restore latest' "$tmp/restic.log"
 grep -Fq -- '--tag platform,node:leader' "$tmp/restic.log"
-grep -Fq 'wobase-document.grist' "$tmp/sqlite.log"
+grep -Fq 'wabase-document.grist' "$tmp/sqlite.log"
 
 if PATH="$tmp/bin:$PATH" RESTIC_CALL_LOG="$tmp/restic.log" SQLITE_CALL_LOG="$tmp/sqlite.log" \
 	CONFIG_ROOT="$tmp/config" NODE_CONFIG_FILE="$tmp/config/node.env" \

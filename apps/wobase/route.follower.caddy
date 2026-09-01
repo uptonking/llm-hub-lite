@@ -1,6 +1,0 @@
-{$NODE_WOBASE_ORIGIN_HOST} {
-  import common_proxy
-  reverse_proxy wobase:8484 {
-    flush_interval -1
-  }
-}

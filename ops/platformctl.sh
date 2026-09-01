@@ -927,7 +927,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries=''
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -976,6 +976,24 @@ validate_descriptor() {
 		;;
 	*) die "unsupported UPSTREAM_MODE in $d/manifest.env" ;;
 	esac
+	migration_from="$(descriptor_value "$d" IDENTITY_MIGRATION_FROM_APP_ID)"
+	if [[ -n "$migration_from" ]]; then
+		[[ "$mode" == singleton && "$migration_from" =~ ^[a-z][a-z0-9-]*$ && "$migration_from" != "$(basename "$d")" ]] || die "invalid identity migration source in $d/manifest.env"
+		[[ ! -f "$APPS_ROOT/$migration_from/manifest.env" ]] || die "identity migration source is still declared as an application: $migration_from"
+		for k in IDENTITY_MIGRATION_FROM_DATA_ROOT_REL IDENTITY_MIGRATION_FROM_RUNTIME_ENV_FILE; do
+			migration_value="$(descriptor_value "$d" "$k")"
+			safe_relative "$migration_value" || die "unsafe $k in $d/manifest.env"
+		done
+		for k in IDENTITY_MIGRATION_FROM_COMPOSE_PROJECT IDENTITY_MIGRATION_FROM_NETWORK IDENTITY_MIGRATION_TO_NETWORK; do
+			migration_value="$(descriptor_value "$d" "$k")"
+			[[ "$migration_value" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "invalid $k in $d/manifest.env"
+		done
+		for k in IDENTITY_MIGRATION_FROM_ENV_PREFIX IDENTITY_MIGRATION_TO_ENV_PREFIX; do
+			migration_value="$(descriptor_value "$d" "$k")"
+			[[ "$migration_value" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid $k in $d/manifest.env"
+		done
+		[[ "$(descriptor_value "$d" IDENTITY_MIGRATION_FROM_ENV_PREFIX)" != "$(descriptor_value "$d" IDENTITY_MIGRATION_TO_ENV_PREFIX)" ]] || die "identity migration environment prefixes must differ in $d/manifest.env"
+	fi
 	[[ "$(descriptor_value "$d" APP_ID)" == "$(basename "$d")" && "$(descriptor_value "$d" APP_ID)" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid APP_ID in $d/manifest.env"
 	while IFS= read -r k; do
 		[[ -z "$k" || "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid ENV_KEYS entry in $d/manifest.env: $k"
