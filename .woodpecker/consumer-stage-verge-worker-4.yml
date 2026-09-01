@@ -44,8 +44,6 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     environment:
-      VERGE_AUTH_PASSWORD:
-        from_secret: verge_auth_password
       VERGE_CLOUDFLARE_API_TOKEN:
         from_secret: verge_cloudflare_api_token
     commands:

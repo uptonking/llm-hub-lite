@@ -419,7 +419,7 @@ conditional_secret_keys() {
 }
 
 render_consumer_stage() {
-	local app="$1" node="$2" dependency="$3" file manifest migration_from stage_secret_keys key secret_name
+	local app="$1" node="$2" dependency="$3" file manifest migration_from stage_secret_keys generated_keys key secret_name
 	file="$output/consumer-stage-$app-$node.yml"
 	manifest="$root/apps/$app/manifest.env"
 	migration_from="$(env_value IDENTITY_MIGRATION_FROM_APP_ID "$manifest")"
@@ -435,9 +435,11 @@ EOF
 		stage_secret_keys="$(env_value NODE_SECRET_KEYS "$manifest"),$(conditional_secret_keys "$manifest" "$node")"
 	fi
 	if [[ -n "$stage_secret_keys" ]]; then
+		generated_keys="$(env_value GENERATED_SECRET_KEYS "$manifest")"
 		printf '    environment:\n' >>"$file"
 		while IFS= read -r key; do
 			[[ -n "$key" ]] || continue
+			csv_has "$generated_keys" "$key" && continue
 			secret_name="$(woodpecker_secret_name "$app" "$key")"
 			printf '      %s:\n        from_secret: %s\n' "$key" "$secret_name" >>"$file"
 		done < <(printf '%s\n' "$stage_secret_keys" | tr ',' '\n' | awk 'NF && !seen[$0]++')
