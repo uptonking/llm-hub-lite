@@ -13,9 +13,15 @@ services:
     security_opt: ['no-new-privileges:true']
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
-      - /etc/nginx/tmp:rw,noexec,nosuid,nodev,size=16m,mode=0755
-      - /var/cache/nginx:rw,noexec,nosuid,nodev,size=32m,mode=0755
-      - /var/run:rw,noexec,nosuid,nodev,size=8m,mode=0755
+      # BentoPDF's nginx-unprivileged image runs as uid/gid 101. Mount each
+      # pre-existing Nginx runtime directory rather than replacing its cache
+      # root, which would omit the required temp subdirectories.
+      - /etc/nginx/tmp:rw,noexec,nosuid,nodev,size=16m,uid=101,gid=101,mode=0700
+      - /var/cache/nginx/client_temp:rw,noexec,nosuid,nodev,size=16m,uid=101,gid=101,mode=0700
+      - /var/cache/nginx/proxy_temp:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101,mode=0700
+      - /var/cache/nginx/fastcgi_temp:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101,mode=0700
+      - /var/cache/nginx/uwsgi_temp:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101,mode=0700
+      - /var/cache/nginx/scgi_temp:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101,mode=0700
     labels:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: wapdf
