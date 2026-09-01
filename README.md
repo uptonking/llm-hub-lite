@@ -65,6 +65,7 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - Woodpecker agent
     - Beszel agent
     - LibreChat
+    - Wapdf (BentoPDF) singleton
     - Pigeon package retained but disabled
 - Follower worker-3:
     - Flowy (Activepieces)
@@ -76,7 +77,7 @@ SSH is used only for this one-time host bootstrap. Before starting, prepare the
 five VPS hosts, Cloudflare DNS, and any enabled R2 Restic repositories. The Leader
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
 files are transferred to Followers before they start. Public domains `ci` ,
-`ci-grpc` , `status` , `chat` , `chat-admin` , `aichorouter` , `cpapi` , `cursorapi` ,
+`ci-grpc` , `status` , `chat` , `chat-admin` , `aichorouter` , `cpapi` , `cursorapi` , `wapdf` ,
 and `observer` point to the Leader. Add `observer-ingest` as a DNS-only record
 directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
 origins using the `worker1-` prefix point to Worker 1, while the stable-ID
@@ -92,6 +93,11 @@ The default Cursorapi placement specifically requires the DNS-only
 The Follower origin records must remain DNS-only. The Follower firewall only
 permits Docker HTTPS traffic from the Leader IP. After certificates work, the
 public records may be proxied through Cloudflare.
+Wapdf follows the same two-hop ingress pattern: the DNS-only
+`worker2-wapdf-origin.<domain>` record resolves to Worker 2, while
+`wapdf.<domain>` resolves to the Leader. It is a stateless BentoPDF singleton
+with no runtime secret, persistent payload, host port, database, or Redis
+dependency; its app container is capped at 900 MiB and 0.60 CPU.
 
 Remote Restic/R2 backup is optional. Local Restic repositories are initialized
 automatically on each VPS. If off-host recovery is required, initialize a
@@ -529,6 +535,12 @@ endpoint. The Leader exposes `/healthz` for deployment smoke checks and
 authenticated `/v1/*` API traffic, while dashboard and control paths remain
 unpublished. A target change intentionally starts a fresh container and
 discards its ephemeral home/session state.
+
+Wapdf is a separate stateless singleton at `wapdf.aichorage.de` and defaults
+to `worker-2` . Moves retain the normal singleton route transaction but create
+no app data or runtime secrets. BentoPDF is a browser-side utility, not an
+authenticated document store; do not use it for documents requiring durable
+server-side retention or access control.
 
 OpenObserve is a Leader-only foundation service at `observer.aichorage.de` .
 Its durable local disk data is included in the Leader's Restic snapshot and is

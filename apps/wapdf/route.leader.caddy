@@ -1,0 +1,15 @@
+{$WAPDF_SITE} {
+  import common_proxy
+  reverse_proxy {$WAPDF_UPSTREAM} {
+    health_uri /
+    health_interval 10s
+    health_timeout 5s
+    health_fails 3
+    health_passes 1
+    header_up Host {http.reverse_proxy.upstream.hostport}
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "wapdf unavailable" 503
+  }
+}

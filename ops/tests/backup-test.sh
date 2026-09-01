@@ -6,7 +6,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 grep -Fq 'STAGE_ROOT="${BACKUP_STAGE_ROOT:-$BACKUP_ROOT/stage}"' "$repo_root/ops/backup-platform.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/pigeon" "$tmp/control/current/apps/wabase"
+mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/pigeon" "$tmp/control/current/apps/wabase" "$tmp/control/current/apps/wapdf"
 printf 'test-password\n' >"$tmp/config/restic-password"
 printf 'remote-password\n' >"$tmp/config/restic-remote-password"
 cat >"$tmp/control/current/apps/aichorouter/manifest.env" <<'EOF'
@@ -26,6 +26,13 @@ DATA_ROOT_REL=wabase
 STATE_MODE=sqlite
 SQLITE_PATHS=home.sqlite3
 SQLITE_GLOBS=docs/*.grist
+EOF
+cat >"$tmp/control/current/apps/wapdf/manifest.env" <<'EOF'
+RUNTIME_ENV_FILE=
+DATA_ROOT_REL=
+STATE_MODE=ephemeral
+SQLITE_PATHS=
+SQLITE_GLOBS=
 EOF
 printf 'AICHOROUTER_SESSION_SECRET=test\n' >"$tmp/config/aichorouter.env"
 printf 'PIGEON_SECRET_KEY=test\n' >"$tmp/config/pigeon.env"

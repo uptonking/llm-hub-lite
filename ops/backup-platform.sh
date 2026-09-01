@@ -503,9 +503,11 @@ snapshot() {
 		fi
 	}
 	while IFS= read -r descriptor; do
-		local sqlite_globs glob glob_directory glob_filename search_root
+		local sqlite_globs glob glob_directory glob_filename search_root state_mode
 		app_id="$(basename "$descriptor")"
+		state_mode="$(descriptor_value "$descriptor" STATE_MODE)"
 		data_rel="$(descriptor_value "$descriptor" DATA_ROOT_REL)"
+		[[ "$state_mode" == ephemeral && -z "$data_rel" ]] && continue
 		sqlite_paths="$(descriptor_value "$descriptor" SQLITE_PATHS)"
 		sqlite_globs="$(descriptor_value "$descriptor" SQLITE_GLOBS)"
 		safe_relative "$data_rel" || {
@@ -607,6 +609,7 @@ snapshot() {
 		data_rel="$(descriptor_value "$descriptor" DATA_ROOT_REL)"
 		ephemeral_rel="$(descriptor_value "$descriptor" EPHEMERAL_DATA_REL)"
 		[[ -n "$ephemeral_rel" ]] || continue
+		[[ -n "$data_rel" ]] || continue
 		safe_relative "$data_rel" || {
 			printf 'unsafe DATA_ROOT_REL in %s\n' "$descriptor" >&2
 			return 1

@@ -96,6 +96,7 @@ NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
 NODE_CURSORAPI_ORIGIN_HOST=worker2-cursorapi.example.invalid
 NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
+NODE_WAPDF_ORIGIN_HOST=worker2-wapdf.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
@@ -106,7 +107,7 @@ case "$*" in
   *" ps --all -q beszel-socket-proxy"*) printf 'beszel-socket-proxy\n'; exit 0;;
   *" ps --all -q health-probe"*)
     case "$*" in
-      *"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*)
+      *"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*)
         printf 'health-probe\n'
         exit 0
         ;;
@@ -136,6 +137,7 @@ case "$*" in
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
+  *app-wapdf*) printf 'wapdf\nhealth-probe\n';;
 esac
 exit 0
 EOF
@@ -211,6 +213,7 @@ case "$url" in
   *cpapi*/healthz) printf '{"status":"ok"}\n';;
   *cursorapi*/healthz) printf 'ok\n';;
   *aichorouter*/api/status) printf '{"success":true}\n';;
+  *wapdf*/) printf 'BentoPDF - Free Online PDF Tools\n';;
   *) printf 'OK\n';;
 esac
 EOF
@@ -674,6 +677,30 @@ if grep -Fq 'app-librechat' "$tmp/compose.log"; then
 	printf 'singleton app scope reconciled an unrelated consumer\n' >&2
 	exit 1
 fi
+
+# A truly stateless singleton has neither a root-only runtime env file nor a
+# persistent data directory, but its selected-node Compose project must still
+# be fully evaluated and its move transaction must still be journaled.
+cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
+: >"$tmp/compose.log"
+PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_ONLY_DESCRIPTOR=wapdf PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_ONLY_APP_ID=wapdf PLATFORM_ONLY_ROUTE_APP_ID=wapdf bash "$repo_root/ops/platformctl.sh" validate
+grep -Fq 'app-wapdf' "$tmp/compose.log"
+if grep -Fq "$tmp/config/wapdf.env" "$tmp/compose.log"; then
+	printf 'stateless Wapdf Compose unexpectedly used a runtime env file\n' >&2
+	exit 1
+fi
+[[ ! -e "$tmp/config/wapdf.env" ]]
+rm -rf -- "$tmp/app/shared/data/prod/wapdf"
+mkdir -p "$tmp/config/singleton-state"
+printf 'worker-1\n' >"$tmp/config/singleton-state/wapdf.previous-target"
+SINGLETON_RELEASE_SHA=wapdf-test bash "$repo_root/ops/platformctl.sh" singleton-prepare wapdf
+grep -qx 'PHASE=prepared' "$tmp/config/singleton-state/wapdf.transition.env"
+grep -qx 'ARCHIVE_PATH=' "$tmp/config/singleton-state/wapdf.transition.env"
+[[ ! -e "$tmp/app/shared/data/prod/wapdf" ]]
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+stop_output="$(bash "$repo_root/ops/platformctl.sh" consumer-stop wapdf)"
+grep -Fq 'stopped stateless singleton wapdf; no persistent data retained' <<<"$stop_output"
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
 # A reviewed foundation upgrade must preserve installed singleton routes while
 # withholding a brand-new singleton. It must not require the new app's runtime
 # secrets or an app-image key that is not installed until singleton staging.

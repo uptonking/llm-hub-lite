@@ -45,6 +45,8 @@ for file in \
 	consumer-stage-aichorouter-worker-1.yml consumer-publish-aichorouter.yml consumer-stop-aichorouter-worker-2.yml \
 	consumer-finalize-aichorouter-worker-1.yml \
 	consumer-stage-librechat-worker-1.yml consumer-stage-librechat-worker-2.yml consumer-publish-librechat.yml \
+	consumer-stage-wapdf-worker-2.yml consumer-publish-wapdf.yml consumer-stop-wapdf-worker-1.yml \
+	consumer-stop-wapdf-worker-3.yml consumer-stop-wapdf-worker-4.yml consumer-finalize-wapdf-worker-2.yml \
 	consumer-publish-newapi.yml consumer-stop-newapi-worker-1.yml consumer-stop-newapi-worker-2.yml \
 	foundation-upgrade-leader.yml foundation-upgrade-worker-1.yml foundation-upgrade-worker-2.yml \
 	runner-upgrade-leader.yml rollback-leader.yml; do
@@ -79,6 +81,7 @@ done
 [[ ! -e "$base/workflows/consumer-stage-newapi-worker-1.yml" ]]
 [[ ! -e "$base/workflows/consumer-stage-pigeon-worker-2.yml" ]]
 [[ ! -e "$base/workflows/consumer-stop-librechat-worker-1.yml" ]]
+[[ ! -e "$base/workflows/consumer-secrets-wapdf-worker-2.yml" ]]
 grep -Fq $'depends_on:\n  - consumer-stage-librechat-worker-1' "$base/workflows/consumer-stage-librechat-worker-2.yml"
 grep -Fq $'depends_on:\n  - consumer-stage-librechat-worker-2' "$base/workflows/consumer-publish-librechat.yml"
 grep -Fq $'depends_on:\n  - consumer-stage-aichorouter-worker-1' "$base/workflows/consumer-publish-aichorouter.yml"
@@ -242,6 +245,8 @@ sed -e 's/^NODES=.*/NODES=worker-1/' -e 's/^NEW_API_BACKUP_NODE_ID=.*/NEW_API_BA
 mv "$draining_secrets/newapi.policy" "$draining_secrets/config/cluster/apps/newapi.policy"
 sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/pigeon.policy" >"$draining_secrets/pigeon.policy"
 mv "$draining_secrets/pigeon.policy" "$draining_secrets/config/cluster/apps/pigeon.policy"
+sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/wapdf.policy" >"$draining_secrets/wapdf.policy"
+mv "$draining_secrets/wapdf.policy" "$draining_secrets/config/cluster/apps/wapdf.policy"
 generate_fixture "$draining_secrets"
 [[ -f "$draining_secrets/workflows/consumer-stop-aichorouter-worker-2.yml" ]]
 if find "$draining_secrets/workflows" -name 'consumer-secrets-*-worker-2.yml' | grep -q .; then
@@ -263,6 +268,8 @@ for lifecycle_state in joining draining; do
 	mv "$evacuating/newapi.policy" "$evacuating/config/cluster/apps/newapi.policy"
 	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/pigeon.policy" >"$evacuating/pigeon.policy"
 	mv "$evacuating/pigeon.policy" "$evacuating/config/cluster/apps/pigeon.policy"
+	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/wapdf.policy" >"$evacuating/wapdf.policy"
+	mv "$evacuating/wapdf.policy" "$evacuating/config/cluster/apps/wapdf.policy"
 	generate_fixture "$evacuating"
 	[[ ! -e "$evacuating/workflows/foundation-upgrade-worker-2.yml" ]]
 	[[ ! -e "$evacuating/workflows/runner-upgrade-worker-2.yml" ]]

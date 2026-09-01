@@ -596,7 +596,8 @@ render_consumer_workflows() {
 		while IFS= read -r node; do
 			[[ -n "$node" ]] || continue
 			conditional_keys="$(conditional_secret_keys "$manifest" "$node")"
-			secret_keys="$cluster_keys,$conditional_keys"
+			secret_keys="$cluster_keys"
+			[[ -z "$conditional_keys" ]] || secret_keys="${secret_keys:+$secret_keys,}$conditional_keys"
 			[[ -z "$node_keys" ]] || secret_keys="${secret_keys:+$secret_keys,}$node_keys"
 			[[ -n "$secret_keys" ]] || continue
 			render_consumer_secrets "$app" "$node" '' "$secret_keys"

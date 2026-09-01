@@ -1,0 +1,6 @@
+{$NODE_WAPDF_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy wapdf:8080 {
+    flush_interval -1
+  }
+}

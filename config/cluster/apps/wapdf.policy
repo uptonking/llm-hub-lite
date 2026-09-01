@@ -1,0 +1,3 @@
+# BentoPDF is a stateless singleton. Moving it starts a fresh container.
+ENABLED=true
+NODES=worker-2

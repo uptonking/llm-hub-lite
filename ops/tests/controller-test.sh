@@ -110,6 +110,30 @@ grep -Fq 'GRIST_SQLITE_MODE: ${WABASE_SQLITE_MODE:-wal}' "$repo_root/apps/wabase
 grep -Fq "status?ready=1&db=1" "$repo_root/apps/wabase/compose.yml"
 grep -Fq 'header_up Host {$WABASE_SITE_HOST}' "$repo_root/apps/wabase/route.follower.caddy"
 grep -Fq 'header_up X-Forwarded-Host {$WABASE_SITE_HOST}' "$repo_root/apps/wabase/route.follower.caddy"
+grep -q '^APP_ID=wapdf$' "$repo_root/apps/wapdf/manifest.env"
+grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/wapdf/manifest.env"
+grep -q '^STATE_MODE=ephemeral$' "$repo_root/apps/wapdf/manifest.env"
+grep -q '^DATA_ROOT_REL=$' "$repo_root/apps/wapdf/manifest.env"
+grep -q '^RUNTIME_ENV_FILE=$' "$repo_root/apps/wapdf/manifest.env"
+grep -q '^NODES=worker-2$' "$repo_root/config/cluster/apps/wapdf.policy"
+grep -q '^WAPDF_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -Fq 'mem_limit: ${WAPDF_MEMORY_LIMIT:-900m}' "$repo_root/apps/wapdf/compose.yml"
+grep -Fq 'cpus: ${WAPDF_CPUS:-0.60}' "$repo_root/apps/wapdf/compose.yml"
+grep -Fq 'pids_limit: ${WAPDF_PIDS_LIMIT:-64}' "$repo_root/apps/wapdf/compose.yml"
+grep -Fq 'read_only: true' "$repo_root/apps/wapdf/compose.yml"
+grep -Fq 'cap_drop: [ALL]' "$repo_root/apps/wapdf/compose.yml"
+grep -Fq "security_opt: ['no-new-privileges:true']" "$repo_root/apps/wapdf/compose.yml"
+grep -Fq 'reverse_proxy wapdf:8080' "$repo_root/apps/wapdf/route.follower.caddy"
+grep -Fq 'health_uri /' "$repo_root/apps/wapdf/route.leader.caddy"
+grep -q '^NODE_WAPDF_ORIGIN_HOST=worker2-wapdf-origin.aichorage.de$' "$repo_root/config/cluster/nodes/worker-2.env"
+if grep -Eiq 'ports:|/var/run/docker.sock|postgres|redis' "$repo_root/apps/wapdf/compose.yml"; then
+	printf 'Wapdf must not publish ports or depend on databases or the Docker socket\n' >&2
+	exit 1
+fi
+if grep -Eq '^[[:space:]]+volumes:' "$repo_root/apps/wapdf/compose.yml"; then
+	printf 'Wapdf must remain stateless and must not mount persistent volumes\n' >&2
+	exit 1
+fi
 grep -Fq 'stage_validation_runtime_config "$release" "$validation_config"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'CONFIG_ROOT="$validation_config" APPS_ROOT="$release/apps"' "$repo_root/ops/deploy-controller.sh"
 grep -q '^CONDITIONAL_SECRET_KEYS=FLOWY_FILE_STORAGE_LOCATION=S3|FLOWY_S3_ENDPOINT,FLOWY_S3_BUCKET,FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"
@@ -393,6 +417,10 @@ done
 grep -Fq 'platform-submit control-sync' "$repo_root/.woodpecker/control-sync-leader.yml"
 grep -Fq 'control-sync-worker-1' "$repo_root/.woodpecker/consumer-stage-cpapi-worker-1.yml"
 grep -Fq 'consumer-publish-cpapi' "$repo_root/.woodpecker/consumer-stop-cpapi-worker-2.yml"
+grep -Fq 'CONSUMER_APP_ID=wapdf /usr/local/bin/platform-submit consumer-stage' "$repo_root/.woodpecker/consumer-stage-wapdf-worker-2.yml"
+grep -Fq 'consumer-stage-wapdf-worker-2' "$repo_root/.woodpecker/consumer-publish-wapdf.yml"
+grep -Fq 'consumer-publish-wapdf' "$repo_root/.woodpecker/consumer-stop-wapdf-worker-1.yml"
+[[ ! -e "$repo_root/.woodpecker/consumer-secrets-wapdf-worker-2.yml" ]]
 grep -Fq 'consumer-stage-librechat-worker-1' "$repo_root/.woodpecker/consumer-stage-librechat-worker-2.yml"
 grep -Fq 'consumer-stage-librechat-worker-2' "$repo_root/.woodpecker/consumer-publish-librechat.yml"
 grep -q '^NEW_API_NODE_TYPE=master$' "$repo_root/config/cluster/nodes/worker-1.env"
@@ -494,6 +522,7 @@ while IFS='|' read -r compose_file service; do
 done <<'EOF'
 apps/aichorouter/compose.yml|health-probe
 apps/cpapi/compose.yml|health-probe
+apps/wapdf/compose.yml|health-probe
 apps/pigeon/compose.yml|health-probe
 compose/foundation/beszel-worker.yml|beszel-socket-proxy
 compose/foundation/observer-controller.yml|observer-controller
