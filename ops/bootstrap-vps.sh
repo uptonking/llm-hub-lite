@@ -715,6 +715,19 @@ migrate_legacy_woodpecker_layout() {
 	move_directory_contents "$PLATFORM_ROOT/woodpecker/agent/deployer" "$PLATFORM_ROOT/woodpecker/deployer"
 }
 
+# Beszel normally derives its fingerprint from the VPS machine identity. Images
+# cloned from another node can carry the same machine identity, causing the Hub
+# to attach the new agent to the original system. Seed a stable, node-scoped
+# fingerprint on first bootstrap; once enrolled, preserve the persisted value.
+ensure_beszel_fingerprint() {
+	local fingerprint_file="$PLATFORM_ROOT/beszel/agent/fingerprint" digest
+	[[ -s "$fingerprint_file" ]] && return 0
+	digest="$(printf 'llm-hub-lite/beszel/%s' "$NODE_ID" | sha256sum)"
+	digest="${digest%% *}"
+	printf '%s\n' "${digest:0:48}" >"$fingerprint_file"
+	chmod 644 "$fingerprint_file"
+}
+
 need apt-get
 bootstrap_packages=()
 for pair in curl:curl gpg:gnupg git:git openssl:openssl ufw:ufw iptables:iptables ip:iproute2 tar:tar flock:util-linux; do
@@ -899,6 +912,7 @@ if [[ "$BOOTSTRAP_MODE" == repair && -r "$CONFIG_ROOT/node.env" ]]; then
 fi
 NODE_ROLE=leader
 [[ "$NODE_ID" == "$leader_node_id" ]] || NODE_ROLE=follower
+ensure_beszel_fingerprint
 app_policy_file() {
 	local app="$1" rel
 	rel="$(sed -n 's/^POLICY_FILE=//p' "$bootstrap_tree/apps/$app/manifest.env" | tail -n1)"
@@ -1245,19 +1259,25 @@ fi
 if [[ ! -f "$beszel_env" ]]; then
 	{
 		printf 'BESZEL_APP_URL=https://status.%s\nBESZEL_DATA_ROOT=%s/hub\nBESZEL_AGENT_DATA_ROOT=%s/agent\n' "$DOMAIN_NAME" "$PLATFORM_ROOT/beszel" "$PLATFORM_ROOT/beszel"
-		printf 'BESZEL_KEY_FILE=%s/secrets/key\nBESZEL_TOKEN_FILE=%s/secrets/token\nBESZEL_SYSTEM_NAME=%s\n' "$PLATFORM_ROOT/beszel" "$PLATFORM_ROOT/beszel" "$(hostname -f)"
+		printf 'BESZEL_KEY_FILE=%s/secrets/key\nBESZEL_TOKEN_FILE=%s/secrets/token\nBESZEL_SYSTEM_NAME=%s\n' "$PLATFORM_ROOT/beszel" "$PLATFORM_ROOT/beszel" "$NODE_ID"
 		printf 'BESZEL_CONTAINER_DETAILS=false\nBESZEL_SOCKET_PROXY_PORT=2375\nBESZEL_SERVICE_PATTERNS=platform-*,docker.service,containerd.service,ssh.service\nBESZEL_HEARTBEAT_URL=\nBESZEL_HEARTBEAT_METHOD=POST\nBESZEL_HEARTBEAT_INTERVAL=60\nBESZEL_MFA_OTP=false\nBESZEL_DISABLE_PASSWORD_AUTH=false\nBESZEL_USER_CREATION=false\n'
 	} >"$beszel_env"
 fi
 for pair in \
 	"BESZEL_APP_URL=https://status.$DOMAIN_NAME" "BESZEL_DATA_ROOT=$PLATFORM_ROOT/beszel/hub" \
 	"BESZEL_AGENT_DATA_ROOT=$PLATFORM_ROOT/beszel/agent" "BESZEL_KEY_FILE=$PLATFORM_ROOT/beszel/secrets/key" \
-	"BESZEL_TOKEN_FILE=$PLATFORM_ROOT/beszel/secrets/token" "BESZEL_SYSTEM_NAME=$(hostname -f)" \
+	"BESZEL_TOKEN_FILE=$PLATFORM_ROOT/beszel/secrets/token" "BESZEL_SYSTEM_NAME=$NODE_ID" \
 	"BESZEL_CONTAINER_DETAILS=false" "BESZEL_SOCKET_PROXY_PORT=2375" \
 	"BESZEL_SERVICE_PATTERNS=platform-*,docker.service,containerd.service,ssh.service" "BESZEL_SYSTEMD_PRIVATE_SOCKET=/run/systemd/private" \
 	"BESZEL_HEARTBEAT_METHOD=POST" "BESZEL_HEARTBEAT_INTERVAL=60" \
 	"BESZEL_MFA_OTP=false" "BESZEL_DISABLE_PASSWORD_AUTH=false" "BESZEL_USER_CREATION=false"; do
-	ensure_key "$beszel_env" "${pair%%=*}" "${pair#*=}"
+	if [[ "${pair%%=*}" == BESZEL_SYSTEM_NAME ]]; then
+		# Beszel's system name is the stable cluster identity, not the mutable
+		# host name assigned by a VPS provider.
+		set_key "$beszel_env" "${pair%%=*}" "${pair#*=}"
+	else
+		ensure_key "$beszel_env" "${pair%%=*}" "${pair#*=}"
+	fi
 done
 set_derived_key "$beszel_env" BESZEL_APP_URL "https://status.$DOMAIN_NAME" "$previous_beszel_domain" 'https://status.'
 ensure_key "$beszel_env" BESZEL_AGENT_APPARMOR unconfined

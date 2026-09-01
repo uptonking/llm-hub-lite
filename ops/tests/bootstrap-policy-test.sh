@@ -20,6 +20,14 @@ grep -Fq "previous_woodpecker_domain=''" "$bootstrap"
 grep -Fq 'if [[ -r "$woodpecker_env" ]]; then' "$bootstrap"
 grep -Fq "previous_beszel_domain=''" "$bootstrap"
 grep -Fq 'if [[ -r "$beszel_env" ]]; then' "$bootstrap"
+grep -Fq 'BESZEL_SYSTEM_NAME=$NODE_ID' "$bootstrap"
+if grep -Fq 'BESZEL_SYSTEM_NAME=$(hostname -f)' "$bootstrap"; then
+	printf 'bootstrap must use the logical NODE_ID for Beszel system identity\n' >&2
+	exit 1
+fi
+grep -Fq 'ensure_beszel_fingerprint()' "$bootstrap"
+grep -Fq "llm-hub-lite/beszel/%s' \"\$NODE_ID\"" "$bootstrap"
+grep -Fq '[[ -s "$fingerprint_file" ]] && return 0' "$bootstrap"
 grep -Fq 'if [[ -r "$file" ]]; then' "$bootstrap"
 grep -Fq 'The Leader-generated shared bundle is authoritative on Followers' "$bootstrap"
 grep -Fq 'set_key_if_changed()' "$bootstrap"
