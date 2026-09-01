@@ -5,23 +5,23 @@ when:
     branch: main
     path:
       include:
-        - apps/aichorouter/**
-        - config/cluster/apps/aichorouter.policy
-        - config/cluster/overrides/**/aichorouter.env
-        - apps/aichorouter/route*.caddy
-        - apps/aichorouter/images.lock.env
+        - apps/wobase/**
+        - config/cluster/apps/wobase.policy
+        - config/cluster/overrides/**/wobase.env
+        - apps/wobase/route*.caddy
+        - apps/wobase/images.lock.env
       on_empty: false
 
 depends_on:
-  - consumer-stop-aichorouter-worker-4
-  - control-sync-worker-1
-  - name: foundation-reconcile-worker-1
+  - consumer-stop-wobase-worker-3
+  - control-sync-worker-4
+  - name: foundation-reconcile-worker-4
     optional: true
-  - name: cluster-reconcile-worker-1
+  - name: cluster-reconcile-worker-4
     optional: true
 
 labels:
-  node: worker-1
+  node: worker-4
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
@@ -45,4 +45,4 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
-      - DEPLOY_DEBUG_LEVEL=off SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=aichorouter /usr/local/bin/platform-submit consumer-stop "$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=off SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=wobase /usr/local/bin/platform-submit consumer-stop "$CI_COMMIT_SHA"

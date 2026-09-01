@@ -13,7 +13,7 @@ when:
       on_empty: false
 
 depends_on:
-  - consumer-stop-cursorapi-worker-3
+  - consumer-stop-cursorapi-worker-4
   - control-sync-worker-1
   - name: foundation-reconcile-worker-1
     optional: true

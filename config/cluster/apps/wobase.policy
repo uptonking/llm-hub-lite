@@ -1,4 +1,4 @@
-# Keep disabled until worker-4 has completed its one-time foundation bootstrap
-# and is promoted from joining to active in the same change that enables Wobase.
-ENABLED=false
+# Worker-4 completed its one-time foundation bootstrap before this singleton
+# placement was enabled. Moving Wobase to another node starts with fresh state.
+ENABLED=true
 NODES=worker-4

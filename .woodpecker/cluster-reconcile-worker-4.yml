@@ -5,23 +5,17 @@ when:
     branch: main
     path:
       include:
-        - apps/aichorouter/**
-        - config/cluster/apps/aichorouter.policy
-        - config/cluster/overrides/**/aichorouter.env
-        - apps/aichorouter/route*.caddy
-        - apps/aichorouter/images.lock.env
+        - config/cluster/policy.env
+        - config/cluster/nodes/**
+        - config/cluster/foundation/**
       on_empty: false
 
 depends_on:
-  - consumer-stop-aichorouter-worker-4
-  - control-sync-worker-1
-  - name: foundation-reconcile-worker-1
-    optional: true
-  - name: cluster-reconcile-worker-1
-    optional: true
+  - cluster-reconcile-worker-3
+  - control-sync-worker-4
 
 labels:
-  node: worker-1
+  node: worker-4
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
@@ -31,7 +25,7 @@ concurrency:
   group: llm-hub-lite-deployment
 
 steps:
-  finalize:
+  reconcile:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -45,4 +39,4 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
-      - DEPLOY_DEBUG_LEVEL=off SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=aichorouter /usr/local/bin/platform-submit consumer-stop "$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit cluster-reconcile "$CI_COMMIT_SHA"
