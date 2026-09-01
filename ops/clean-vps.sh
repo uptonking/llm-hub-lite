@@ -106,9 +106,9 @@ wrappers=(platformctl restart-platform backup-platform restore-platform configur
 projects=(foundation-caddy foundation-beszel-controller foundation-beszel-worker
 	foundation-woodpecker-controller foundation-woodpecker-worker foundation-woodpecker-deployer
 	foundation-observer-controller foundation-observer-collector app-librechat app-newapi
-	app-aichorouter app-cpapi app-pigeon)
+	app-aichorouter app-cpapi app-pigeon app-wobase)
 containers=() networks=(platform_edge foundation-woodpecker_private foundation-observer_private app-librechat_private
-	app-newapi_private app-aichorouter_private app-cpapi_private app-pigeon_private app-observer_private) images=(llm-hub-lite/deploy-runner:current)
+	app-newapi_private app-aichorouter_private app-cpapi_private app-pigeon_private app-wobase_private app-observer_private) images=(llm-hub-lite/deploy-runner:current)
 
 collect_systemd_units() {
 	local path base

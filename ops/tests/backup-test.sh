@@ -6,7 +6,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 grep -Fq 'STAGE_ROOT="${BACKUP_STAGE_ROOT:-$BACKUP_ROOT/stage}"' "$repo_root/ops/backup-platform.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/pigeon"
+mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/pigeon" "$tmp/control/current/apps/wobase"
 printf 'test-password\n' >"$tmp/config/restic-password"
 printf 'remote-password\n' >"$tmp/config/restic-remote-password"
 cat >"$tmp/control/current/apps/aichorouter/manifest.env" <<'EOF'
@@ -20,13 +20,24 @@ RUNTIME_ENV_FILE=pigeon.env
 DATA_ROOT_REL=pigeon
 SQLITE_PATHS=outlook_accounts.db
 EOF
+cat >"$tmp/control/current/apps/wobase/manifest.env" <<'EOF'
+RUNTIME_ENV_FILE=wobase.env
+DATA_ROOT_REL=wobase
+STATE_MODE=sqlite
+SQLITE_PATHS=home.sqlite3
+SQLITE_GLOBS=docs/*.grist
+EOF
 printf 'AICHOROUTER_SESSION_SECRET=test\n' >"$tmp/config/aichorouter.env"
 printf 'PIGEON_SECRET_KEY=test\n' >"$tmp/config/pigeon.env"
+printf 'WOBASE_SESSION_SECRET=test\n' >"$tmp/config/wobase.env"
 printf 'OBSERVER_DATA_ROOT=%s\n' "$tmp/platform/observer-custom" >"$tmp/platform/foundation/env/observer.env"
 mkdir -p "$tmp/platform/observer-custom/data/db"
 : >"$tmp/platform/observer-custom/data/db/metadata.sqlite"
 mkdir -p "$tmp/app/shared/data/prod/pigeon"
 : >"$tmp/app/shared/data/prod/pigeon/outlook_accounts.db"
+mkdir -p "$tmp/app/shared/data/prod/wobase/docs"
+: >"$tmp/app/shared/data/prod/wobase/home.sqlite3"
+: >"$tmp/app/shared/data/prod/wobase/docs/Quarterly Plan.grist"
 
 cat >"$tmp/bin/df" <<'EOF'
 #!/bin/sh
@@ -101,11 +112,40 @@ fi
 grep -q "$tmp/config/aichorouter.env" "$tmp/restic.log"
 grep -q "$tmp/config/pigeon.env" "$tmp/restic.log"
 grep -qx "$tmp/app/shared/data/prod/pigeon/outlook_accounts.db" "$tmp/sqlite.log"
+grep -Fxq "$tmp/app/shared/data/prod/wobase/home.sqlite3" "$tmp/sqlite.log"
+grep -Fxq "$tmp/app/shared/data/prod/wobase/docs/Quarterly Plan.grist" "$tmp/sqlite.log"
+grep -Fq -- "--exclude $tmp/app/shared/data/prod/wobase/home.sqlite3-wal" "$tmp/restic.log"
+grep -Fq -- "--exclude $tmp/app/shared/data/prod/wobase/docs/Quarterly Plan.grist-shm" "$tmp/restic.log"
+grep -Fq -- "--exclude $tmp/app/shared/data/prod/wobase/docs/*.grist-journal" "$tmp/restic.log"
 grep -q -- "--exclude $tmp/app/shared/data/prod/aichorouter/log-buffer" "$tmp/restic.log"
 grep -q "$tmp/platform/observer-custom" "$tmp/restic.log"
 grep -q -- "--exclude $tmp/platform/observer-custom/collector-buffer" "$tmp/restic.log"
 grep -q -- "--exclude $tmp/platform/observer-custom/data/db/metadata.sqlite" "$tmp/restic.log"
 grep -q "$tmp/platform/observer-custom/data/db/metadata.sqlite" "$tmp/restic.log"
+
+cp "$tmp/control/current/apps/wobase/manifest.env" "$tmp/wobase.manifest"
+: >"$tmp/app/shared/data/prod/wobase/docs/report.grist"
+sed 's/^SQLITE_PATHS=.*/SQLITE_PATHS=home.sqlite3,docs\/report.grist/' "$tmp/wobase.manifest" >"$tmp/control/current/apps/wobase/manifest.env"
+if output="$("$repo_root/ops/backup-platform.sh" snapshot duplicate-sqlite-test 2>&1)"; then
+	printf 'duplicate exact/glob SQLite declaration was accepted\n' >&2
+	exit 1
+fi
+grep -Fq 'duplicate SQLite database declaration' <<<"$output"
+sed 's#^SQLITE_GLOBS=.*#SQLITE_GLOBS=../docs/*.grist#' "$tmp/wobase.manifest" >"$tmp/control/current/apps/wobase/manifest.env"
+if output="$("$repo_root/ops/backup-platform.sh" snapshot unsafe-glob-test 2>&1)"; then
+	printf 'unsafe SQLite glob was accepted\n' >&2
+	exit 1
+fi
+grep -Fq 'unsafe SQLITE_GLOBS entry' <<<"$output"
+mkdir -p "$tmp/outside-docs"
+ln -s "$tmp/outside-docs" "$tmp/app/shared/data/prod/wobase/docs-link"
+sed 's#^SQLITE_GLOBS=.*#SQLITE_GLOBS=docs-link/*.grist#' "$tmp/wobase.manifest" >"$tmp/control/current/apps/wobase/manifest.env"
+if output="$("$repo_root/ops/backup-platform.sh" snapshot symlink-glob-test 2>&1)"; then
+	printf 'symlinked SQLite glob directory was accepted\n' >&2
+	exit 1
+fi
+grep -Fq 'SQLITE_GLOBS directory traverses a symlink' <<<"$output"
+cp "$tmp/wobase.manifest" "$tmp/control/current/apps/wobase/manifest.env"
 
 # A node may explicitly opt out when its disk is too small for a local
 # repository. The backup command must return successfully without invoking

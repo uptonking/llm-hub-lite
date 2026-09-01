@@ -6,6 +6,8 @@ Self-hosted, reproducible multi-node Docker platform for Caddy, Woodpecker CI,
 Beszel, and LibreChat.
 LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI,
 and Cursorapi are enabled singleton consumers targeted to configured followers.
+Flowy is enabled on worker-3. Wobase (Grist) is reserved for the joining
+worker-4 and remains disabled until that node is bootstrapped and activated.
 Pigeon (OutlookEmail) is retained but disabled by committed policy. OpenObserve
 (`observer`) is a Leader-only foundation service; read-only socket-proxy and
 bounded Vector collectors run on every node and forward platform-labelled logs

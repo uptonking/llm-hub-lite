@@ -1,0 +1,15 @@
+{$WOBASE_SITE} {
+  import common_proxy
+  reverse_proxy {$WOBASE_UPSTREAM} {
+    health_uri /status?ready=1&db=1
+    health_interval 10s
+    health_timeout 5s
+    health_fails 3
+    health_passes 1
+    header_up Host {http.reverse_proxy.upstream.hostport}
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "wobase unavailable" 503
+  }
+}

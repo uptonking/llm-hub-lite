@@ -129,17 +129,65 @@ safe_observer_data_root() {
 	esac
 }
 
+safe_restore_relative() {
+	local value="$1"
+	[[ -n "$value" && "$value" != /* && "$value" != .. && "$value" != ../* && "$value" != */../* && "$value" != */.. && "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" != *$'\t'* ]]
+}
+
+validate_sqlite_artifact() {
+	local database="$1"
+	[[ -f "$database" ]] || {
+		printf 'missing restored SQLite artifact: %s\n' "$database" >&2
+		return 1
+	}
+	sqlite3 "$database" 'PRAGMA integrity_check;' | grep -qx ok || {
+		printf 'restored SQLite integrity check failed: %s\n' "$database" >&2
+		return 1
+	}
+}
+
 validate_extract() {
-	local target="$1" database count=0 app_id data_rel pglite_rel
+	local target="$1" database count=0 app_id data_rel relative pglite_rel snapshot_file seen key
+	local -a mapped=()
 	local staged
 	staged="$(staged_backup_root "$target")"
-	while IFS= read -r database; do
-		sqlite3 "$database" 'PRAGMA integrity_check;' | grep -qx ok || {
-			printf 'restored SQLite integrity check failed: %s\n' "$database" >&2
-			return 1
-		}
+	if [[ -f "$staged/sqlite/map.tsv" ]]; then
+		while IFS=$'\t' read -r app_id data_rel relative snapshot_file; do
+			[[ "$app_id" =~ ^[a-z][a-z0-9-]*$ ]] || die 'invalid application database restore map app ID'
+			if ! safe_restore_relative "$data_rel" || ! safe_restore_relative "$relative"; then
+				die 'unsafe application database restore path'
+			fi
+			[[ -n "$snapshot_file" && "$snapshot_file" == "${snapshot_file##*/}" && "$snapshot_file" != *$'\t'* && "$snapshot_file" != *$'\n'* && "$snapshot_file" != *$'\r'* ]] || die 'invalid application database artifact name'
+			key="$data_rel/$relative"
+			for seen in "${mapped[@]-}"; do
+				[[ -n "$seen" ]] || continue
+				[[ "$seen" != "$key" ]] || die "duplicate application database restore path: $key"
+			done
+			mapped+=("$key")
+			validate_sqlite_artifact "$staged/sqlite/$snapshot_file" || return 1
+			count=$((count + 1))
+		done <"$staged/sqlite/map.tsv"
+	fi
+	for database in "$staged/sqlite/woodpecker.sqlite" "$staged/sqlite/observer-metadata.sqlite"; do
+		[[ -f "$database" ]] || continue
+		validate_sqlite_artifact "$database" || return 1
 		count=$((count + 1))
-	done < <(find "$staged/sqlite" -type f \( -name '*.db' -o -name '*.sqlite' \) 2>/dev/null | sort)
+	done
+	if [[ -f "$staged/sqlite/beszel-map.tsv" ]]; then
+		while IFS=$'\t' read -r relative snapshot_file; do
+			safe_restore_relative "$relative" || die 'invalid Beszel database restore path'
+			[[ -n "$snapshot_file" && "$snapshot_file" == "${snapshot_file##*/}" ]] || die 'invalid Beszel database artifact name'
+			validate_sqlite_artifact "$staged/sqlite/$snapshot_file" || return 1
+			count=$((count + 1))
+		done <"$staged/sqlite/beszel-map.tsv"
+	fi
+	# Legacy snapshots that predate the maps still need extension discovery.
+	if [[ ! -f "$staged/sqlite/map.tsv" && ! -f "$staged/sqlite/beszel-map.tsv" ]]; then
+		while IFS= read -r database; do
+			validate_sqlite_artifact "$database" || return 1
+			count=$((count + 1))
+		done < <(find "$staged/sqlite" -type f \( -name '*.db' -o -name '*.sqlite' \) 2>/dev/null | sort)
+	fi
 	# A newly bootstrapped instance may not have created every optional database.
 	((count > 0)) || printf 'snapshot contains no SQLite copies; continuing (optional databases may be empty)\n' >&2
 	if [[ -f "$staged/pglite/map.tsv" ]]; then
@@ -186,10 +234,13 @@ install_verified_databases() {
 	fi
 	if [[ -f "$staged/map.tsv" ]]; then
 		while IFS=$'\t' read -r app_id data_rel relative snapshot_file; do
-			[[ -n "$app_id" && -n "$data_rel" && -n "$relative" && -n "$snapshot_file" ]] || die 'invalid application database restore map'
-			[[ "$data_rel" != /* && "$data_rel" != *..* && "$relative" != /* && "$relative" != *..* ]] || die 'unsafe application database restore path'
-			[[ "$snapshot_file" != /* && "$snapshot_file" != *..* && -f "$staged/$snapshot_file" ]] || die 'missing application database artifact'
+			[[ "$app_id" =~ ^[a-z][a-z0-9-]*$ ]] || die 'invalid application database restore map app ID'
+			if ! safe_restore_relative "$data_rel" || ! safe_restore_relative "$relative"; then
+				die 'unsafe application database restore path'
+			fi
+			[[ -n "$snapshot_file" && "$snapshot_file" == "${snapshot_file##*/}" && -f "$staged/$snapshot_file" ]] || die 'missing application database artifact'
 			install -d -m 700 "$target$DATA_ROOT/$data_rel/$(dirname "$relative")"
+			rm -f -- "$target$DATA_ROOT/$data_rel/$relative-wal" "$target$DATA_ROOT/$data_rel/$relative-shm" "$target$DATA_ROOT/$data_rel/$relative-journal"
 			install -m 600 "$staged/$snapshot_file" "$target$DATA_ROOT/$data_rel/$relative"
 		done <"$staged/map.tsv"
 	fi

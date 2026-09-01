@@ -936,6 +936,13 @@ joining | active) ;;
 draining | retired) die "cannot bootstrap a node in $NODE_STATE state: $NODE_ID" ;;
 *) die "invalid node state in cluster inventory: $NODE_ID/$NODE_STATE" ;;
 esac
+NODE_BACKUP_ENABLED="$(sed -n 's/^BACKUP_ENABLED=//p' "$inventory_file" | tail -n1)"
+NODE_BACKUP_ENABLED="${NODE_BACKUP_ENABLED:-true}"
+case "$NODE_BACKUP_ENABLED" in
+true | TRUE | 1) NODE_BACKUP_ENABLED=true ;;
+false | FALSE | 0) NODE_BACKUP_ENABLED=false ;;
+*) die "BACKUP_ENABLED must be true or false in node inventory: $NODE_ID" ;;
+esac
 if [[ "$NODE_ROLE" == leader && "$NODE_STATE" != active ]]; then
 	die 'the designated Leader must be active before bootstrap'
 fi
@@ -1556,7 +1563,12 @@ PLATFORM_RECREATE_FOUNDATION=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 PLATFORM_CO
 # and need this same lock. Finish the locked backup and then release the lock
 # before starting platform.target; otherwise systemd waits for the lock until
 # its timeout even though this bootstrap has already reconciled all projects.
-systemctl enable platform.target platform-firewall.service platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer platform-woodpecker-repair.timer >/dev/null
+systemctl enable platform.target platform-firewall.service platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-beszel-enroll.timer platform-woodpecker-repair.timer >/dev/null
+if [[ "$NODE_BACKUP_ENABLED" == true ]]; then
+	systemctl enable platform-backup.timer platform-backup-prune.timer platform-backup-check.timer >/dev/null
+else
+	systemctl disable --now platform-backup.timer platform-backup-prune.timer platform-backup-check.timer >/dev/null
+fi
 # A previous interrupted bootstrap may have left dependency units in a
 # failed state. All platform projects have just passed the foreground sync,
 # so clear those stale systemd result flags without starting another recovery
@@ -1575,7 +1587,10 @@ flock -u 9
 exec 9>&-
 unset PLATFORM_LOCK_HELD
 start_platform_target "$BOOTSTRAP_SYSTEMD_WAIT_SECONDS"
-systemctl restart platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-backup.timer platform-backup-prune.timer platform-backup-check.timer platform-beszel-enroll.timer platform-woodpecker-repair.timer
+systemctl restart platform-firewall.timer platform-firewall.path platform-recovery.timer platform-health.timer platform-beszel-enroll.timer platform-woodpecker-repair.timer
+if [[ "$NODE_BACKUP_ENABLED" == true ]]; then
+	systemctl restart platform-backup.timer platform-backup-prune.timer platform-backup-check.timer
+fi
 
 curl -fsS --retry "$BOOTSTRAP_ENDPOINT_RETRIES" --retry-delay 2 --retry-all-errors --connect-timeout 5 --max-time "$BOOTSTRAP_ENDPOINT_TIMEOUT_SECONDS" "https://ci.$DOMAIN_NAME/" >/dev/null || printf 'Woodpecker endpoint not ready yet; systemd recovery will retry\n' >&2
 if [[ "$NODE_ROLE" == leader ]]; then

@@ -430,6 +430,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
+      - /usr/local/bin/configure-app-secrets $app --target-node $node --ensure-generated
       - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA"
 EOF
 }

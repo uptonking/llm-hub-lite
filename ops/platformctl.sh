@@ -908,7 +908,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries=''
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS DATA_ROOT_REL HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -1087,12 +1087,23 @@ validate_descriptor() {
 	fi
 	case "$(descriptor_value "$d" STATE_MODE)" in
 	sqlite)
-		[[ -n "$(descriptor_value "$d" SQLITE_PATHS)" ]] || die "SQLite app is missing SQLITE_PATHS: $d"
+		[[ -n "$(descriptor_value "$d" SQLITE_PATHS)$(descriptor_value "$d" SQLITE_GLOBS)" ]] || die "SQLite app is missing SQLITE_PATHS/SQLITE_GLOBS: $d"
 		! grep -Eiq 'REDIS_CONN_STRING|SQL_DSN|postgres|redis' "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "SQLite app must not define Redis or PostgreSQL: $d"
 		while IFS= read -r k; do
 			[[ -n "$k" ]] || continue
+			safe_relative "$k" || die "unsafe SQLITE_PATHS entry in $d: $k"
+			csv_has "$sqlite_entries" "path:$k" && die "duplicate SQLITE_PATHS entry in $d: $k"
+			sqlite_entries="${sqlite_entries:+$sqlite_entries,}path:$k"
 			grep -Fq "$k" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "SQLite path is absent from Compose: $k"
 		done <<<"$(printf '%s\n' "$(descriptor_value "$d" SQLITE_PATHS)" | tr ',' '\n')"
+		while IFS= read -r k; do
+			[[ -n "$k" ]] || continue
+			[[ "$k" != /* && "$k" != *..* && "$k" != *'**'* && "$k" != *$'\n'* && "$k" != *$'\r'* && "$k" != *$'\t'* && "$k" =~ ^[A-Za-z0-9][A-Za-z0-9._/?*-]*$ ]] || die "unsafe SQLITE_GLOBS entry in $d: $k"
+			csv_has "$sqlite_entries" "glob:$k" && die "duplicate SQLITE_GLOBS entry in $d: $k"
+			sqlite_entries="${sqlite_entries:+$sqlite_entries,}glob:$k"
+			[[ "${k##*/}" == *'*'* || "${k##*/}" == *'?'* ]] || die "SQLITE_GLOBS entry must contain a filename wildcard in $d: $k"
+			[[ "${k%/*}" != *'*'* && "${k%/*}" != *'?'* ]] || die "SQLITE_GLOBS directory must be literal in $d: $k"
+		done <<<"$(printf '%s\n' "$(descriptor_value "$d" SQLITE_GLOBS)" | tr ',' '\n')"
 		if app_in_reconcile_scope "$d"; then
 			while IFS= read -r k; do
 				[[ -n "$k" ]] || continue

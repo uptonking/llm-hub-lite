@@ -64,6 +64,10 @@ consumers do not require their database or application secrets.
 Manifests may declare `GENERATED_SECRET_BYTES` and `SECRET_REGEXES` for
 application-specific formats; Flowy uses these to keep `AP_ENCRYPTION_KEY` at
 the required 32-character length.
+Generated node-local keys are reconciled idempotently on the selected Follower
+before every consumer stage. Existing valid values are reused; missing values
+are created with the manifest's byte count. Operator-provided and mapped
+credentials remain in the explicit manual secret workflows.
 Non-secret defaults live in `apps/<id>/config.env` ; durable per-node tuning
 overrides live in `config/cluster/overrides/<node-id>/<app-id>.env` . Secrets
 remain in root-only files under `/etc/llm-hub-lite` and are never committed.
@@ -84,6 +88,13 @@ after the staged target is prepared. The journal records the old and new
 targets, release SHA, archive path, and phase ( `prepared` , `origin-healthy` ,
 `switched` , `completed` , or `failed` ). A failed stage leaves the old Leader route serving and preserves the journal/archive for an idempotent retry; do not delete the
 journal until the target has been verified or deliberately rolled back.
+
+SQLite applications declare fixed database paths with `SQLITE_PATHS` and may
+declare files created at runtime with `SQLITE_GLOBS`. Glob directories are
+literal and root-confined; only the filename may contain `*` or `?`. Backups
+use SQLite's online API for every match, exclude live database/WAL companions
+from the raw Restic tree, and restore from `sqlite/map.tsv` regardless of file
+extension. This supports Grist's `.sqlite3` catalog and `.grist` documents.
 
 Legacy New API remains as a dormant manifest and is disabled by the committed
 policy. CPAPI and Cursor API Proxy are enabled singleton consumers at
@@ -128,6 +139,21 @@ active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/fl
 `FLOWY_JWT_SECRET` are node-local. Existing DB-backed files remain readable after switching to S3; no automatic blob migration is performed. Singleton moves are fresh deployments and archive the prior local PGlite directory; backups stop the running Flowy container before copying its PGlite state. Backup staging is kept under
 `/opt/backups/llm-hub-lite/stage` by default rather than `/run` , because VPS
 `/run` is commonly a small tmpfs that cannot hold the PGlite directory.
+
+Wobase is the Grist OSS singleton at `wobase.aichorage.de`, reserved for
+`worker-4`. Its initial policy remains disabled while worker-4 is `joining`.
+After foundation verification, activate the node and app together with
+`ops/configure-cluster-node.sh state worker-4 active` followed by
+`ops/configure-app-placement.sh wobase worker-4 --enable` in the same operator
+checkout and commit. Wobase runs
+one `gristlabs/grist-oss` container with `/persist/home.sqlite3` and
+`/persist/docs/*.grist`, WAL mode, one document worker, warning-level logging,
+and no Redis or PostgreSQL. The container is capped at `1500m`, `0.9` CPU, and
+256 processes; the Node heap is capped at 768 MB. Protected Quick Setup starts
+with `GRIST_IN_SERVICE=false`; the session and boot keys are generated only in
+`/etc/llm-hub-lite/wobase.env`. After setup, commit
+`WOBASE_IN_SERVICE=true`. A placement change intentionally starts fresh and
+archives the previous local data.
 
 Cursorapi packages `cursor-api-proxy` and a checksum-pinned Cursor Agent into the repository-owned `ghcr.io/uptonking/cursor-api-proxy` image because the upstream project does not publish a deployable image. It is an ephemeral singleton on `worker-1` by default, with no database, persistent volume, host port, or Docker socket. Its read-only non-root container is capped at `512m` memory, `0.50` CPU, and 128 processes. Moving it to another follower is a fresh deployment; no local application data is copied. `CURSORAPI_CURSOR_API_KEY` maps to upstream `CURSOR_API_KEY` and must be entered manually from the Cursor account credential. `CURSORAPI_BRIDGE_API_KEY` protects all public `/v1/*` requests and should be generated with `openssl rand -hex 32` . The public route exposes only `/v1/*` and the unauthenticated `/healthz` ; the upstream dashboard and `/api/*` control endpoints remain private. Clients use `https://cursorapi.aichorage.de/v1` as their base URL and `CURSORAPI_BRIDGE_API_KEY` as the API key. Cursorapi images are never built by GitHub Actions, Woodpecker, bootstrap, or
 the normal deployment controller. To publish a reviewed upstream revision
@@ -338,7 +364,6 @@ changes:
 
 ```bash
 ops/configure-app-placement.sh cursorapi worker-2
-ops/generate-woodpecker-workflows.sh generate
 ops/generate-woodpecker-workflows.sh --check
 git diff -- config/cluster/apps/cursorapi.policy .woodpecker/
 git add config/cluster/apps/cursorapi.policy .woodpecker/
@@ -359,7 +384,9 @@ so Woodpecker does not stop the old target. A failed rollback reload leaves a
 `/etc/llm-hub-lite/singleton-state` ; resolve and verify the Caddy route before
 removing that artifact and retrying.
 
-The same generated consumer contract handles active-active applications. It
+The placement helper regenerates image locks and workflows transactionally. If
+generation fails, it restores the previous policy so committed `NODES` cannot
+drift from stage/publish/stop targets. The same generated consumer contract handles active-active applications. It
 stages each configured node in `NODES` order, publishes the complete healthy
 upstream set on the Leader, and stops the project on unselected followers.
 Singleton-specific state journaling remains an internal controller mechanism;
@@ -516,7 +543,7 @@ Docker restart policies, live-restore, `platform-recovery.service` , and the rec
 Production snapshots use an initialized local Restic repository by default and include runtime configuration, Caddy certificates, Woodpecker/Beszel SQLite online backups, PGlite state, release pointers, and application data without deleting live data. When `RESTIC_REMOTE_ENABLED=true` , the same snapshot is also written to the verified remote repository; set `PRODUCTION_REQUIRE_REMOTE_BACKUP=true` to fail closed when that off-host copy is unavailable. The scheduled timer wakes every 15 minutes for reboot recovery, but `reason=scheduled` snapshots are throttled to one per hour by `RESTIC_SCHEDULE_INTERVAL=3600` ; manual, pre-deployment, post-bootstrap, and recovery snapshots remain immediate. Restic uses a persistent mode-700 cache, one reader, portable `auto` compression, `--skip-if-unchanged` when supported, and low CPU/I/O priority ( `nice` / `ionice` ) to reduce contention with consumer services. Older Restic clients that cannot use a newer requested compression mode automatically fall back to `auto` ; clients without `--skip-if-unchanged` continue without that optional optimization. Override these `RESTIC_*` settings in the root-only `.env.prod` only after measuring the impact.
 
 Nodes with very small disks may set `BACKUP_ENABLED=false` in their committed
-node descriptor (worker-3 are the current examples). Their backup
+node descriptor (worker-3 and worker-4 are the current examples). Their backup
 timer and pre-deployment snapshots exit cleanly without invoking Restic; this
 removes local recovery coverage for that node, so keep important data in the
 app's remote provider or configure an off-host backup strategy separately.

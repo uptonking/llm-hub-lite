@@ -14,7 +14,7 @@ fast)
 	# Keep the two Git/worktree-heavy suites in their dedicated CI jobs and out
 	# of the default local loop.
 	tests=(
-		backup-test change-vps-test clean-vps-test configure-cluster-node-test controller-test
+		backup-test change-vps-test clean-vps-test configure-app-placement-test configure-cluster-node-test controller-test
 		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
 		observer-ingest-test observer-log-proxy-test observer-vector-test
 		platform-submit-test restore-test secret-validation-test stack-test
@@ -23,7 +23,7 @@ fast)
 	;;
 full)
 	tests=(
-		backup-test bootstrap-policy-test change-vps-test clean-vps-test configure-cluster-node-test
+		backup-test bootstrap-policy-test change-vps-test clean-vps-test configure-app-placement-test configure-cluster-node-test
 		controller-test cursorapi-release-test deployment-rollback-test
 		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
 		observer-ingest-test observer-log-proxy-test observer-vector-test

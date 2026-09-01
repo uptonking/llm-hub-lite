@@ -5,7 +5,7 @@ Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, LibreC
 ## Architecture
 
 The committed inventory is in `config/cluster/` . The current Leader has stable
-node ID `leader` ; it runs Caddy, Woodpecker server, a trusted deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node IDs `worker-1` , `worker-2` , and `worker-3` ; they run Caddy, Woodpecker workers, Beszel agents, and consumer applications. The IDs are stable labels; the role is selected only by
+node ID `leader` ; it runs Caddy, Woodpecker server, a trusted deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node IDs `worker-1` through `worker-4` ; they run Caddy, Woodpecker workers, Beszel agents, and consumer applications. Worker-4 is committed in `joining` state until its first bootstrap is verified. The IDs are stable labels; the role is selected only by
 `LEADER_NODE_ID` in the policy.
 
 Caddy is installed on every node. Public DNS names point to the Leader. The
@@ -66,16 +66,24 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - Beszel agent
     - LibreChat
     - Pigeon package retained but disabled
+- Follower worker-3:
+    - Flowy (Activepieces)
+- Follower worker-4 (joining):
+    - Foundation services only until activation
+    - Wobase (Grist) reserved but disabled
+    - Scheduled Restic work disabled by policy
 
 SSH is used only for this one-time host bootstrap. Before starting, prepare the
-three VPS hosts, Cloudflare DNS, and the R2 Restic repositories. The Leader
+five VPS hosts, Cloudflare DNS, and any enabled R2 Restic repositories. The Leader
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
 files are transferred to Followers before they start. Public domains `ci` ,
 `ci-grpc` , `status` , `chat` , `chat-admin` , `aichorouter` , `cpapi` , `cursorapi` ,
 and `observer` point to the Leader. Add `observer-ingest` as a DNS-only record
 directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
 origins using the `worker1-` prefix point to Worker 1, while the stable-ID
-`worker2-` origin records point to Worker 2. Pigeon origin records are not
+`worker2-` origin records point to Worker 2. The
+`worker4-wobase-origin.<domain>` record points to Worker 4, while
+`wobase.<domain>` points to the Leader. Pigeon origin records are not
 required while it is disabled; create the selected Follower's DNS-only origin
 before opting it in. The `leader` stable ID is the public Leader and therefore
 does not need a private origin record for ingress.
@@ -109,7 +117,7 @@ LIBRECHAT_AWS_ENDPOINT_URL='https://<account-id>.r2.cloudflarestorage.com'
 set -a
 . "$RESTIC_ENV_FILE"
 set +a
-for node in leader worker-1 worker-2 worker-3; do
+for node in leader worker-1 worker-2; do
   RESTIC_REPOSITORY="$RESTIC_BASE/$node" \
     RESTIC_PASSWORD_FILE="$RESTIC_PASSWORD_FILE" \
     restic init
@@ -117,19 +125,20 @@ done
 ```
 
 The bootstrap order is Leader ( `leader` ), then each Follower in inventory
-order ( `worker-1` , `worker-2` , `worker-3` , ...):
+order ( `worker-1` , `worker-2` , `worker-3` , `worker-4` , ...):
 
 ```bash
 LEADER='<leader-host-or-ip>'
 WORKER_1='<worker-1-host-or-ip>'
 WORKER_2='<worker-2-host-or-ip>'
 WORKER_3='<worker-3-host-or-ip>'
+WORKER_4='<worker-4-host-or-ip>'
 DOMAIN_NAME=your-top-level-domain
 SSL_EMAIL=admin@xx.xx
 WOODPECKER_ADMIN=xx
 
 # for redeployment, clean up might help
-for host in "$LEADER" "$WORKER_1" "$WORKER_2" "$WORKER_3"; do
+for host in "$LEADER" "$WORKER_1" "$WORKER_2" "$WORKER_3" "$WORKER_4"; do
   scp ops/clean-vps.sh root@"$host":/root/clean-vps.sh
   ssh -tt root@"$host" 'chmod 700 /root/clean-vps.sh &&
     /root/clean-vps.sh --confirm --delete-local-backups'
@@ -137,7 +146,7 @@ done
 
 set -Eeuo pipefail
 
-for host in "$LEADER" "$WORKER_1" "$WORKER_2" "$WORKER_3"; do
+for host in "$LEADER" "$WORKER_1" "$WORKER_2" "$WORKER_3" "$WORKER_4"; do
   ssh "root@$host" 'install -d -m 700 /etc/llm-hub-lite'
 
   scp ops/bootstrap-vps.sh \
@@ -252,12 +261,21 @@ ssh -tt "root@$WORKER_3" \
     WOODPECKER_ADMIN=uptonking \
     BOOTSTRAP_ASSUME_YES=1 \
     /root/llm-hub-lite-bootstrap.sh"
+
+ssh -tt "root@$WORKER_4" \
+  "NODE_ID=worker-4 \
+    LEADER_PUBLIC_IP=$LEADER \
+    DOMAIN_NAME=aichorage.de \
+    SSL_EMAIL=admin@aichorage.de \
+    WOODPECKER_ADMIN=uptonking \
+    BOOTSTRAP_ASSUME_YES=1 \
+    /root/llm-hub-lite-bootstrap.sh"
 ```
 
 Validate the complete cluster
 
 ```sh
-for host in "$LEADER" "$WORKER_1" "$WORKER_2" "$WORKER_3"; do
+for host in "$LEADER" "$WORKER_1" "$WORKER_2" "$WORKER_3" "$WORKER_4"; do
   ssh "root@$host" 'platformctl health'
 done
 ```
@@ -352,8 +370,10 @@ its foundation is healthy:
    Woodpecker now creates the node's secret workflows and makes it eligible for
    explicit consumer placement.
 5. Put the node in an app's ordered `NODES` using
-`ops/configure-app-placement.sh` , review, commit, and push. The generated
-   stage/publish/stop chain performs the deployment without SSH.
+`ops/configure-app-placement.sh` , review, commit, and push. The helper updates
+   policy and generated workflows as one local transaction; generation failure
+   restores the prior policy. Add `--enable` when activating a reserved app.
+   The generated stage/publish/stop chain performs deployment without SSH.
 
 To remove a host, first move every consumer out of its app policies and push
 that change. Transition `active -> draining` , verify the stop workflows, then

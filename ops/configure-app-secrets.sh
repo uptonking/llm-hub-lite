@@ -28,9 +28,10 @@ target_node=''
 target_node_explicit=0
 reset_config=0
 non_interactive=0
+ensure_generated=0
 
 usage() {
-	printf 'usage: %s <app-id> [--target-node <node-id>] [--reset-config] [--non-interactive]\n' "$0" >&2
+	printf 'usage: %s <app-id> [--target-node <node-id>] [--reset-config] [--non-interactive] [--ensure-generated]\n' "$0" >&2
 }
 die() {
 	printf 'configure-app-secrets: %s\n' "$*" >&2
@@ -123,12 +124,18 @@ while (($#)); do
 		non_interactive=1
 		shift
 		;;
+	--ensure-generated)
+		ensure_generated=1
+		non_interactive=1
+		shift
+		;;
 	*)
 		usage
 		exit 2
 		;;
 	esac
 done
+((ensure_generated == 0 || reset_config == 0)) || die '--ensure-generated cannot be combined with --reset-config'
 
 [[ "$app_id" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid application ID: $app_id"
 manifest="$root/apps/$app_id/manifest.env"
@@ -281,7 +288,7 @@ resolve_secret() {
 	if [[ -z "$value" ]]; then
 		value="$(existing_secret "$key" "$destination")"
 	fi
-	if ((non_interactive == 0)) && placeholder_value "$value" && csv_has "$generated_keys" "$key"; then
+	if placeholder_value "$value" && csv_has "$generated_keys" "$key" && ((non_interactive == 0 || ensure_generated == 1)); then
 		bytes="$(secret_bytes "$key")"
 		[[ "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry for $key"
 		value="$(openssl rand -hex "$bytes")"
@@ -295,6 +302,15 @@ resolve_secret() {
 		printf '\n'
 	done
 	printf '%s\n' "$value"
+}
+generated_subset() {
+	local keys="$1" key result=''
+	while IFS= read -r key; do
+		[[ -n "$key" ]] || continue
+		csv_has "$generated_keys" "$key" || continue
+		result="${result:+$result,}$key"
+	done < <(printf '%s\n' "$keys" | tr ',' '\n')
+	printf '%s\n' "$result"
 }
 validate_key_list() {
 	local keys="$1" key
@@ -336,6 +352,19 @@ while IFS= read -r generated_key; do
 	[[ -n "$generated_key" ]] || continue
 	csv_has "$cluster_keys,$node_keys,$conditional_keys" "$generated_key" || die "generated secret is not declared as a cluster or node secret: $generated_key"
 done < <(printf '%s\n' "$generated_keys" | tr ',' '\n')
+
+if ((ensure_generated)); then
+	if [[ "$local_node" == "$leader_node" ]]; then
+		cluster_keys="$(generated_subset "$cluster_keys,$conditional_keys")"
+		conditional_keys=''
+	else
+		# Cluster and conditional credentials may need to be identical across
+		# nodes. Automatic deployment may create only explicitly node-local keys.
+		cluster_keys=''
+		conditional_keys=''
+		node_keys="$(generated_subset "$node_keys")"
+	fi
+fi
 
 if [[ "$local_node" == "$leader_node" ]]; then
 	write_secrets "$cluster_keys,$conditional_keys" "$app_env" 1

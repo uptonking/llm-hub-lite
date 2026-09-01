@@ -189,6 +189,29 @@ safe_relative() {
 	local value="$1"
 	[[ "$value" != /* && "$value" != *..* && "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
 }
+safe_discovered_relative() {
+	local value="$1"
+	[[ -n "$value" && "$value" != /* && "$value" != .. && "$value" != ../* && "$value" != */../* && "$value" != */.. && "$value" != *"'"* && "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" != *$'\t'* ]] || return 1
+	! printf '%s' "$value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null
+}
+safe_sqlite_glob() {
+	local value="$1" directory filename
+	[[ "$value" == */* ]] || return 1
+	directory="${value%/*}"
+	filename="${value##*/}"
+	safe_relative "$directory" || return 1
+	[[ "$filename" != *'**'* && "$filename" =~ ^[A-Za-z0-9._?*-]+$ ]] || return 1
+	[[ "$filename" == *'*'* || "$filename" == *'?'* ]]
+}
+path_has_symlink() {
+	local relative="$2" part current="$1"
+	while IFS= read -r part; do
+		[[ -n "$part" ]] || continue
+		current="$current/$part"
+		[[ -L "$current" ]] && return 0
+	done < <(printf '%s\n' "$relative" | tr '/' '\n')
+	return 1
+}
 descriptor_ids() {
 	{
 		find -L "$APPS_ROOT" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; 2>/dev/null
@@ -414,7 +437,7 @@ snapshot() {
 		exit 1
 	}
 	check_space
-	local -a stopped_pglite_apps=()
+	local -a stopped_pglite_apps=() sqlite_excludes=() sqlite_seen=()
 	restart_stopped_pglite() {
 		local app descriptor
 		for app in "${stopped_pglite_apps[@]-}"; do
@@ -446,26 +469,77 @@ snapshot() {
 	trap cleanup_snapshot EXIT
 
 	: >"$STAGE_ROOT/sqlite/map.tsv"
+	stage_application_sqlite() {
+		local app_id="$1" data_rel="$2" relative="$3" source target path_hash seen
+		safe_discovered_relative "$relative" || {
+			printf 'unsafe SQLite database path in %s: %s\n' "$app_id" "$relative" >&2
+			return 1
+		}
+		source="$DATA_ROOT/$data_rel/$relative"
+		for seen in "${sqlite_seen[@]-}"; do
+			[[ -n "$seen" ]] || continue
+			[[ "$seen" != "$source" ]] || {
+				printf 'duplicate SQLite database declaration: %s\n' "$source" >&2
+				return 1
+			}
+		done
+		sqlite_seen+=("$source")
+		sqlite_excludes+=(--exclude "$source" --exclude "$source-wal" --exclude "$source-shm" --exclude "$source-journal")
+		path_has_symlink "$DATA_ROOT" "$data_rel/$relative" && {
+			printf 'SQLite database path traverses a symlink: %s\n' "$source" >&2
+			return 1
+		}
+		[[ -e "$source" ]] || return 0
+		[[ -f "$source" && ! -L "$source" ]] || {
+			printf 'SQLite database is not a regular file: %s\n' "$source" >&2
+			return 1
+		}
+		path_hash="$(printf '%s' "$relative" | sha256sum | awk '{print substr($1, 1, 16)}')"
+		target="$STAGE_ROOT/sqlite/app-$app_id-$path_hash-$(basename "$relative")"
+		if backup_sqlite "$source" "$target"; then
+			[[ -f "$target" ]] && printf '%s\t%s\t%s\t%s\n' "$app_id" "$data_rel" "$relative" "$(basename "$target")" >>"$STAGE_ROOT/sqlite/map.tsv"
+		else
+			return 1
+		fi
+	}
 	while IFS= read -r descriptor; do
+		local sqlite_globs glob glob_directory glob_filename search_root
 		app_id="$(basename "$descriptor")"
 		data_rel="$(descriptor_value "$descriptor" DATA_ROOT_REL)"
 		sqlite_paths="$(descriptor_value "$descriptor" SQLITE_PATHS)"
+		sqlite_globs="$(descriptor_value "$descriptor" SQLITE_GLOBS)"
 		safe_relative "$data_rel" || {
 			printf 'unsafe DATA_ROOT_REL in %s\n' "$descriptor" >&2
 			return 1
 		}
-		for relative in $sqlite_paths; do
+		while IFS= read -r relative; do
+			[[ -n "$relative" ]] || continue
 			safe_relative "$relative" || {
 				printf 'unsafe SQLITE_PATHS entry in %s\n' "$descriptor" >&2
 				return 1
 			}
-			path_hash="$(printf '%s' "$relative" | sha256sum | awk '{print substr($1, 1, 16)}')"
-			source="$DATA_ROOT/$data_rel/$relative"
-			target="$STAGE_ROOT/sqlite/app-$app_id-$path_hash-$(basename "$relative")"
-			if backup_sqlite "$source" "$target"; then
-				[[ -f "$target" ]] && printf '%s\t%s\t%s\t%s\n' "$app_id" "$data_rel" "$relative" "$(basename "$target")" >>"$STAGE_ROOT/sqlite/map.tsv"
-			else return 1; fi
-		done
+			stage_application_sqlite "$app_id" "$data_rel" "$relative" || return 1
+		done < <(printf '%s\n' "$sqlite_paths" | tr ',' '\n')
+		while IFS= read -r glob; do
+			[[ -n "$glob" ]] || continue
+			safe_sqlite_glob "$glob" || {
+				printf 'unsafe SQLITE_GLOBS entry in %s: %s\n' "$descriptor" "$glob" >&2
+				return 1
+			}
+			glob_directory="${glob%/*}"
+			glob_filename="${glob##*/}"
+			search_root="$DATA_ROOT/$data_rel/$glob_directory"
+			path_has_symlink "$DATA_ROOT" "$data_rel/$glob_directory" && {
+				printf 'SQLITE_GLOBS directory traverses a symlink: %s\n' "$search_root" >&2
+				return 1
+			}
+			sqlite_excludes+=(--exclude "$DATA_ROOT/$data_rel/$glob" --exclude "$DATA_ROOT/$data_rel/$glob-wal" --exclude "$DATA_ROOT/$data_rel/$glob-shm" --exclude "$DATA_ROOT/$data_rel/$glob-journal")
+			[[ -d "$search_root" ]] || continue
+			while IFS= read -r -d '' source; do
+				relative="${source#"$DATA_ROOT/$data_rel/"}"
+				stage_application_sqlite "$app_id" "$data_rel" "$relative" || return 1
+			done < <(find -P "$search_root" -maxdepth 1 -type f -name "$glob_filename" -print0 2>/dev/null)
+		done < <(printf '%s\n' "$sqlite_globs" | tr ',' '\n')
 		if [[ "$(descriptor_value "$descriptor" STATE_MODE)" == pglite ]]; then
 			pglite_rel="$(descriptor_value "$descriptor" PGLITE_PATH_REL)"
 			safe_relative "$pglite_rel" || {
@@ -568,6 +642,7 @@ snapshot() {
 		--exclude "$OBSERVER_DATA_ROOT/collector-buffer"
 	)
 	if ((${#ephemeral_excludes[@]} > 0)); then excludes+=("${ephemeral_excludes[@]}"); fi
+	if ((${#sqlite_excludes[@]} > 0)); then excludes+=("${sqlite_excludes[@]}"); fi
 	check_remote_repository
 	restic_backup "${excludes[@]}" "${existing[@]}"
 	if remote_enabled; then

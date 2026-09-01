@@ -30,7 +30,7 @@ for woodpecker_compose in "$repo_root"/compose/foundation/woodpecker-*.yml; do
 		exit 1
 	}
 done
-for node in leader worker-1 worker-2 worker-3; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
+for node in leader worker-1 worker-2 worker-3 worker-4; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
 if grep -R -q '^NODE_PUBLIC_IP=' "$repo_root/config/cluster/nodes"; then
 	printf 'committed node inventory contains a public IP field\n' >&2
 	exit 1
@@ -59,7 +59,7 @@ grep -Fq 'valid_mongo_uri()' "$repo_root/ops/bootstrap-vps.sh"
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/configure-app-secrets.sh"
 grep -Fq 'write_secrets "$conditional_keys" "$runtime_file"' "$repo_root/ops/configure-app-secrets.sh"
 grep -q '^LEADER_NODE_ID=leader$' "$repo_root/config/cluster/policy.env"
-grep -q '^NODE_IDS=leader,worker-1,worker-2,worker-3$' "$repo_root/config/cluster/policy.env"
+grep -q '^NODE_IDS=leader,worker-1,worker-2,worker-3,worker-4$' "$repo_root/config/cluster/policy.env"
 grep -q '^REPO_SLUG=uptonking/llm-hub-lite$' "$repo_root/config/cluster/policy.env"
 grep -q '^APP_ID=cpapi$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^GENERATED_SECRET_BYTES=FLOWY_ENCRYPTION_KEY:16,FLOWY_JWT_SECRET:32$' "$repo_root/apps/flowy/manifest.env"
@@ -95,6 +95,19 @@ grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/flowy.policy"
 grep -q '^NODES=worker-3$' "$repo_root/config/cluster/apps/flowy.policy"
 grep -q '^NODE_STATE=active$' "$repo_root/config/cluster/nodes/worker-3.env"
 grep -q '^FLOWY_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^APP_ID=wobase$' "$repo_root/apps/wobase/manifest.env"
+grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/wobase/manifest.env"
+grep -q '^STATE_MODE=sqlite$' "$repo_root/apps/wobase/manifest.env"
+grep -Fq 'SQLITE_GLOBS=docs/*.grist' "$repo_root/apps/wobase/manifest.env"
+grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/wobase.policy"
+grep -q '^NODES=worker-4$' "$repo_root/config/cluster/apps/wobase.policy"
+grep -q '^NODE_STATE=joining$' "$repo_root/config/cluster/nodes/worker-4.env"
+grep -q '^BACKUP_ENABLED=false$' "$repo_root/config/cluster/nodes/worker-4.env"
+grep -q '^WOBASE_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -Fq 'mem_limit: ${WOBASE_MEMORY_LIMIT:-1500m}' "$repo_root/apps/wobase/compose.yml"
+grep -Fq 'cpus: ${WOBASE_CPUS:-0.9}' "$repo_root/apps/wobase/compose.yml"
+grep -Fq 'GRIST_SQLITE_MODE: ${WOBASE_SQLITE_MODE:-wal}' "$repo_root/apps/wobase/compose.yml"
+grep -Fq "status?ready=1&db=1" "$repo_root/apps/wobase/compose.yml"
 grep -q '^CONDITIONAL_SECRET_KEYS=FLOWY_FILE_STORAGE_LOCATION=S3|FLOWY_S3_ENDPOINT,FLOWY_S3_BUCKET,FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"
 grep -q '^WOODPECKER_SECRET_NAMES=FLOWY_S3_ENDPOINT:FLOWY_S3_ENDPOINT,FLOWY_S3_BUCKET:FLOWY_S3_BUCKET,FLOWY_S3_ACCESS_KEY_ID:FLOWY_S3_ACCESS_KEY_ID,FLOWY_S3_SECRET_ACCESS_KEY:FLOWY_S3_SECRET_ACCESS_KEY$' "$repo_root/apps/flowy/manifest.env"
 grep -Fq 'reverse_proxy flowy:80' "$repo_root/apps/flowy/route.follower.caddy"
@@ -370,7 +383,7 @@ grep -Fq '[observer-collector-recent]' "$repo_root/ops/platformctl.sh"
 grep -Fq 'transition_begin' "$repo_root/ops/platformctl.sh"
 grep -Fq 'CONSUMER_APP_ID=cpapi /usr/local/bin/platform-submit consumer-stage' "$repo_root/.woodpecker/consumer-stage-cpapi-worker-1.yml"
 grep -Fq 'consumer-stage-cpapi-worker-1' "$repo_root/.woodpecker/consumer-publish-cpapi.yml"
-for node in leader worker-1 worker-2 worker-3; do
+for node in leader worker-1 worker-2 worker-3 worker-4; do
 	[[ -f "$repo_root/.woodpecker/control-sync-$node.yml" ]]
 done
 grep -Fq 'platform-submit control-sync' "$repo_root/.woodpecker/control-sync-leader.yml"

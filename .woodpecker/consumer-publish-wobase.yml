@@ -5,23 +5,22 @@ when:
     branch: main
     path:
       include:
-        - apps/librechat/**
-        - config/cluster/apps/librechat.policy
-        - config/cluster/overrides/**/librechat.env
-        - apps/librechat/route*.caddy
-        - apps/librechat/images.lock.env
+        - apps/wobase/**
+        - config/cluster/apps/wobase.policy
+        - config/cluster/overrides/**/wobase.env
+        - apps/wobase/route*.caddy
+        - apps/wobase/images.lock.env
       on_empty: false
 
 depends_on:
-  - consumer-stage-librechat-worker-1
-  - control-sync-worker-2
-  - name: foundation-reconcile-worker-2
+  - control-sync-leader
+  - name: foundation-reconcile-leader
     optional: true
-  - name: cluster-reconcile-worker-2
+  - name: cluster-reconcile-leader
     optional: true
 
 labels:
-  node: worker-2
+  node: leader
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
@@ -31,7 +30,7 @@ concurrency:
   group: llm-hub-lite-deployment
 
 steps:
-  stage:
+  publish:
     image: llm-hub-lite/deploy-runner:current
     pull: false
     volumes:
@@ -45,5 +44,4 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
-      - /usr/local/bin/configure-app-secrets librechat --target-node worker-2 --ensure-generated
-      - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=librechat /usr/local/bin/platform-submit consumer-stage "$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=wobase /usr/local/bin/platform-submit consumer-publish "$CI_COMMIT_SHA"

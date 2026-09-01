@@ -50,6 +50,10 @@ grep -Fq 'target node is absent from NODE_IDS' "$repo_root/ops/configure-app-sec
 grep -Fq 'target descriptor NODE_ID mismatch' "$repo_root/ops/configure-app-secrets.sh"
 grep -Fq 'target node is not active' "$repo_root/ops/configure-app-secrets.sh"
 grep -Fq 'cluster policy was not changed' "$repo_root/ops/configure-app-secrets.sh"
+grep -Fq -- '--ensure-generated' "$repo_root/ops/configure-app-secrets.sh"
+grep -Fq 'Automatic deployment may create only explicitly node-local keys' "$repo_root/ops/configure-app-secrets.sh"
+# shellcheck disable=SC2016 # Assert the literal command in the implementation.
+grep -Fq 'node_keys="$(generated_subset "$node_keys")"' "$repo_root/ops/configure-app-secrets.sh"
 
 if [[ "$EUID" -ne 0 ]]; then
 	printf 'secret validation unit tests passed; integration test skipped because root is required by configure-app-secrets.sh\n'

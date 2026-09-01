@@ -44,4 +44,5 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
     commands:
+      - /usr/local/bin/configure-app-secrets cursorapi --target-node worker-1 --ensure-generated
       - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=cursorapi /usr/local/bin/platform-submit consumer-stage "$CI_COMMIT_SHA"

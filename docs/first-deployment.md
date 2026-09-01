@@ -38,8 +38,8 @@ ssh -tt root@<worker-1> \
    /root/llm-hub-lite-bootstrap.sh'
 ```
 
-Repeat the second command for every configured Follower ( `worker-1` ,
-`worker-2` , `worker-3` , ...). Supply
+Repeat the second command for every configured Follower ( `worker-1` through
+`worker-4` ). Supply
 `RESTIC_REMOTE_PASSWORD_FILE` , `RESTIC_REMOTE_ENV_FILE` ,
 `PLATFORM_SECRET_BUNDLE_FILE` , or corresponding environment variables when
 running non-interactively. Never generate shared secrets independently on
@@ -77,7 +77,7 @@ default; use `BOOTSTRAP_ENDPOINT_RETRIES` and
 Run these checks after all nodes have finished:
 
 ```bash
-for host in <leader> <worker-1> <worker-2> <worker-3>; do
+for host in <leader> <worker-1> <worker-2> <worker-3> <worker-4>; do
   ssh root@"$host" platformctl health
 done
 ssh root@<leader> platformctl observer-smoke
@@ -107,6 +107,38 @@ worker, and bounded CPU/RAM. The production profile uses Cloudflare R2 for
 execution files ( `FLOWY_FILE_STORAGE_LOCATION=S3` ) while keeping metadata in
 PGlite. Provision the four `FLOWY_S3_*` values with the generated
 `consumer-secrets-flowy-worker-3` workflow before the first Flowy deployment.
+
+Worker-4 is intentionally committed as `joining`, with Wobase disabled and
+`BACKUP_ENABLED=false`. Bootstrap it with `NODE_ID=worker-4`, then verify
+foundation health and confirm the backup timers are disabled:
+
+```bash
+ssh root@<worker-4> \
+  'platformctl health &&
+   test "$(systemctl is-enabled platform-backup.timer 2>/dev/null || true)" = disabled &&
+   test "$(systemctl is-enabled platform-backup-prune.timer 2>/dev/null || true)" = disabled &&
+   test "$(systemctl is-enabled platform-backup-check.timer 2>/dev/null || true)" = disabled'
+```
+
+After that gate, prepare one reviewed activation commit:
+
+```bash
+ops/configure-cluster-node.sh state worker-4 active
+ops/configure-app-placement.sh wobase worker-4 --enable
+ops/generate-woodpecker-workflows.sh --check
+```
+
+The helpers update inventory, policy, and workflows transactionally. Review
+and push them together. The target stage creates
+the two node-local Wobase secrets before Compose validation; no repository
+secret is required. Publication succeeds only after
+`worker4-wobase-origin.<domain>/status?ready=1&db=1` is healthy.
+
+Retrieve `WOBASE_BOOT_KEY` from `/etc/llm-hub-lite/wobase.env` as root and
+complete Protected Quick Setup at `https://wobase.<domain>/boot`. Then change
+`WOBASE_IN_SERVICE=true` in `apps/wobase/config.env`, validate, and deploy that
+follow-up commit. Wobase uses local SQLite and has no Restic coverage while
+worker-4 remains opted out; changing its singleton target is a fresh deployment.
 
 Review the generated workflows in Woodpecker. For each secret workflow, create
 a manual pipeline on `main` and set its `MANUAL_WORKFLOW` variable to the
