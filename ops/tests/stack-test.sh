@@ -11,6 +11,11 @@ for node_file in "$repo_root"/config/cluster/nodes/*.env; do
 	grep -Fxq 'LIBRECHAT_SITE=http://chat.localhost' "$tmp/$node/app-env/librechat.env"
 	grep -Fxq 'LIBRECHAT_ADMIN_SITE=http://chat-admin.localhost' "$tmp/$node/app-env/librechat.env"
 	grep -Fxq 'WABASE_SITE=http://wabase.localhost' "$tmp/$node/app-env/wabase.env"
+	grep -Fxq 'WABASE_SITE_HOST=wabase.localhost' "$tmp/$node/app-env/wabase.env"
+	if [[ "$node" == worker-4 ]]; then
+		grep -Fq 'header_up Host wabase.localhost' "$tmp/$node/config/routes.d/wabase.caddy"
+		grep -Fq 'header_up X-Forwarded-Host wabase.localhost' "$tmp/$node/config/routes.d/wabase.caddy"
+	fi
 done
 # A malformed policy must not silently enable a consumer in local mode. Keep
 # this check independent of Docker by validating the generated routes only.

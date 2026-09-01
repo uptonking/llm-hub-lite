@@ -68,7 +68,7 @@ app_public_host() {
 	done < <(printf '%s\n' "$(descriptor_value "$d" PUBLIC_ENDPOINTS)" | tr ';' '\n')
 }
 app_public_endpoint_env() {
-	local d="$1" key host domain scheme file tmp
+	local d="$1" key host domain scheme public_host file tmp
 	domain="$(env_value DOMAIN_NAME "$env_file")"
 	[[ -n "$domain" ]] || {
 		printf 'DOMAIN_NAME is required to derive application public endpoints\n' >&2
@@ -80,7 +80,8 @@ app_public_endpoint_env() {
 	tmp="$(mktemp "$file.tmp.XXXXXX")"
 	while IFS='|' read -r key host; do
 		[[ -n "$key" && -n "$host" ]] || continue
-		printf '%s=%s://%s.%s\n' "$key" "$scheme" "$host" "$domain" >>"$tmp"
+		public_host="$host.$domain"
+		printf '%s=%s://%s\n%s_HOST=%s\n' "$key" "$scheme" "$public_host" "$key" "$public_host" >>"$tmp"
 	done < <(printf '%s\n' "$(descriptor_value "$d" PUBLIC_ENDPOINTS)" | tr ';' '\n')
 	chmod 600 "$tmp"
 	mv -f -- "$tmp" "$file"
@@ -160,6 +161,9 @@ get() {
 						if [[ "$domain" == localhost ]]; then v="http://${public_host}.localhost"; else v="https://${public_host}.${domain}"; fi
 					fi
 				fi
+			elif [[ "$k" == "${public_key}_HOST" ]]; then
+				public_host="$(app_public_host "$CURRENT_ROUTE_DESCRIPTOR" "$public_key")"
+				[[ -n "$public_host" && -n "$domain" ]] && v="$public_host.$domain"
 			elif [[ "$k" == "$origin_key" ]]; then
 				v="$(env_value "$k" "$node_config")"
 			elif [[ "$k" == "$upstream_key" && "$role" == leader ]]; then

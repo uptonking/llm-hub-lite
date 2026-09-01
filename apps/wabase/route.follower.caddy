@@ -3,7 +3,7 @@
   reverse_proxy wabase:8484 {
     flush_interval -1
     # Keep Grist redirects, cookies, and generated URLs on the Leader-facing host.
-    header_up Host {$WABASE_SITE}
-    header_up X-Forwarded-Host {$WABASE_SITE}
+    header_up Host {$WABASE_SITE_HOST}
+    header_up X-Forwarded-Host {$WABASE_SITE_HOST}
   }
 }
