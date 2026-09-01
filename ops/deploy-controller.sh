@@ -300,6 +300,8 @@ apply_control_sync() {
 		write_control_sync_state failed "$sha" "$old_sha" 'unable to update current control pointer' || true
 		die 'unable to update current control pointer'
 	fi
+	# This controller was loaded from the previously installed release; the
+	# command below becomes available to a newly installed controller next sync.
 	if ! PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" prune-app-endpoints; then
 		if [[ -n "$old_current" ]]; then
 			atomic_link "$old_current" "$CURRENT" || die 'endpoint metadata cleanup failed and the previous control pointer could not be restored'
