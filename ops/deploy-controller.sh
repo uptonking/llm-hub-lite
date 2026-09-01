@@ -818,7 +818,7 @@ prefetch_images() {
 	local mode="$1" file key image should_pull
 	local -a files=()
 	case "$mode" in
-	app | app-upgrade | consumer-publish | consumer-stop) files=("$APP_IMAGE_ENV") ;;
+	app | app-upgrade | consumer-publish | direct-publish | consumer-stop) files=("$APP_IMAGE_ENV") ;;
 	consumer-stage) files=("$APP_RELEASE_ROOT/apps/${CONSUMER_APP_ID:?missing CONSUMER_APP_ID}/images.lock.env") ;;
 	foundation) files=("$FOUNDATION_IMAGE_ENV") ;;
 	cluster-reconcile | rollback) files=("$APP_IMAGE_ENV" "$FOUNDATION_IMAGE_ENV") ;;
