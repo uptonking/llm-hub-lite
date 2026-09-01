@@ -1530,6 +1530,7 @@ validate() {
 	need_file "$FOUNDATION_ROOT/caddy.yml"
 	while IFS= read -r d; do
 		[[ -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" || "$(basename "$d")" == "$PLATFORM_TEST_ONLY_DESCRIPTOR" ]] || continue
+		[[ -n "$d" ]] || continue
 		validate_descriptor "$d"
 		id="$(descriptor_value "$d" APP_ID)"
 		project="$(descriptor_value "$d" COMPOSE_PROJECT)"
