@@ -1558,6 +1558,12 @@ validate() {
 		done <<<"$(projects_foundation)"
 		while IFS= read -r d; do
 			[[ -n "$d" ]] || continue
+			# A direct singleton may be in its first deployment. Its protected
+			# runtime secrets are written by the follower staging workflow, so
+			# defer Compose inspection until that file exists.
+			if [[ "$(app_ingress_mode "${d#app:}")" == direct && "$(descriptor_value "${d#app:}" RUNTIME_ENV_PROVISION)" == stage && ! -f "$(app_runtime_env_file "${d#app:}")" ]]; then
+				continue
+			fi
 			app_compose "${d#app:}"
 			"${compose_command[@]}" config --quiet
 		done <<<"$(projects_apps)"
