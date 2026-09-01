@@ -664,10 +664,12 @@ grep -Fq 'WARNING: Observer durable data' <<<"$leader_warning_diagnose"
 cp "$tmp/compose.log" "$tmp/compose-all.log"
 : >"$tmp/compose.log"
 cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+printf 'retired generated endpoint metadata\n' >"$tmp/app/shared/runtime/app-env/retired-app.env"
 PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_ONLY_DESCRIPTOR=cpapi PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_ONLY_APP_ID=cpapi PLATFORM_ONLY_ROUTE_APP_ID=cpapi bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'app-cpapi' "$tmp/compose.log"
 grep -Fxq 'CPAPI_SITE=http://cpapi.localhost' "$tmp/app/shared/runtime/app-env/cpapi.env"
 grep -Fq -- "--env-file $tmp/app/shared/runtime/app-env/cpapi.env" "$tmp/compose.log"
+[[ ! -e "$tmp/app/shared/runtime/app-env/retired-app.env" ]]
 if grep -Fq 'app-librechat' "$tmp/compose.log"; then
 	printf 'singleton app scope reconciled an unrelated consumer\n' >&2
 	exit 1

@@ -710,6 +710,15 @@ render_routes() {
 	foundation_active beszel-controller || rm -f "$s/foundation-routes.d/beszel.caddy"
 	foundation_active observer-controller || rm -f "$s/foundation-routes.d/observer.caddy"
 }
+cleanup_stale_app_endpoint_env() {
+	local dir="$RUNTIME_ROOT/app-env" file id
+	[[ -d "$dir" ]] || return 0
+	for file in "$dir"/*.env; do
+		[[ -e "$file" || -L "$file" ]] || continue
+		id="$(basename "$file" .env)"
+		[[ "$id" =~ ^[a-z][a-z0-9-]*$ && -f "$APPS_ROOT/$id/manifest.env" ]] || rm -f -- "$file"
+	done
+}
 commit_routes() {
 	local c="${RUNTIME_CONFIG_CANDIDATE:-}" d="$RUNTIME_ROOT/config" f r
 	if [[ ! -d "$c" ]]; then
@@ -740,6 +749,7 @@ commit_routes() {
 	done <<<"$(find "$d" -mindepth 1 -print)"
 	rm -rf "$c"
 	unset RUNTIME_CONFIG_CANDIDATE
+	cleanup_stale_app_endpoint_env
 }
 sha256_data() {
 	if command -v sha256sum >/dev/null 2>&1; then
