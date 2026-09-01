@@ -455,6 +455,9 @@ EOF
 	cat >>"$file" <<EOF
       - /usr/local/bin/configure-app-secrets $app --target-node $node --ensure-generated
 EOF
+	if [[ -n "$stage_secret_keys" ]]; then
+		printf '      - /usr/local/bin/configure-app-secrets %s --target-node %s --non-interactive\n' "$app" "$node" >>"$file"
+	fi
 	if [[ -n "$migration_from" ]]; then
 		cat >>"$file" <<EOF
       - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA" || { status=\$?; rollback_status=0; IDENTITY_MIGRATION_MANIFEST=/opt/platform/control/releases/"\$CI_COMMIT_SHA"/apps/$app/manifest.env bash /opt/platform/control/releases/"\$CI_COMMIT_SHA"/ops/migrate-app-identity.sh rollback $app || rollback_status=\$?; /usr/local/bin/platformctl recover || true; if [ "\$rollback_status" -ne 0 ]; then exit "\$rollback_status"; fi; exit "\$status"; }

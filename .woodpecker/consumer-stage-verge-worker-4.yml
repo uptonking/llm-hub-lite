@@ -48,4 +48,5 @@ steps:
         from_secret: verge_cloudflare_api_token
     commands:
       - /usr/local/bin/configure-app-secrets verge --target-node worker-4 --ensure-generated
+      - /usr/local/bin/configure-app-secrets verge --target-node worker-4 --non-interactive
       - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=verge /usr/local/bin/platform-submit consumer-stage "$CI_COMMIT_SHA"
