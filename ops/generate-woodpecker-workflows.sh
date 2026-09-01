@@ -468,6 +468,22 @@ EOF
 EOF
 }
 
+render_direct_publish() {
+	local app="$1" node="$2" dependency="$3" file
+	file="$output/direct-publish-$app.yml"
+	write_consumer_header "$file" "$app" "$node" "$dependency"
+	cat >>"$file" <<EOF
+  publish:
+    image: llm-hub-lite/deploy-runner:current
+    pull: false
+EOF
+	write_volumes >>"$file"
+	cat >>"$file" <<EOF
+    commands:
+      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level DIRECT_APP_ID=$app /usr/local/bin/platform-submit direct-publish "\$CI_COMMIT_SHA"
+EOF
+}
+
 render_consumer_stop() {
 	local app="$1" node="$2" dependency="$3" file
 	file="$output/consumer-stop-$app-$node.yml"
@@ -506,10 +522,12 @@ EOF
 }
 
 render_consumer_workflows() {
-	local manifest="$1" app placement upstream policy_file enabled nodes node previous='' publish_name seen='' count=0 undesired='' primary_key primary target cluster_keys node_keys conditional_keys secret_keys migration_from key migration_value
+	local manifest="$1" app placement upstream ingress policy_file enabled nodes node previous='' publish_name seen='' count=0 undesired='' primary_key primary target cluster_keys node_keys conditional_keys secret_keys migration_from key migration_value
 	app="$(env_value APP_ID "$manifest")"
 	placement="$(env_value PLACEMENT "$manifest")"
 	upstream="$(env_value UPSTREAM_MODE "$manifest")"
+	ingress="$(env_value INGRESS_MODE "$manifest")"
+	ingress="${ingress:-leader-proxy}"
 	[[ "$app" == "$(basename "$(dirname "$manifest")")" && "$app" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid APP_ID: $manifest"
 	[[ "$(env_value MANIFEST_VERSION "$manifest")" == 5 ]] || die "unsupported application manifest version: $manifest"
 	[[ "$placement" == consumer ]] || die "application placement must be consumer: $manifest"
@@ -521,10 +539,25 @@ render_consumer_workflows() {
 	[[ -n "$nodes" ]] || die "application policy NODES is empty: $app"
 	while IFS= read -r node; do
 		[[ "$node" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid consumer node: $app/$node"
-		csv_has "$ids_csv" "$node" || die "consumer node is absent from NODE_IDS: $app/$node"
+		if ! csv_has "$ids_csv" "$node"; then
+			# Direct applications may be committed ahead of a joining inventory
+			# entry. Defer workflow generation until that follower is enrolled;
+			# runtime validation still rejects an enabled placement that is absent.
+			[[ "$ingress" == direct ]] && {
+				printf 'generate-woodpecker-workflows: deferring direct app until node is enrolled: %s/%s\n' "$app" "$node" >&2
+				return 0
+			}
+			die "consumer node is absent from NODE_IDS: $app/$node"
+		fi
 		[[ "$node" != "$leader_id" ]] || die "consumer node must be an active follower: $app/$node"
 		if [[ "$enabled" == true ]]; then
-			[[ "$(env_value NODE_STATE "$root/config/cluster/nodes/$node.env")" == active ]] || die "consumer node must be an active follower: $app/$node"
+			if [[ "$(env_value NODE_STATE "$root/config/cluster/nodes/$node.env")" != active ]]; then
+				[[ "$ingress" == direct ]] && {
+					printf 'generate-woodpecker-workflows: deferring direct app until node is active: %s/%s\n' "$app" "$node" >&2
+					return 0
+				}
+				die "consumer node must be an active follower: $app/$node"
+			fi
 		fi
 		! csv_has "$seen" "$node" || die "duplicate consumer node: $app/$node"
 		seen="${seen:+$seen,}$node"
@@ -562,8 +595,14 @@ render_consumer_workflows() {
 			previous="consumer-stage-$app-$node"
 		done < <(printf '%s\n' "$nodes" | tr ',' '\n')
 	fi
-	render_consumer_publish "$app" "$previous"
-	publish_name="consumer-publish-$app"
+	if [[ "$ingress" == direct ]]; then
+		target="${nodes%%,*}"
+		render_direct_publish "$app" "$target" "$previous"
+		publish_name="direct-publish-$app"
+	else
+		render_consumer_publish "$app" "$previous"
+		publish_name="consumer-publish-$app"
+	fi
 	for node in "${consumer_nodes[@]}"; do
 		if [[ "$enabled" != true ]] || ! csv_has "$nodes" "$node"; then
 			undesired="${undesired}${node}"$'\n'

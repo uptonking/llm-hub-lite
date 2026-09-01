@@ -301,6 +301,11 @@ observer_collector_nodes() {
 }
 app_placement() { descriptor_value "$1" PLACEMENT; }
 app_upstream_mode() { descriptor_value "$1" UPSTREAM_MODE; }
+app_ingress_mode() {
+	local mode
+	mode="$(descriptor_value "$1" INGRESS_MODE)"
+	printf '%s\n' "${mode:-leader-proxy}"
+}
 app_runtime_env_file() {
 	local d="$1" rel
 	rel="$(descriptor_value "$d" RUNTIME_ENV_FILE)"
@@ -336,6 +341,29 @@ app_value() {
 	[[ -n "$value" ]] || value="$(env_value "$key" "$(app_config_file "$d")")"
 	[[ -n "$value" ]] || value="$(env_value "$key")"
 	printf '%s\n' "$value"
+}
+render_runtime_config() {
+	local d="$1" template output tmp key value escaped runtime_dir
+	template="$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)"
+	[[ -n "$template" ]] || return 0
+	runtime_dir="${DIRECT_RUNTIME_ROOT:-$CONFIG_ROOT/runtime}/$(basename "$d")"
+	install -d -m 700 "$runtime_dir"
+	output="$runtime_dir/config.yaml"
+	tmp="$(mktemp "$output.tmp.XXXXXX")"
+	cp "$d/$template" "$tmp"
+	while IFS= read -r key; do
+		[[ -n "$key" ]] || continue
+		value="$(app_value "$d" "$key")"
+		[[ -n "$value" ]] || {
+			rm -f -- "$tmp"
+			die "missing runtime config value: $(basename "$d")/$key"
+		}
+		escaped="$(printf '%s' "$value" | sed 's/[&|\\]/\\&/g')"
+		sed -i.bak "s|__${key}__|${escaped}|g" "$tmp"
+		rm -f -- "$tmp.bak"
+	done <<<"$(grep -oE '__[A-Z][A-Z0-9_]*__' "$tmp" | sed 's/^__//;s/__$$//' | sort -u)"
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$output"
 }
 foundation_manifest_file() { printf '%s/%s.env\n' "$FOUNDATION_MANIFEST_ROOT" "$1"; }
 foundation_manifest_value() { env_value "$2" "$(foundation_manifest_file "$1")"; }
@@ -403,6 +431,11 @@ singleton_runtime_env_ready() {
 app_route_active() {
 	local id="$(basename "$1")"
 	[[ "$(app_placement "$1")" == consumer ]] || return 1
+	case "$(app_ingress_mode "$1")" in
+	direct) return 1 ;;
+	leader-proxy | direct-and-proxy) ;;
+	*) die "unsupported INGRESS_MODE in $1/manifest.env" ;;
+	esac
 	if [[ "$(node_role)" != leader ]]; then
 		app_active "$1" || return 1
 	fi
@@ -535,6 +568,9 @@ app_policy_enabled() {
 }
 app_compose() {
 	local d="$1" runtime_env config_file override_file endpoint_env
+	if [[ "$(app_ingress_mode "$d")" == direct ]]; then
+		render_runtime_config "$d"
+	fi
 	config_file="$(app_config_file "$d")"
 	override_file="$(app_override_file "$d")"
 	compose_command=("${compose_bin[@]}" --env-file "$APP_ENV" --env-file "$NODE_CONFIG_FILE" --env-file "$APP_IMAGE_ENV" --env-file "$config_file")
@@ -946,15 +982,40 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value
-	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS ROUTE_GROUPS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE ROUTE_TEMPLATE_LEADER ROUTE_TEMPLATE_FOLLOWER; do
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist
+	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
 	done
 	case "$(descriptor_value "$d" SMOKE_LOCAL)" in public | healthcheck) ;; *) die "SMOKE_LOCAL must be public or healthcheck in $d/manifest.env" ;; esac
 	case "$(descriptor_value "$d" HEALTH_MODE)" in healthcheck | process) ;; *) die "HEALTH_MODE must be healthcheck or process in $d/manifest.env" ;; esac
+	case "$(descriptor_value "$d" DIRECT_PROBE)" in '' | socket | healthcheck | command) ;; *) die "DIRECT_PROBE must be socket, healthcheck, or command in $d/manifest.env" ;; esac
 	[[ "$(descriptor_value "$d" MANIFEST_VERSION)" == 5 ]] || die 'unsupported app manifest version'
 	[[ "$(descriptor_value "$d" PLACEMENT)" == consumer ]] || die "app PLACEMENT must be consumer: $d"
+	ingress="$(app_ingress_mode "$d")"
+	case "$ingress" in
+	leader-proxy | direct | direct-and-proxy) ;;
+	*) die "unsupported INGRESS_MODE in $d/manifest.env" ;;
+	esac
+	if [[ "$ingress" == direct || "$ingress" == direct-and-proxy ]]; then
+		listeners="$(descriptor_value "$d" DIRECT_LISTENERS)"
+		[[ -n "$listeners" ]] || die "DIRECT_LISTENERS is required for direct app: $d"
+		allowlist="$(policy_value DIRECT_PORT_ALLOWLIST)"
+		while IFS= read -r listener; do
+			[[ -n "$listener" ]] || continue
+			IFS=':' read -r proto host_port container_port <<<"$listener"
+			[[ "$proto" == tcp || "$proto" == udp ]] || die "invalid direct listener protocol: $listener"
+			[[ "$host_port" =~ ^[1-9][0-9]*$ && "$container_port" =~ ^[1-9][0-9]*$ && "$host_port" -le 65535 && "$container_port" -le 65535 ]] || die "invalid direct listener: $listener"
+			csv_has "$allowlist" "$proto/$host_port" || die "direct listener is not allowlisted: $proto/$host_port"
+			if [[ "$proto" == udp ]]; then
+				grep -Eq "${host_port}:[[:space:]]*${container_port}/udp|${host_port}:${container_port}/udp" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "direct UDP listener is absent from Compose: $listener"
+			else
+				grep -Eq "${host_port}:[[:space:]]*${container_port}/tcp|${host_port}:${container_port}/tcp" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "direct TCP listener is absent from Compose: $listener"
+			fi
+		done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
+	else
+		[[ -z "$(descriptor_value "$d" DIRECT_LISTENERS)" ]] || die "DIRECT_LISTENERS is only valid for direct apps: $d"
+	fi
 	mode="$(descriptor_value "$d" STATE_MODE)"
 	[[ -n "$mode" ]] || mode=files
 	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
@@ -1088,7 +1149,7 @@ validate_descriptor() {
 	[[ "$(descriptor_value "$d" COMPOSE_PROJECT)" == "app-$(basename "$d")" ]] || die "COMPOSE_PROJECT must equal app-APP_ID in $d/manifest.env"
 	alias="$(descriptor_value "$d" NETWORK_ALIAS)"
 	[[ "$alias" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid NETWORK_ALIAS in $d/manifest.env"
-	for rel in "$(descriptor_value "$d" DATA_ROOT_REL)" "$(descriptor_value "$d" EPHEMERAL_DATA_REL)" "$(descriptor_value "$d" COMPOSE_FILE)" "$(descriptor_value "$d" CONFIG_FILE)" "$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)" "$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" "$(descriptor_value "$d" RUNTIME_ENV_FILE)" "$(descriptor_value "$d" POLICY_FILE)"; do
+	for rel in "$(descriptor_value "$d" DATA_ROOT_REL)" "$(descriptor_value "$d" EPHEMERAL_DATA_REL)" "$(descriptor_value "$d" COMPOSE_FILE)" "$(descriptor_value "$d" CONFIG_FILE)" "$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)" "$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" "$(descriptor_value "$d" RUNTIME_ENV_FILE)" "$(descriptor_value "$d" POLICY_FILE)" "$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)"; do
 		[[ -z "$rel" ]] || safe_relative "$rel" || die "unsafe descriptor path in $d/manifest.env"
 	done
 	need_file "$CONTROL_ROOT/current/config/$(descriptor_value "$d" POLICY_FILE)"
@@ -1102,17 +1163,24 @@ validate_descriptor() {
 		endpoint_hosts="${endpoint_hosts:+$endpoint_hosts,}$endpoint_host"
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" PUBLIC_ENDPOINTS)" | tr ';' '\n')"
 	while IFS='|' read -r public_key origin_key upstream_key; do
+		[[ "$ingress" == direct ]] && continue
 		[[ "$public_key" =~ ^[A-Z][A-Z0-9_]*$ && "$origin_key" =~ ^[A-Z][A-Z0-9_]*$ && "$upstream_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid ROUTE_GROUPS in $d/manifest.env"
 		csv_has "$endpoint_keys" "$public_key" || die "ROUTE_GROUPS public key is absent from PUBLIC_ENDPOINTS in $d/manifest.env: $public_key"
 		route_public_keys="${route_public_keys:+$route_public_keys,}$public_key"
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" ROUTE_GROUPS)" | tr ';' '\n')"
 	while IFS='|' read -r endpoint_key _; do
+		[[ "$ingress" == direct ]] && continue
 		csv_has "$route_public_keys" "$endpoint_key" || die "PUBLIC_ENDPOINTS key is absent from ROUTE_GROUPS in $d/manifest.env: $endpoint_key"
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" PUBLIC_ENDPOINTS)" | tr ';' '\n')"
 	need_file "$d/$(descriptor_value "$d" COMPOSE_FILE)"
-	need_file "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)"
-	need_file "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)"
-	grep -Fq "$alias" "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" || die "follower route does not target NETWORK_ALIAS in $d/manifest.env"
+	if [[ "$ingress" != direct ]]; then
+		need_file "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)"
+		need_file "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)"
+		grep -Fq "$alias" "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" || die "follower route does not target NETWORK_ALIAS in $d/manifest.env"
+	fi
+	if [[ -n "$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)" ]]; then
+		need_file "$d/$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)"
+	fi
 	for k in $(descriptor_value "$d" IMAGE_KEYS); do
 		[[ "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid IMAGE_KEYS entry in $d/manifest.env: $k"
 		# Candidate validation always uses the committed image manifest. A runtime
@@ -2556,6 +2624,37 @@ consumer_descriptor() {
 	[[ "$(app_placement "$d")" == consumer ]] || die "application is not a consumer: $app"
 	printf '%s\n' "$d"
 }
+direct_descriptor() {
+	local app="$1" d
+	[[ "$app" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid direct app ID: $app"
+	d="$APPS_ROOT/$app"
+	[[ -f "$d/manifest.env" ]] || die "unknown direct app: $app"
+	[[ "$(app_ingress_mode "$d")" == direct ]] || die "application is not direct: $app"
+	printf '%s\n' "$d"
+}
+direct_smoke() {
+	local d="$1" service project listeners listener proto host_port container_port target
+	[[ "$(node_role)" == follower ]] || die 'direct smoke must run on a follower'
+	d="$(direct_descriptor "$d")"
+	target="$(app_target_node "$d")"
+	[[ "$(node_id)" == "$target" ]] || die "direct app is not assigned to this node: $(basename "$d")/$(node_id)"
+	app_active "$d" || die "direct app is not active on this node: $(basename "$d")"
+	service="$(descriptor_value "$d" SERVICE_NAME)"
+	project="$(descriptor_value "$d" COMPOSE_PROJECT)"
+	app_compose "$d"
+	"${compose_command[@]}" ps --status running --services 2>/dev/null | grep -Fxq "$service" || die "direct service is not running: $(basename "$d")"
+	listeners="$(descriptor_value "$d" DIRECT_LISTENERS)"
+	while IFS= read -r listener; do
+		[[ -n "$listener" ]] || continue
+		IFS=':' read -r proto host_port container_port <<<"$listener"
+		if command -v ss >/dev/null 2>&1; then
+			ss_args=(-l -n)
+			[[ "$proto" == udp ]] && ss_args+=(-u) || ss_args+=(-t)
+			ss "${ss_args[@]}" 2>/dev/null | awk -v p=":$host_port" '$0 ~ p {found=1} END {exit found ? 0 : 1}' || die "direct listener is not bound: $proto/$host_port"
+		fi
+	done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
+	printf 'direct service healthy: %s\n' "$(basename "$d")"
+}
 consumer_origin_smoke_generic() {
 	local d="$1" id node groups public_key origin_key upstream_key origin health expected response checked=0
 	id="$(basename "$d")"
@@ -2781,6 +2880,10 @@ if [[ "${PLATFORMCTL_LIBRARY:-0}" != 1 ]]; then
 		[[ -n "${2:-}" ]] || die 'usage: platformctl consumer-stop <app-id>'
 		consumer_stop "$2"
 		;;
+	direct-smoke)
+		[[ -n "${2:-}" ]] || die 'usage: platformctl direct-smoke <app-id>'
+		direct_smoke "$2"
+		;;
 	smoke)
 		if [[ "${2:-}" == all ]]; then
 			smoke_all
@@ -2792,6 +2895,6 @@ if [[ "${PLATFORMCTL_LIBRARY:-0}" != 1 ]]; then
 	validate-observer) validate_observer_env ;;
 	observer-smoke) observer_smoke ;;
 	observer-collector-status) observer_collector_status ;;
-	diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|validate-observer|prune-app-endpoints|status|health|diagnose|recover|retire-node|ensure-network|start|sync|restart|recreate|stop|consumer-origin-smoke|consumer-publish|consumer-stop|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|observer-collector-status|maintenance|reload|backup|restore}' ;; esac
+	diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|validate-observer|prune-app-endpoints|status|health|diagnose|recover|retire-node|ensure-network|start|sync|restart|recreate|stop|consumer-origin-smoke|consumer-publish|consumer-stop|direct-smoke|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|observer-collector-status|maintenance|reload|backup|restore}' ;; esac
 	if ((read_only_lock == 1)); then release_read_lock; fi
 fi

@@ -238,6 +238,7 @@ app_active() {
 app_route_active() {
 	local d="$1" node state mode primary_key primary active_count=0
 	[[ "$(app_placement "$d")" == consumer ]] || return 1
+	[[ "$(descriptor_value "$d" INGRESS_MODE)" != direct ]] || return 1
 	[[ "$(app_policy_value "$d" ENABLED)" == true ]] || return 1
 	if [[ "$role" == leader ]]; then
 		mode="$(descriptor_value "$d" UPSTREAM_MODE)"

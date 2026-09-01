@@ -57,6 +57,10 @@ source "$config_file"
 # tree; production deployments always validate releases before mutation.
 : "${DEPLOY_TEST_SKIP_RELEASE_VALIDATION:=0}"
 : "${DEPLOY_DEBUG_LEVEL:=off}"
+if [[ -z "${CONSUMER_APP_ID:-}" && -n "${DIRECT_APP_ID:-}" ]]; then
+	CONSUMER_APP_ID="$DIRECT_APP_ID"
+	export CONSUMER_APP_ID
+fi
 
 env_value() {
 	local key="$1" file="${2:-$APP_ENV}" line value=''
@@ -517,7 +521,7 @@ verify_consumer_scope() {
 	# this job reconciles only the selected application. Non-runtime paths such as
 	# ops/tests/** | docs/** remain harmless to include in the same commit.
 	local old_release="$1" new_release="$2" mode="$3" app="${CONSUMER_APP_ID:-}" manifest
-	[[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop ]] || return 0
+	[[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop || "$mode" == direct-publish ]] || return 0
 	[[ "$app" =~ ^[a-z][a-z0-9-]*$ ]] || die 'consumer deployment is missing a valid CONSUMER_APP_ID'
 	manifest="$new_release/apps/$app/manifest.env"
 	[[ -f "$manifest" && "$(env_value APP_ID "$manifest")" == "$app" ]] || die "consumer application is not present in target release: $app"
@@ -914,7 +918,7 @@ apply() {
 		DEPLOY_SKIP_SINGLETONS=1
 		PLATFORM_RECONCILE_DISABLED_SINGLETONS=1
 	fi
-	if [[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop ]]; then
+	if [[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop || "$mode" == direct-publish ]]; then
 		[[ "${CONSUMER_APP_ID:-}" =~ ^[a-z][a-z0-9-]*$ ]] || die 'consumer workflow requires CONSUMER_APP_ID'
 		PLATFORM_ONLY_APP_ID="$CONSUMER_APP_ID"
 		if [[ "$mode" == consumer-stage ]]; then
@@ -960,7 +964,7 @@ apply() {
 		previous_singleton_target="$(singleton_previous_target "$old_current" "$CONSUMER_APP_ID")"
 	fi
 	backup "pre-$mode"
-	if [[ "$mode" != consumer-stage && "$mode" != consumer-publish && "$mode" != consumer-stop ]]; then
+	if [[ "$mode" != consumer-stage && "$mode" != consumer-publish && "$mode" != consumer-stop && "$mode" != direct-publish ]]; then
 		if ! stop_removed_projects "$old_current" "$release"; then
 			cleanup_failed=1
 		elif [[ "$mode" == foundation || "$mode" == rollback ]] && ! stop_removed_foundation_projects "$old_current" "$release"; then
@@ -978,7 +982,7 @@ apply() {
 	cp -f "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" "$tx/node.env" 2>/dev/null || true
 	[[ -d "$FOUNDATION_ROOT" ]] && cp -a "$FOUNDATION_ROOT" "$tx/foundation"
 	[[ -d "$CONTROL_ROOT/descriptors" ]] && cp -a "$CONTROL_ROOT/descriptors" "$tx/descriptors"
-	if [[ "$mode" != consumer-stage && "$mode" != consumer-publish && "$mode" != consumer-stop ]]; then
+	if [[ "$mode" != consumer-stage && "$mode" != consumer-publish && "$mode" != consumer-stop && "$mode" != direct-publish ]]; then
 		if [[ -n "$old_control_current" ]]; then atomic_link "$old_control_current" "$PREVIOUS"; fi
 		atomic_link "$release" "$CURRENT"
 		sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
@@ -1107,6 +1111,11 @@ consumer-publish)
 	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-publish <sha>'
 	apply "$2" consumer-publish
 	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-publish "$CONSUMER_APP_ID"
+	;;
+direct-publish)
+	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: DIRECT_APP_ID=<id> deploy-controller direct-publish <sha>'
+	apply "$2" direct-publish
+	PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" direct-smoke "$CONSUMER_APP_ID"
 	;;
 consumer-stop)
 	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-stop <sha>'

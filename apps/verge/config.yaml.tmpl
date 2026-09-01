@@ -1,0 +1,17 @@
+listen: :443
+acme:
+  domains:
+    - verge.aichorage.de
+  email: __VERGE_ACME_EMAIL__
+  type: dns
+  dns:
+    name: cloudflare
+    config:
+      cloudflare_api_token: __VERGE_CLOUDFLARE_API_TOKEN__
+auth:
+  type: password
+  password: __VERGE_AUTH_PASSWORD__
+masquerade:
+  type: proxy
+  proxy:
+    url: https://www.aichorage.de/

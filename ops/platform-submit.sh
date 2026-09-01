@@ -4,8 +4,8 @@ set -Eeuo pipefail
 
 mode="${1:-}"
 sha="${2:-}"
-[[ "$mode" =~ ^(deploy|control-sync|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|consumer-stage|consumer-publish|consumer-stop|node-retire)$ ]] || {
-	printf 'usage: platform-submit {deploy|control-sync|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback} <sha-or-previous>\n' >&2
+[[ "$mode" =~ ^(deploy|control-sync|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|consumer-stage|consumer-publish|consumer-stop|direct-publish|node-retire)$ ]] || {
+	printf 'usage: platform-submit {deploy|control-sync|consumer-stage|consumer-publish|consumer-stop|direct-publish|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback} <sha-or-previous>\n' >&2
 	exit 2
 }
 [[ -n "$sha" ]] || {
@@ -76,6 +76,7 @@ docker run -d --name "$job" \
 	-v /etc/llm-hub-lite:/etc/llm-hub-lite \
 	-e DEPLOY_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" \
 	-e CONSUMER_APP_ID="${CONSUMER_APP_ID:-}" \
+	-e DIRECT_APP_ID="${DIRECT_APP_ID:-}" \
 	-e SINGLETON_FINAL_STOP="${SINGLETON_FINAL_STOP:-0}" \
 	-e PLATFORM_ONLY_APP_ID="${CONSUMER_APP_ID:-}" \
 	-e ALLOW_WOODPECKER_SELF_DISABLE="${ALLOW_WOODPECKER_SELF_DISABLE:-0}" \

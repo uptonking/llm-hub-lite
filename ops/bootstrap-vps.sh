@@ -1246,9 +1246,16 @@ chmod 600 "$woodpecker_env"
 
 caddy_env="$FOUNDATION_ROOT/env/caddy.env"
 if [[ ! -f "$caddy_env" ]]; then : >"$caddy_env"; fi
-for pair in "CADDY_DATA_ROOT=$PLATFORM_ROOT/caddy" "CADDY_CONFIG_ROOT=$APP_ROOT/shared/runtime/config" "CADDY_HTTP_BIND=0.0.0.0" "CADDY_HTTPS_BIND=0.0.0.0"; do
+for pair in "CADDY_DATA_ROOT=$PLATFORM_ROOT/caddy" "CADDY_CONFIG_ROOT=$APP_ROOT/shared/runtime/config" "CADDY_HTTP_BIND=0.0.0.0" "CADDY_HTTPS_BIND=0.0.0.0" "CADDY_HTTPS_UDP_BIND=0.0.0.0"; do
 	ensure_key "$caddy_env" "${pair%%=*}" "${pair#*=}"
 done
+if [[ "$NODE_ROLE" == follower && "$NODE_ID" == worker-4 ]]; then
+	# worker-4 reserves public UDP/443 for the direct Verge service; keep
+	# follower Caddy's optional HTTP/3 listener on a non-public fallback port.
+	set_key "$caddy_env" CADDY_HTTPS_UDP_HOST_PORT 8443
+else
+	set_key "$caddy_env" CADDY_HTTPS_UDP_HOST_PORT 443
+fi
 chmod 600 "$caddy_env"
 
 beszel_env="$FOUNDATION_ROOT/env/beszel.env"

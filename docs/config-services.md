@@ -572,3 +572,14 @@ Pigeon is disabled by default. Enabling it is a reviewed control-plane change:
    push a consumer-scoped commit or retry the Pigeon consumer chain for that
    release. Publication occurs only after target health succeeds. Use direct
 `configure-app-secrets.sh pigeon` only as a repair fallback.
+
+## Direct/orphan applications
+
+An application may declare `INGRESS_MODE=direct` and a reviewed
+`DIRECT_LISTENERS` value such as `udp:443:443`. The selected follower publishes
+that listener itself and no Leader Caddy route is created; the protocol/port
+must also appear in the cluster policy's `DIRECT_PORT_ALLOWLIST`. The
+`platformctl direct-smoke` operation verifies the selected Compose service and
+host socket. Hysteria `verge` is the first direct application and defaults to
+`worker-4`; its Cloudflare record must remain DNS-only because UDP/443 is served
+by the follower.

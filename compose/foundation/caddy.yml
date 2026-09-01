@@ -26,7 +26,7 @@ services:
     ports:
       - "${CADDY_HTTP_BIND:-0.0.0.0}:80:80"
       - "${CADDY_HTTPS_BIND:-0.0.0.0}:443:443/tcp"
-      - "${CADDY_HTTPS_BIND:-0.0.0.0}:443:443/udp"
+      - "${CADDY_HTTPS_UDP_BIND:-0.0.0.0}:${CADDY_HTTPS_UDP_HOST_PORT:-443}:443/udp"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
       interval: 30s
