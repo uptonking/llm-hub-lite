@@ -1,4 +1,5 @@
 name: foundation-caddy
+# The UDP host port is configurable so direct services can reserve UDP/443.
 services:
   caddy:
     image: ${CADDY_IMAGE:?CADDY_IMAGE must be digest-pinned}
