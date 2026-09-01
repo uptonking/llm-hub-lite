@@ -361,7 +361,7 @@ render_runtime_config() {
 		escaped="$(printf '%s' "$value" | sed 's/[&|\\]/\\&/g')"
 		sed -i.bak "s|__${key}__|${escaped}|g" "$tmp"
 		rm -f -- "$tmp.bak"
-	done <<<"$(grep -oE '__[A-Z][A-Z0-9_]*__' "$tmp" | sed 's/^__//;s/__$$//' | sort -u)"
+	done <<<"$(grep -oE '__[A-Z][A-Z0-9_]*__' "$tmp" | sed -E 's/^__|__$//g' | sort -u)"
 	chmod 600 "$tmp"
 	mv -f -- "$tmp" "$output"
 }
