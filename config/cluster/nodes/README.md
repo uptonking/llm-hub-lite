@@ -28,6 +28,15 @@ change. Bootstrap stores the private `LEADER_PUBLIC_IP` value in each node's
 `/etc/llm-hub-lite/node.env`; Follower firewall reconciliation reads only that
 runtime value.
 
+Beszel agents keep `BESZEL_HUB_URL` set to the public status hostname so TLS
+hostname verification and the public Caddy route remain unchanged. The agent
+Compose project resolves that hostname locally to the private runtime
+`LEADER_PUBLIC_IP` value. This avoids Cloudflare/IPv6 address selection when a
+system is enrolled, so Beszel records the Leader's operational IPv4 address in
+the system host field. Existing records should be updated through the Beszel
+API after this routing change; do not delete and re-enroll systems because that
+would discard their historical identity and monitoring data.
+
 Create a Follower with
 `DOMAIN_NAME=<base-domain> ops/configure-cluster-node.sh add <node-id>`. The
 helper derives origin keys from each manifest's `PUBLIC_ENDPOINTS` and

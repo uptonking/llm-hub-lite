@@ -46,6 +46,12 @@ services:
       com.aichorage.application: beszel
       com.aichorage.component: foundation-beszel-worker
     network_mode: host
+    # Keep agent-to-Hub connections on the Leader's IPv4 address. The public
+    # status hostname is Cloudflare-proxied and advertises IPv6; resolving it
+    # locally to LEADER_PUBLIC_IP preserves TLS SNI while making Beszel's
+    # recorded system host the operational IPv4 address.
+    extra_hosts:
+      - "status.${DOMAIN_NAME:-aichorage.de}:${LEADER_PUBLIC_IP:-127.0.0.1}"
     environment:
       LISTEN: 127.0.0.1:45876
       DISABLE_SSH: "true"
