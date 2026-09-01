@@ -2789,6 +2789,10 @@ consumer_publish() {
 consumer_stop() {
 	local d
 	[[ "$(node_role)" == follower ]] || die 'consumer stop must run on a follower'
+	if [[ ! -f "$APPS_ROOT/$1/manifest.env" ]]; then
+		printf 'consumer %s is not installed on node %s; nothing to stop\n' "$1" "$(node_id)"
+		return 0
+	fi
 	d="$(consumer_descriptor "$1")"
 	if [[ "$(app_upstream_mode "$d")" == singleton ]]; then
 		singleton_stop "$(basename "$d")"
