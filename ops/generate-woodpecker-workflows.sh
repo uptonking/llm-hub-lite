@@ -615,11 +615,13 @@ render_consumer_workflows() {
 			previous="consumer-stage-$app-$node"
 		done < <(printf '%s\n' "$nodes" | tr ',' '\n')
 	fi
-	if [[ "$ingress" == direct ]]; then
+	if [[ "$ingress" == direct && "$enabled" == true ]]; then
 		target="${nodes%%,*}"
 		render_direct_publish "$app" "$target" "$previous"
 		publish_name="direct-publish-$app"
 	else
+		# Disabled direct apps still need a Leader cleanup transaction, but must
+		# never invoke direct-publish (which assumes an active follower listener).
 		render_consumer_publish "$app" "$previous"
 		publish_name="consumer-publish-$app"
 	fi

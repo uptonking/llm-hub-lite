@@ -12,6 +12,10 @@ Recovery also derives Caddy's UDP bind from the live node role before starting
 foundation services: the Leader owns public UDP/443, while followers keep
 Caddy on the configured loopback fallback so reviewed direct listeners can own
 their public UDP ports.
+For a direct service, recovery also verifies the manifest-selected runtime env,
+rendered `RUNTIME_CONFIG_FILE`, data directory, process state, and every
+declared published listener before reporting success. It uses `--pull never`,
+so a reboot cannot replace a digest-pinned image with mutable registry state.
 
 The bootstrap script uses the same ordering: it holds the platform lock while
 installing and reconciling files, completes the post-bootstrap snapshot, then

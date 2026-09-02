@@ -32,5 +32,5 @@ services:
       - "0.0.0.0:443:443/udp"
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/verge:/var/lib/hysteria
-      - ${VERGE_RUNTIME_CONFIG:-/etc/llm-hub-lite/runtime/verge/config.yaml}:/etc/hysteria/config.yaml:ro
+      - ${RUNTIME_CONFIG_FILE:-/etc/llm-hub-lite/runtime/verge/config.yaml}:/etc/hysteria/config.yaml:ro
     command: ["server", "-c", "/etc/hysteria/config.yaml"]

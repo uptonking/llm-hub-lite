@@ -31,6 +31,16 @@ expect_invalid() {
 base="$(make_fixture base)"
 generate_fixture "$base"
 
+# Disabled direct applications are reconciled from the Leader only so stale
+# follower listeners can be stopped; they must never emit a direct-publish job.
+disabled_direct="$(make_fixture disabled-direct)"
+sed 's/^ENABLED=.*/ENABLED=false/' "$disabled_direct/config/cluster/apps/verge.policy" >"$disabled_direct/config/cluster/apps/verge.policy.tmp"
+mv "$disabled_direct/config/cluster/apps/verge.policy.tmp" "$disabled_direct/config/cluster/apps/verge.policy"
+generate_fixture "$disabled_direct"
+[[ ! -e "$disabled_direct/workflows/direct-publish-verge.yml" ]]
+[[ -f "$disabled_direct/workflows/consumer-publish-verge.yml" ]]
+grep -Fq 'CONSUMER_APP_ID=verge /usr/local/bin/platform-submit consumer-publish' "$disabled_direct/workflows/consumer-publish-verge.yml"
+
 if rg -n $'\t' "$base/workflows"/*.yml >/dev/null 2>&1; then
 	printf 'generated workflows must not contain tab indentation\n' >&2
 	exit 1

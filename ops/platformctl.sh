@@ -323,6 +323,14 @@ app_runtime_env_file() {
 	[[ -n "$rel" ]] || return 0
 	printf '%s/%s\n' "$CONFIG_ROOT" "$rel"
 }
+app_runtime_config_file() {
+	local d="$1" rel app
+	app="$(basename "$d")"
+	rel="$(descriptor_value "$d" RUNTIME_CONFIG_FILE)"
+	[[ -n "$rel" ]] || rel="runtime/$app/config.yaml"
+	safe_relative "$rel" || die "unsafe RUNTIME_CONFIG_FILE in $d/manifest.env"
+	printf '%s/%s\n' "$CONFIG_ROOT" "$rel"
+}
 app_config_file() { printf '%s/%s\n' "$1" "$(descriptor_value "$1" CONFIG_FILE)"; }
 app_override_file_for_node() { printf '%s/config/cluster/overrides/%s/%s.env\n' "$CONTROL_ROOT/current" "$2" "$(basename "$1")"; }
 app_override_file() { app_override_file_for_node "$1" "$(node_id)"; }
@@ -357,9 +365,9 @@ render_runtime_config() {
 	local d="$1" template output tmp key value escaped runtime_dir
 	template="$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)"
 	[[ -n "$template" ]] || return 0
-	runtime_dir="${DIRECT_RUNTIME_ROOT:-$CONFIG_ROOT/runtime}/$(basename "$d")"
+	output="$(app_runtime_config_file "$d")"
+	runtime_dir="$(dirname "$output")"
 	install -d -m 700 "$runtime_dir"
-	output="$runtime_dir/config.yaml"
 	tmp="$(mktemp "$output.tmp.XXXXXX")"
 	cp "$d/$template" "$tmp"
 	while IFS= read -r key; do
@@ -581,6 +589,9 @@ app_compose() {
 	local d="$1" runtime_env config_file override_file endpoint_env
 	if [[ "$(app_ingress_mode "$d")" == direct ]]; then
 		render_runtime_config "$d"
+		# Direct Compose definitions consume the manifest-selected rendered
+		# configuration path through this exported interpolation variable.
+		export RUNTIME_CONFIG_FILE="$(app_runtime_config_file "$d")"
 	fi
 	config_file="$(app_config_file "$d")"
 	override_file="$(app_override_file "$d")"
@@ -1194,7 +1205,7 @@ validate_descriptor() {
 	[[ "$(descriptor_value "$d" COMPOSE_PROJECT)" == "app-$(basename "$d")" ]] || die "COMPOSE_PROJECT must equal app-APP_ID in $d/manifest.env"
 	alias="$(descriptor_value "$d" NETWORK_ALIAS)"
 	[[ "$alias" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid NETWORK_ALIAS in $d/manifest.env"
-	for rel in "$(descriptor_value "$d" DATA_ROOT_REL)" "$(descriptor_value "$d" EPHEMERAL_DATA_REL)" "$(descriptor_value "$d" COMPOSE_FILE)" "$(descriptor_value "$d" CONFIG_FILE)" "$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)" "$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" "$(descriptor_value "$d" RUNTIME_ENV_FILE)" "$(descriptor_value "$d" POLICY_FILE)" "$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)"; do
+	for rel in "$(descriptor_value "$d" DATA_ROOT_REL)" "$(descriptor_value "$d" EPHEMERAL_DATA_REL)" "$(descriptor_value "$d" COMPOSE_FILE)" "$(descriptor_value "$d" CONFIG_FILE)" "$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)" "$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" "$(descriptor_value "$d" RUNTIME_ENV_FILE)" "$(descriptor_value "$d" POLICY_FILE)" "$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)" "$(descriptor_value "$d" RUNTIME_CONFIG_FILE)"; do
 		[[ -z "$rel" ]] || safe_relative "$rel" || die "unsafe descriptor path in $d/manifest.env"
 	done
 	need_file "$CONTROL_ROOT/current/config/$(descriptor_value "$d" POLICY_FILE)"
@@ -1225,6 +1236,7 @@ validate_descriptor() {
 	fi
 	if [[ -n "$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)" ]]; then
 		need_file "$d/$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)"
+		app_runtime_config_file "$d" >/dev/null
 	fi
 	for k in $(descriptor_value "$d" IMAGE_KEYS); do
 		[[ "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid IMAGE_KEYS entry in $d/manifest.env: $k"
@@ -2734,6 +2746,9 @@ direct_smoke() {
 		# passing `443/udp` as one token is rejected by current Compose plugins.
 		mapped="$("${compose_command[@]}" port --protocol "$proto" "$service" "$container_port" 2>/dev/null || true)"
 		printf '%s\n' "$mapped" | awk -v p=":$host_port$" '$0 ~ p {found=1} END {exit found ? 0 : 1}' || die "direct listener is not published as expected: $proto/$host_port"
+		# Direct/orphan services must bind a public wildcard. A loopback-only
+		# mapping would leave the DNS record pointing at an unreachable listener.
+		printf '%s\n' "$mapped" | awk -v p=":$host_port$" '($0 ~ /^0\.0\.0\.0:/ || $0 ~ /^\[::\]:/) && $0 ~ p {found=1} END {exit found ? 0 : 1}' || die "direct listener is not publicly bound: $proto/$host_port"
 	done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
 	printf 'direct service healthy: %s\n' "$(basename "$d")"
 }

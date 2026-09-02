@@ -72,6 +72,12 @@ Non-secret defaults live in `apps/<id>/config.env` ; durable per-node tuning
 overrides live in `config/cluster/overrides/<node-id>/<app-id>.env` . Secrets
 remain in root-only files under `/etc/llm-hub-lite` and are never committed.
 
+Applications that render a runtime configuration from a template may set
+`RUNTIME_CONFIG_FILE` in their manifest. The path is relative to
+`/etc/llm-hub-lite` and defaults to `runtime/<app>/config.yaml`; the renderer,
+Compose definition, recovery checks, and migration checks all use this same
+contract.
+
 To add a consumer, add `apps/<id>/manifest.env` , `config.env` , its Compose and
 route templates, a policy under `config/cluster/apps/` , and digest-pinned image
 keys. The workflow generator derives all stage, publish, stop, and singleton
@@ -152,6 +158,17 @@ with `GRIST_IN_SERVICE=false`; the session and boot keys are generated only in
 `/etc/llm-hub-lite/wabase.env`. After setup, commit
 `WABASE_IN_SERVICE=true`. A placement change intentionally starts fresh and
 archives the previous local data.
+
+Direct/orphan applications such as Verge publish their declared
+`DIRECT_LISTENERS` on the selected follower and do not create a Leader Caddy
+route. The listener must bind a public wildcard (`0.0.0.0` or `[::]`) because
+DNS points directly at that VPS. `DIRECT_PROBE=socket` validates the published
+port while `HEALTH_MODE=process` treats a running container as health when the
+image has no Docker healthcheck. Follower Docker ingress is scoped to the
+public IPv4 interface and defaults to deny: only the Leader proxy and
+policy-allowlisted direct listeners are accepted; egress and internal bridge
+traffic are unaffected. Use Cloudflare DNS-only records for unproxied
+protocols such as Verge UDP/443.
 
 An intentional singleton identity rename may declare the temporary
 `IDENTITY_MIGRATION_*` manifest contract. The generated target stage then runs

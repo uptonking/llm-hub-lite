@@ -125,8 +125,11 @@ while IFS= read -r manifest; do
 		ufw allow "$port/$proto" comment "Direct $app" >/dev/null
 	done <<<"$(value DIRECT_LISTENERS "$manifest" | tr ',' '\n')"
 done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
-iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p tcp --dport 443 -j DROP
-iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p udp --dport 443 -j DROP
+# Default-deny Docker-published ingress on the public interface. Exceptions
+# above cover the Leader proxy and explicitly allowlisted direct listeners;
+# container egress is unaffected because these rules are interface-scoped.
+iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p tcp -j DROP
+iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p udp -j DROP
 while iptables -C DOCKER-USER -j "$chain" 2>/dev/null; do iptables -D DOCKER-USER -j "$chain"; done
 iptables -I DOCKER-USER 1 -j "$chain"
 

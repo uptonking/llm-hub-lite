@@ -1121,6 +1121,8 @@ consumer-publish)
 direct-publish)
 	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: DIRECT_APP_ID=<id> deploy-controller direct-publish <sha>'
 	apply "$2" direct-publish
+	[[ "$(env_value ENABLED "$CONTROL_ROOT/current/config/cluster/apps/$CONSUMER_APP_ID.policy")" == true ]] || die "direct publication is disabled by policy: $CONSUMER_APP_ID"
+	[[ "$(env_value INGRESS_MODE "$CONTROL_ROOT/current/apps/$CONSUMER_APP_ID/manifest.env")" == direct ]] || die "application is not a direct service: $CONSUMER_APP_ID"
 	PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" direct-smoke "$CONSUMER_APP_ID"
 	;;
 consumer-stop)

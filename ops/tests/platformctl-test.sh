@@ -87,6 +87,10 @@ cat >"$tmp/config/pigeon.env" <<'EOF'
 PIGEON_SECRET_KEY=0123456789abcdef0123456789abcdef
 PIGEON_LOGIN_PASSWORD=test-pigeon-password
 EOF
+cat >"$tmp/config/verge.env" <<'EOF'
+VERGE_AUTH_PASSWORD=0123456789abcdef0123456789abcdef
+VERGE_CLOUDFLARE_API_TOKEN=test-cloudflare-token-0123456789
+EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi.example.invalid
@@ -102,6 +106,9 @@ cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
+  *"-p app-verge "*" ps --status running --services"*) printf 'verge\n'; exit 0;;
+  *"-p app-verge "*" ps -q verge"*) printf 'verge-container\n'; exit 0;;
+  *"-p app-verge "*" port --protocol udp verge 443"*) printf '%s\n' "${DIRECT_PORT_BIND:-0.0.0.0:443}"; exit 0;;
   *" ps --all -q observer-log-shipper"*) printf 'observer-log-shipper\n'; exit 0;;
   *" ps --all -q observer-controller"*) printf 'observer-controller\n'; exit 0;;
   *" ps --all -q beszel-socket-proxy"*) printf 'beszel-socket-proxy\n'; exit 0;;
@@ -138,6 +145,7 @@ case "$*" in
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
   *app-wapdf*) printf 'wapdf\nhealth-probe\n';;
+  *app-verge*) printf 'verge\n';;
 esac
 exit 0
 EOF
@@ -944,6 +952,18 @@ for project in app-aichorouter app-cpapi app-cursorapi; do
 		exit 1
 	fi
 done
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+
+# Direct/orphan smoke requires a public wildcard mapping, not merely the
+# expected port number. Verify both the successful and loopback-only cases.
+mkdir -p "$tmp/config/runtime/verge" "$tmp/app/current/apps/verge"
+printf 'runtime: test\n' >"$tmp/config/runtime/verge/config.yaml"
+cp "$repo_root/config/cluster/nodes/worker-4.env" "$tmp/config/node.env"
+bash "$repo_root/ops/platformctl.sh" direct-smoke verge >/dev/null
+if DIRECT_PORT_BIND='127.0.0.1:443' bash "$repo_root/ops/platformctl.sh" direct-smoke verge >/dev/null 2>&1; then
+	printf 'direct smoke accepted a loopback-only listener\n' >&2
+	exit 1
+fi
 cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
 # The final Leader render below covers both active-active upstreams. Avoid a
 # duplicate render here; the preceding worker sync assertions already prove

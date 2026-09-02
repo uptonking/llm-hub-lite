@@ -54,8 +54,8 @@ if grep -Fq 'ufw allow from ' "$FIREWALL_LOG"; then
 fi
 grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s 192.0.2.10 -p tcp --dport 443 -j RETURN' "$FIREWALL_LOG"
 grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s 192.0.2.10 -p udp --dport 443 -j RETURN' "$FIREWALL_LOG"
-grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp --dport 443 -j DROP' "$FIREWALL_LOG"
-grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p udp --dport 443 -j DROP' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp -j DROP' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p udp -j DROP' "$FIREWALL_LOG"
 if grep -Eq '^iptables -A LLM_HUB_LITE_DOCKER -p (tcp|udp) --dport 443' "$FIREWALL_LOG"; then
 	printf 'firewall contains an unscoped port 443 rule that can block container egress\n' >&2
 	exit 1

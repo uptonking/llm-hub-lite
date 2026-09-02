@@ -1,6 +1,13 @@
 # Follower VPS Migration
 
 `ops/change-vps-for-consumer-node.sh` moves an active follower to a fresh VPS while retaining its logical node ID, application data, generated routes, foundation identities, and runtime secrets. The source is deliberately left stopped after the cutover so Woodpecker and Beszel do not run twice.
+The archive includes direct/orphan service configuration under
+`/etc/llm-hub-lite`, rendered runtime files selected by each manifest's
+`RUNTIME_CONFIG_FILE`, and application data under
+`/opt/apps/llm-hub-lite/shared/data/prod`. Migration therefore preserves a
+running direct service when the logical node ID stays the same. Moving a
+singleton placement to a different logical node remains an intentional fresh
+deployment and does not copy that node's local state.
 
 ## Before You Start
 
