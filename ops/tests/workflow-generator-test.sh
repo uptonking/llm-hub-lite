@@ -68,6 +68,11 @@ done
 grep -Fq 'event: push' "$base/workflows/push-audit.yml"
 grep -Fq 'node: leader' "$base/workflows/push-audit.yml"
 grep -Fq '/usr/local/bin/woodpecker-plan' "$base/workflows/push-audit.yml"
+grep -Fq 'elif [ -f /usr/local/bin/woodpecker-plan ]' "$base/workflows/push-audit.yml"
+if grep -Fq '/usr/local/bin/woodpecker-plan:/usr/local/bin/woodpecker-plan' "$base/workflows/push-audit.yml"; then
+	printf 'push audit must not bind-mount an optional planner path (Docker creates missing targets as directories)\n' >&2
+	exit 1
+fi
 grep -Fq 'MIRROR_PATH=/opt/platform/control/mirror.git' "$base/workflows/push-audit.yml"
 if grep -Fq 'depends_on:' "$base/workflows/push-audit.yml"; then
 	printf 'push audit must remain visible even when control sync fails\n' >&2

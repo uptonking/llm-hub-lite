@@ -339,10 +339,9 @@ steps:
     pull: false
 EOF
 	write_volumes >>"$file"
-	printf '      - /usr/local/bin/woodpecker-plan:/usr/local/bin/woodpecker-plan:ro\n' >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - if [ -r /opt/platform/control/current/ops/woodpecker-plan.sh ]; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git bash /opt/platform/control/current/ops/woodpecker-plan.sh; elif [ -r /usr/local/bin/woodpecker-plan ]; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git bash /usr/local/bin/woodpecker-plan; else printf 'Woodpecker push received sha=%s ref=%s repo=%s\\n' "\$CI_COMMIT_SHA" "\$CI_COMMIT_REF" "\$CI_REPO"; git --git-dir=/opt/platform/control/mirror.git show --format= --name-only "\$CI_COMMIT_SHA" | sed '/^\$/d'; fi
+      - if [ -f /opt/platform/control/current/ops/woodpecker-plan.sh ]; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git bash /opt/platform/control/current/ops/woodpecker-plan.sh; elif [ -f /usr/local/bin/woodpecker-plan ]; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git bash /usr/local/bin/woodpecker-plan; else printf 'Woodpecker push received sha=%s ref=%s repo=%s\\n' "\$CI_COMMIT_SHA" "\$CI_COMMIT_REF" "\$CI_REPO"; git --git-dir=/opt/platform/control/mirror.git show --format= --name-only "\$CI_COMMIT_SHA" | sed '/^\$/d'; fi
 EOF
 }
 
