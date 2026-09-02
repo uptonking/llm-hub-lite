@@ -112,6 +112,7 @@ write_volumes() {
       - /usr/local/bin/platform-submit:/usr/local/bin/platform-submit:ro
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
+      - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
 EOF
 }
 
