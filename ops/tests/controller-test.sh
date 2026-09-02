@@ -416,7 +416,12 @@ for node in leader worker-1 worker-2 worker-3 worker-4; do
 	[[ -f "$repo_root/.woodpecker/control-sync-$node.yml" ]]
 done
 grep -Fq 'platform-submit control-sync' "$repo_root/.woodpecker/control-sync-leader.yml"
+for node in worker-1 worker-2 worker-3 worker-4; do
+	grep -Fq 'platform-submit control-verify' "$repo_root/.woodpecker/control-sync-$node.yml"
+done
 grep -Fq 'control-sync-worker-1' "$repo_root/.woodpecker/consumer-stage-cpapi-worker-1.yml"
+grep -Fq 'control-verify' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'CONTROL_ATTESTATION_FILE' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'consumer-publish-cpapi' "$repo_root/.woodpecker/consumer-stop-cpapi-worker-2.yml"
 grep -Fq 'CONSUMER_APP_ID=wapdf /usr/local/bin/platform-submit consumer-stage' "$repo_root/.woodpecker/consumer-stage-wapdf-worker-2.yml"
 grep -Fq 'consumer-stage-wapdf-worker-2' "$repo_root/.woodpecker/consumer-publish-wapdf.yml"

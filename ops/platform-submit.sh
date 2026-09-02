@@ -4,8 +4,8 @@ set -Eeuo pipefail
 
 mode="${1:-}"
 sha="${2:-}"
-[[ "$mode" =~ ^(deploy|control-sync|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|consumer-stage|consumer-publish|consumer-stop|direct-publish|node-retire)$ ]] || {
-	printf 'usage: platform-submit {deploy|control-sync|consumer-stage|consumer-publish|consumer-stop|direct-publish|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback} <sha-or-previous>\n' >&2
+[[ "$mode" =~ ^(deploy|control-sync|control-verify|foundation-upgrade|cluster-reconcile|app-upgrade|rollback|consumer-stage|consumer-publish|consumer-stop|direct-publish|node-retire)$ ]] || {
+	printf 'usage: platform-submit {deploy|control-sync|control-verify|consumer-stage|consumer-publish|consumer-stop|direct-publish|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback} <sha-or-previous>\n' >&2
 	exit 2
 }
 [[ -n "$sha" ]] || {
@@ -112,6 +112,14 @@ if [[ "$status" -eq 0 ]]; then
 		status=1
 	}
 	[[ "$status" -ne 0 ]] || status="$wait_result"
+fi
+
+# Exit 78 is the controller's explicit supersession result. Surface it as a
+# successful no-op so Woodpecker can continue the DAG without treating an
+# obsolete queued commit as a deployment failure.
+if [[ "$status" -eq 78 ]]; then
+	printf 'deployment skipped: commit superseded before mutation\n'
+	status=0
 fi
 [[ "$stream_status" -eq 0 ]] || docker logs "$job" || true
 if [[ "$status" -ne 0 && -x /usr/local/bin/platformctl ]]; then

@@ -1525,7 +1525,7 @@ for foundation_file in "$bootstrap_tree"/compose/foundation/manifests/*.env; do
 done
 
 install -d -m 700 /usr/local/libexec
-for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-placement configure-app-secrets configure-observer-ingest enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows woodpecker-repair; do
+for script in platformctl restart-platform backup-platform restore-platform configure-beszel configure-firewall configure-app-placement configure-app-secrets configure-observer-ingest enroll-beszel upgrade-runner platform-submit deploy-controller generate-woodpecker-workflows woodpecker-repair woodpecker-plan; do
 	cat >"/usr/local/bin/$script" <<EOF
 #!/bin/sh
 exec /opt/platform/control/current/ops/$script.sh "\$@"
@@ -1538,12 +1538,19 @@ exec /opt/platform/control/current/ops/git-auth.sh "\$@"
 EOF
 chmod 700 /usr/local/bin/git-auth.sh
 
+woodpecker_automation_env="$CONFIG_ROOT/woodpecker-automation.env"
+if [[ ! -e "$woodpecker_automation_env" ]]; then
+	install -o root -g root -m 600 /dev/null "$woodpecker_automation_env"
+	printf 'WOODPECKER_AUTOMATION_ENABLED=0\n' >>"$woodpecker_automation_env"
+fi
+
 platform_env="$CONFIG_ROOT/platform.env"
 for pair in \
 	"APP_ROOT=$APP_ROOT" "PLATFORM_ROOT=$PLATFORM_ROOT" "CONTROL_ROOT=$CONTROL_ROOT" "FOUNDATION_ROOT=$FOUNDATION_ROOT" \
 	"REPO_URL=$REPO_URL" "MAIN_BRANCH=$MAIN_BRANCH" "APP_ENV=$app_env" "APP_IMAGE_ENV=$CONFIG_ROOT/images.apps.env" \
 	"FOUNDATION_IMAGE_ENV=$CONFIG_ROOT/images.foundation.env" "FOUNDATION_ENV_ROOT=$FOUNDATION_ROOT/env" \
 	"CONTROL_SYNC_STATE_FILE=$CONFIG_ROOT/control-sync.state" \
+	"CONTROL_ATTESTATION_FILE=$CONTROL_ROOT/attestation.env" \
 	"RUNTIME_ROOT=$APP_ROOT/shared/runtime" "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" \
 	"PLATFORM_LOCK_FILE=/run/lock/llm-hub-lite/platform.lock" "GITHUB_TOKEN_FILE=${GITHUB_TOKEN_FILE:-$CONFIG_ROOT/github-token}" "PLATFORM_RUNNER_IMAGE=llm-hub-lite/deploy-runner:current"; do
 	set_key "$platform_env" "${pair%%=*}" "${pair#*=}"

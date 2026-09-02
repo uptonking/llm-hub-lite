@@ -4,6 +4,9 @@ when:
   - event: push
     branch: main
 
+depends_on:
+  - control-sync-leader
+
 labels:
   node: worker-4
   deployment: "true"
@@ -30,4 +33,4 @@ steps:
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
     commands:
-      - DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"
+      - DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-verify "$CI_COMMIT_SHA"

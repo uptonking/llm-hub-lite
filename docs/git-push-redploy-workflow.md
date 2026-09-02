@@ -11,7 +11,7 @@ hook automatically after the server is healthy. It is safe to run repeatedly.
 
 ## TL; DR
 
-`git push` → GitHub webhook → Woodpecker server (on the Leader) → per-node `control-sync-<node>` workflows validate and install the immutable control release on every node in parallel → targeted app/foundation workflows run on the selected agents (active-active stages fan out in parallel; singleton stage → publish → stop remains ordered) → each step runs `deploy-controller` locally on that node, which fetches the same commit, validates it, swaps the service release only after the control release is ready, and recreates only the
+`git push` → GitHub webhook → Woodpecker server (on the Leader) → Leader `push-audit` planner and full `control-sync-leader` gate → follower `control-sync-<node>` verification workflows fetch and validate only node-local inputs → targeted app/foundation workflows run on the selected agents (active-active stages fan out in parallel; singleton stage → publish → stop remains ordered) → each step runs `deploy-controller` locally on that node, which fetches the same commit, validates it, swaps the service release only after the control release is ready, and recreates only the
 affected Compose projects, health-checks them, and only then does the Leader rewrite the Caddy route and reload. GitHub Actions ( `validate.yml` ) never deploys; it is test-only. There is no SSH fan-out: every node pulls the commit itself.
 
 ## The pieces and where they live
@@ -62,6 +62,13 @@ never removes hand-authored workflows.
   `concurrency: {group: llm-hub-lite-node-<node>, limit: 1}`. Deployments on
   different VPSs can run concurrently, while the host lock still serializes
   mutations on one VPS. Woodpecker's queue preserves order across pushes.
+- **Leader gate and supersession**: the Leader performs the expensive immutable
+  release validation once. Followers verify the exact commit, tree, policy, and
+  image locks locally before installing control metadata. The optional
+  root-only `woodpecker-automation.env` enables the Leader planner to decline
+  older pending pipelines for the same branch. Running pipelines are never
+  canceled; every deployment controller performs a final ancestor check and
+  exits before mutation when its SHA has been superseded.
 - **Chaining** via `depends_on`: foundation reconciliation is Leader-first;
   active-active stages fan out and publish waits for every selected node;
   singleton transitions remain stage → publish → stale-node stop → finalize.

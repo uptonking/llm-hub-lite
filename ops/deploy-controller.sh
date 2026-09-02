@@ -37,6 +37,7 @@ source "$config_file"
 : "${GITHUB_TOKEN_FILE:=$CONFIG_ROOT/github-token}"
 : "${SINGLETON_STATE_ROOT:=$CONFIG_ROOT/singleton-state}"
 : "${CONTROL_SYNC_STATE_FILE:=$CONFIG_ROOT/control-sync.state}"
+: "${CONTROL_ATTESTATION_FILE:=$CONTROL_ROOT/attestation.env}"
 : "${VALIDATION_CACHE_ROOT:=$CONTROL_ROOT/validation-cache}"
 # Production defaults retain the existing retry backoff. Tests and operators
 # may set these to zero to avoid waiting after a mocked/transient failure.
@@ -264,6 +265,11 @@ apply_control_sync() {
 		write_control_sync_state failed "$sha" "$old_sha" 'target is not reachable from main'
 		die 'target is not reachable from main'
 	fi
+	if is_superseded "$sha"; then
+		log "superseded control sync skipped without mutation: sha=$sha latest=$(git -C "$SOURCE_MIRROR" rev-parse "refs/remotes/origin/$MAIN_BRANCH")"
+		CONTROL_SYNC_ACTIVE=0
+		return 78
+	fi
 	if [[ -n "$old_current" ]] && ! git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$old_sha" "$sha"; then
 		write_control_sync_state failed "$sha" "$old_sha" 'target commit is older than installed control release'
 		die 'target commit is older than the installed control release'
@@ -273,9 +279,20 @@ apply_control_sync() {
 		die 'unable to prepare control release'
 	fi
 	debug_log "prepared release=$release"
-	if ! validate_release_cached "$release"; then
-		write_control_sync_state failed "$sha" "$old_sha" 'candidate validation failed'
-		die 'candidate control release validation failed'
+	if [[ "${CONTROL_VERIFY_ONLY:-0}" == 1 ]]; then
+		verify_release_contract "$release" || {
+			write_control_sync_state failed "$sha" "$old_sha" 'candidate contract verification failed'
+			die 'candidate control contract verification failed'
+		}
+		validate_release "$release" 1 || {
+			write_control_sync_state failed "$sha" "$old_sha" 'node-local candidate validation failed'
+			die 'node-local candidate validation failed'
+		}
+	else
+		if ! validate_release_cached "$release"; then
+			write_control_sync_state failed "$sha" "$old_sha" 'candidate validation failed'
+			die 'candidate control release validation failed'
+		fi
 	fi
 	stage="$(mktemp -d "$CONTROL_ROOT/.control-sync.XXXXXX")"
 	if ! sync_node_config "$release" "$stage/node.env"; then
@@ -319,9 +336,14 @@ apply_control_sync() {
 		die 'unable to prune retired app endpoint metadata'
 	fi
 	rm -rf -- "$stage"
+	write_release_attestation "$release"
 	write_control_sync_state succeeded "$sha" "$old_sha"
 	CONTROL_SYNC_ACTIVE=0
 	log "control sync succeeded: $sha"
+}
+
+apply_control_verify() {
+	CONTROL_VERIFY_ONLY=1 apply_control_sync "$1"
 }
 
 git_remote_url() {
@@ -403,6 +425,52 @@ verify_target() {
 	local sha="$1"
 	git -C "$SOURCE_MIRROR" cat-file -e "$sha^{commit}" || die 'target is not in mirror'
 	git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$sha" "refs/remotes/origin/$MAIN_BRANCH" || die 'target is not reachable from main'
+}
+
+sha256_file_safe() {
+	local file="$1"
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$file" | awk '{print $1}'
+	else
+		shasum -a 256 "$file" | awk '{print $1}'
+	fi
+}
+
+release_attestation_fingerprint() {
+	local release="$1" tree policy images foundation controller ctl sha
+	sha="$(basename "$release")"
+	tree="$(git -C "$SOURCE_MIRROR" rev-parse "$sha^{tree}")"
+	policy="$(sha256_file_safe "$release/config/cluster/policy.env")"
+	images="$(sha256_file_safe "$release/ops/images.apps.prod.env")"
+	foundation="$(sha256_file_safe "$release/ops/images.foundation.prod.env")"
+	controller="$(sha256_file_safe "$release/ops/deploy-controller.sh")"
+	ctl="$(sha256_file_safe "$release/ops/platformctl.sh")"
+	printf 'schema=1\nsha=%s\ntree=%s\npolicy=%s\napps_images=%s\nfoundation_images=%s\ndeploy_controller=%s\nplatformctl=%s\n' "$sha" "$tree" "$policy" "$images" "$foundation" "$controller" "$ctl"
+}
+
+write_release_attestation() {
+	local release="$1" tmp
+	install -d -m 700 "$(dirname "$CONTROL_ATTESTATION_FILE")"
+	tmp="$(mktemp "${CONTROL_ATTESTATION_FILE}.tmp.XXXXXX")"
+	release_attestation_fingerprint "$release" >"$tmp"
+	printf 'validated_utc=%s\nnode=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(node_value NODE_ID)" >>"$tmp"
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$CONTROL_ATTESTATION_FILE"
+}
+
+is_superseded() {
+	local sha="$1" latest
+	latest="$(git -C "$SOURCE_MIRROR" rev-parse "refs/remotes/origin/$MAIN_BRANCH" 2>/dev/null || true)"
+	[[ -n "$latest" && "$latest" != "$sha" ]] || return 1
+	git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$sha" "$latest"
+}
+
+verify_release_contract() {
+	local release="$1" node
+	[[ -f "$release/config/cluster/policy.env" && -f "$release/ops/platformctl.sh" ]] || die 'release contract is incomplete'
+	validate_application_image_locks "$release"
+	node="$(node_value NODE_ID)"
+	[[ "$(env_value NODE_ID "$release/config/cluster/nodes/$node.env")" == "$node" ]] || die "release node inventory does not contain runtime node: $node"
 }
 
 control_sync_matches_sha() {
@@ -672,7 +740,7 @@ stage_validation_runtime_config() {
 }
 
 validate_release() {
-	local release="$1" runtime foundation_validate control_validate validation_config image_apps image_foundation
+	local release="$1" local_scope="${2:-0}" runtime foundation_validate control_validate validation_config image_apps image_foundation
 	[[ -f "$release/ops/platformctl.sh" && -d "$release/apps" && -d "$release/config" ]] || die 'release is missing platform files'
 	validate_application_image_locks "$release"
 	install -d -m 700 "$APP_ROOT/shared/runtime"
@@ -695,7 +763,7 @@ validate_release() {
 	if ! PLATFORM_SKIP_SINGLETONS="${DEPLOY_SKIP_SINGLETONS:-0}" CONTROL_ROOT="$control_validate" CONFIG_ROOT="$validation_config" APPS_ROOT="$release/apps" RUNTIME_ROOT="$runtime" \
 		APP_ENV="$APP_ENV" APP_IMAGE_ENV="$image_apps" FOUNDATION_IMAGE_ENV="$image_foundation" \
 		FOUNDATION_ROOT="$foundation_validate" FOUNDATION_ENV_ROOT="$foundation_validate/env" NODE_CONFIG_FILE="$control_validate/node.env" CLUSTER_POLICY_FILE="$control_validate/config/cluster/policy.env" \
-		PLATFORM_TEST_MODE="$PLATFORM_TEST_MODE" PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" PLATFORM_TEST_SKIP_SYNC_VALIDATION="$PLATFORM_TEST_SKIP_SYNC_VALIDATION" PLATFORM_TEST_SKIP_RENDER="$PLATFORM_TEST_SKIP_RENDER" PLATFORM_TEST_SKIP_COMPOSE_INSPECTION="$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" PLATFORM_TEST_FAST_VALIDATE="$PLATFORM_TEST_FAST_VALIDATE" PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR" PLATFORM_TEST_SKIP_CLUSTER_VALIDATION="$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" \
+		PLATFORM_VALIDATE_LOCAL="$local_scope" PLATFORM_TEST_MODE="$PLATFORM_TEST_MODE" PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION="$PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION" PLATFORM_TEST_SKIP_SYNC_VALIDATION="$PLATFORM_TEST_SKIP_SYNC_VALIDATION" PLATFORM_TEST_SKIP_RENDER="$PLATFORM_TEST_SKIP_RENDER" PLATFORM_TEST_SKIP_COMPOSE_INSPECTION="$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" PLATFORM_TEST_FAST_VALIDATE="$PLATFORM_TEST_FAST_VALIDATE" PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR" PLATFORM_TEST_SKIP_CLUSTER_VALIDATION="$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" PLATFORM_LOCK_HELD=1 \
 		"$release/ops/platformctl.sh" validate --check; then
 		rm -rf -- "$runtime" "$foundation_validate" "$control_validate"
@@ -705,10 +773,19 @@ validate_release() {
 }
 
 validation_cache_key() {
-	local release="$1"
-	# The cache is scoped to the immutable commit and the validator script. A
-	# changed controller automatically invalidates the attestation.
-	printf '%s.%s' "$(basename "$release")" "$(cksum <"${BASH_SOURCE[0]}" | awk '{print $1}')"
+	local release="$1" file fingerprint
+	fingerprint="$({
+		printf 'schema=2\nrelease=%s\n' "$(basename "$release")"
+		for file in "${BASH_SOURCE[0]}" "$release/ops/platformctl.sh" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}" "$APP_ENV" "$APP_IMAGE_ENV" "$FOUNDATION_IMAGE_ENV" "$CONFIG_ROOT/platform.env"; do
+			if [[ -f "$file" ]]; then cksum "$file"; else printf 'missing %s\n' "$file"; fi
+		done
+		for file in "$FOUNDATION_ROOT"/env/* "$APP_ROOT/shared/runtime/app-env"/*; do
+			[[ -f "$file" ]] && cksum "$file"
+		done
+		printf 'compose=%s\n' "$("${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" version 2>/dev/null | head -n1 || printf unavailable)"
+		printf 'docker=%s\n' "$(docker version --format '{{.Client.Version}}' 2>/dev/null || printf unavailable)"
+	} | cksum | awk '{print $1}')"
+	printf '%s.%s' "$(basename "$release")" "$fingerprint"
 }
 validate_release_cached() {
 	local release="$1" cache key
@@ -721,7 +798,7 @@ validate_release_cached() {
 	fi
 	validate_release "$release" || return 1
 	install -d -m 700 "$VALIDATION_CACHE_ROOT"
-	printf 'schema=1\nsha=%s\nvalidated_utc=%s\n' "$(basename "$release")" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$cache"
+	printf 'schema=2\nsha=%s\nvalidated_utc=%s\n' "$(basename "$release")" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$cache"
 	chmod 600 "$cache"
 }
 
@@ -888,9 +965,11 @@ prefetch_images() {
 				continue
 			}
 			should_pull=0
-			if [[ "$mode" == app-upgrade || "$mode" == foundation ]]; then
-				should_pull=1
-			elif ! docker image inspect "$image" >/dev/null 2>&1; then
+			# Digest-pinned image references make presence a sufficient reuse
+			# decision. A changed lock points at a different digest and therefore
+			# naturally misses this inspection, while unchanged images are never
+			# needlessly pulled during foundation or application upgrades.
+			if ! docker image inspect "$image" >/dev/null 2>&1; then
 				should_pull=1
 			fi
 			if ((should_pull == 1)); then pull_image "$image"; fi
@@ -1005,6 +1084,9 @@ apply() {
 	else
 		if [[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop || "$mode" == direct-publish ]] && control_sync_matches_sha "$sha"; then
 			log "reusing control-sync mirror for $sha"
+			# Refresh origin even when the immutable control release is already
+			# installed so a newer push can supersede this queued stage safely.
+			fetch_main || die 'unable to refresh repository for supersession check'
 		else
 			fetch_main || die 'unable to fetch repository'
 		fi
@@ -1016,8 +1098,16 @@ apply() {
 	[[ -z "$old_current" && -n "$old_control_current" ]] && old_current="$old_control_current"
 	verify_fast_forward "$old_current" "$sha" "$mode"
 	[[ "$mode" == cluster-reconcile ]] && verify_cluster_scope "$old_control_current" "$release"
+	if [[ "$mode" != rollback && "$mode" != control-sync && "$mode" != control-verify ]]; then
+		if is_superseded "$sha"; then
+			log "superseded deployment skipped before mutation: mode=$mode sha=$sha latest=$(git -C "$SOURCE_MIRROR" rev-parse "refs/remotes/origin/$MAIN_BRANCH")"
+			return 78
+		fi
+	fi
 	if [[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 1 ]]; then
 		log 'test mode: skipping candidate release validation (platformctl is mocked)'
+	elif [[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop || "$mode" == direct-publish ]] && control_sync_matches_sha "$sha"; then
+		log "reusing Leader-gated control validation for $sha"
 	else
 		validate_release_cached "$release"
 		# The candidate was fully validated before any pointers or containers are
@@ -1227,6 +1317,10 @@ node-retire)
 control-sync)
 	[[ $# -eq 2 ]] || die 'usage: deploy-controller control-sync <sha>'
 	apply_control_sync "$2"
+	;;
+control-verify)
+	[[ $# -eq 2 ]] || die 'usage: deploy-controller control-verify <sha>'
+	apply_control_verify "$2"
 	;;
 rollback) rollback "${2:-previous}" ;;
 status) printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\ncontrol_sync_state=%s\n' "$(readlink "$CURRENT" 2>/dev/null || true)" "$(readlink "$PREVIOUS" 2>/dev/null || true)" "$(readlink "$APP_CURRENT" 2>/dev/null || true)" "$(readlink "$APP_PREVIOUS" 2>/dev/null || true)" "$(cat "$CONTROL_SYNC_STATE_FILE" 2>/dev/null | tr '\n' ' ' | cut -c1-240)" ;;

@@ -67,8 +67,8 @@ for file in \
 done
 grep -Fq 'event: push' "$base/workflows/push-audit.yml"
 grep -Fq 'node: leader' "$base/workflows/push-audit.yml"
-grep -Fq 'Woodpecker push received' "$base/workflows/push-audit.yml"
-grep -Fq 'git --git-dir=/opt/platform/control/mirror.git show' "$base/workflows/push-audit.yml"
+grep -Fq '/usr/local/bin/woodpecker-plan' "$base/workflows/push-audit.yml"
+grep -Fq 'MIRROR_PATH=/opt/platform/control/mirror.git' "$base/workflows/push-audit.yml"
 if grep -Fq 'depends_on:' "$base/workflows/push-audit.yml"; then
 	printf 'push audit must remain visible even when control sync fails\n' >&2
 	exit 1
@@ -110,16 +110,13 @@ if grep -Fq 'SINGLETON_FINAL_STOP=1' "$base/workflows/consumer-stop-aichorouter-
 fi
 grep -Fq $'depends_on:\n  - consumer-publish-newapi' "$base/workflows/consumer-stop-newapi-worker-2.yml"
 grep -Fq 'CONSUMER_APP_ID=librechat /usr/local/bin/platform-submit consumer-stage' "$base/workflows/consumer-stage-librechat-worker-1.yml"
-for node in leader worker-1 worker-2 worker-3 worker-4; do
-	if grep -q '^depends_on:' "$base/workflows/control-sync-$node.yml"; then
-		printf 'control synchronization must be independently schedulable per node\n' >&2
-		exit 1
-	fi
-done
-for node in leader worker-1 worker-2 worker-3 worker-4; do
-	grep -Fq 'platform-submit control-sync' "$base/workflows/control-sync-$node.yml"
+grep -Fq $'depends_on:\n  - push-audit' "$base/workflows/control-sync-leader.yml"
+for node in worker-1 worker-2 worker-3 worker-4; do
+	grep -Fq $'depends_on:\n  - control-sync-leader' "$base/workflows/control-sync-$node.yml"
+	grep -Fq 'platform-submit control-verify' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'skip_clone: true' "$base/workflows/control-sync-$node.yml"
 done
+grep -Fq 'platform-submit control-sync' "$base/workflows/control-sync-leader.yml"
 grep -Fq '/usr/local/bin/configure-app-secrets aichorouter --target-node worker-1 --ensure-generated' "$base/workflows/consumer-stage-aichorouter-worker-1.yml"
 grep -Fq $'depends_on:\n  - control-sync-worker-1\n  - name: foundation-reconcile-leader\n    optional: true' "$base/workflows/foundation-reconcile-worker-1.yml"
 if grep -R -Fq 'legacy deployment wrapper detected' "$base/workflows"; then
