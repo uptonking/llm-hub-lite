@@ -117,7 +117,10 @@ if grep -Fq 'SINGLETON_FINAL_STOP=1' "$base/workflows/consumer-stop-aichorouter-
 fi
 grep -Fq $'depends_on:\n  - consumer-publish-newapi' "$base/workflows/consumer-stop-newapi-worker-2.yml"
 grep -Fq 'CONSUMER_APP_ID=librechat /usr/local/bin/platform-submit consumer-stage' "$base/workflows/consumer-stage-librechat-worker-1.yml"
-grep -Fq $'depends_on:\n  - push-audit' "$base/workflows/control-sync-leader.yml"
+if grep -Fq 'push-audit' "$base/workflows/control-sync-leader.yml"; then
+	printf 'Leader control-sync must not depend on informational push-audit\n' >&2
+	exit 1
+fi
 for node in worker-1 worker-2 worker-3 worker-4; do
 	grep -Fq $'depends_on:\n  - control-sync-leader' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'platform-submit control-verify' "$base/workflows/control-sync-$node.yml"

@@ -4,9 +4,6 @@ when:
   - event: push
     branch: main
 
-depends_on:
-  - push-audit
-
 labels:
   node: leader
   deployment: "true"

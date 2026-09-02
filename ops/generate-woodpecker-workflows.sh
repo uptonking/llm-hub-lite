@@ -169,7 +169,9 @@ render_control_sync() {
 	dependency=''
 	command='control-sync'
 	if [[ "$id" == "$leader_id" ]]; then
-		dependency='push-audit'
+		# Push audit is informational/API housekeeping. Run it independently so
+		# planner latency or failure can never delay the real validation gate.
+		dependency=''
 	else
 		dependency="control-sync-$leader_id"
 		command='control-verify'
@@ -184,7 +186,15 @@ when:
 
 EOF
 	if [[ -n "$dependency" ]]; then
-		printf 'depends_on:\n  - %s\n\n' "$dependency" >>"$file"
+		if [[ "$id" == "$leader_id" ]]; then
+			# Push audit is telemetry and optional API housekeeping. It must remain
+			# visible, but a transient planner failure must never block the real
+			# Leader control-sync validation gate.
+			printf 'depends_on:\n  - name: %s\n    optional: true\n\n' "$dependency" >>"$file"
+		else
+			# Followers remain strictly gated on the Leader control-sync result.
+			printf 'depends_on:\n  - %s\n\n' "$dependency" >>"$file"
+		fi
 	fi
 	# The Leader performs the expensive full release validation. Followers
 	# still fetch and verify the exact commit locally, but are gated on the
@@ -351,6 +361,7 @@ EOF
 	cat >>"$file" <<EOF
     commands:
       - if [ -f /opt/platform/control/current/ops/woodpecker-plan.sh ] && grep -q 'cat-file -e' /opt/platform/control/current/ops/woodpecker-plan.sh; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git bash /opt/platform/control/current/ops/woodpecker-plan.sh; elif [ -f /usr/local/bin/woodpecker-plan ] && grep -q 'cat-file -e' /usr/local/bin/woodpecker-plan; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git bash /usr/local/bin/woodpecker-plan; else printf 'Woodpecker push received sha=%s ref=%s repo=%s\\n' "\$CI_COMMIT_SHA" "\$CI_COMMIT_REF" "\$CI_REPO"; if git --git-dir=/opt/platform/control/mirror.git cat-file -e "\$CI_COMMIT_SHA^{commit}" 2>/dev/null; then git --git-dir=/opt/platform/control/mirror.git show --format= --name-only "\$CI_COMMIT_SHA" | sed '/^\$/d'; else printf 'Woodpecker audit commit %s is not in the local mirror yet; continuing without changed-file listing\\n' "\$CI_COMMIT_SHA"; fi; fi
+      - if [ -f /opt/platform/control/current/ops/woodpecker-plan.sh ] && grep -q 'cat-file -e' /opt/platform/control/current/ops/woodpecker-plan.sh; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git bash /opt/platform/control/current/ops/woodpecker-plan.sh; elif [ -f /usr/local/bin/woodpecker-plan ] && grep -q 'cat-file -e' /usr/local/bin/woodpecker-plan; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git bash /usr/local/bin/woodpecker-plan; else printf 'Woodpecker push received sha=%s ref=%s repo=%s\\n' "\$CI_COMMIT_SHA" "\$CI_COMMIT_REF" "\$CI_REPO"; if git --git-dir=/opt/platform/control/mirror.git cat-file -e "\$CI_COMMIT_SHA^{commit}" 2>/dev/null; then git --git-dir=/opt/platform/control/mirror.git show --format= --name-only "\$CI_COMMIT_SHA" | sed '/^\$/d'; else printf 'Woodpecker audit commit %s is not in the local mirror yet; continuing without changed-file listing\\n' "\$CI_COMMIT_SHA"; fi; fi || printf 'Woodpecker audit warning; continuing deployment\\n'
 EOF
 }
 
