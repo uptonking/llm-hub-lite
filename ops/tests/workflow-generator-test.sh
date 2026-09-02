@@ -76,6 +76,10 @@ if grep -Fq '/usr/local/bin/woodpecker-plan:/usr/local/bin/woodpecker-plan' "$ba
 	exit 1
 fi
 grep -Fq 'MIRROR_PATH=/opt/platform/control/mirror.git' "$base/workflows/push-audit.yml"
+[[ "$(grep -Fc 'MIRROR_PATH=/opt/platform/control/mirror.git' "$base/workflows/push-audit.yml")" -eq 1 ]] || {
+	printf 'push audit workflow must invoke the planner exactly once\n' >&2
+	exit 1
+}
 if grep -Fq 'depends_on:' "$base/workflows/push-audit.yml"; then
 	printf 'push audit must remain visible even when control sync fails\n' >&2
 	exit 1
