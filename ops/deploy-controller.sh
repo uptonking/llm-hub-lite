@@ -998,6 +998,12 @@ apply() {
 		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
 	elif [[ "$mode" == consumer-stage ]]; then
 		install_application_image_lock "$release" "$CONSUMER_APP_ID"
+	elif [[ "$mode" == cluster-reconcile ]]; then
+		# Reconciliation is also the repair path after an app-scoped operation
+		# may have pruned image keys. Restore the complete immutable manifests
+		# before prefetching or validating any project.
+		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
+		install -m 600 "$release/ops/images.foundation.prod.env" "$FOUNDATION_IMAGE_ENV"
 	fi
 	if [[ "$mode" == consumer-stage && "$(env_value UPSTREAM_MODE "$release/apps/$CONSUMER_APP_ID/manifest.env")" == singleton ]]; then
 		if ! SINGLETON_PREVIOUS_TARGET="$previous_singleton_target" SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-prepare "$CONSUMER_APP_ID"; then
