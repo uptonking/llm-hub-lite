@@ -206,6 +206,9 @@ when:
         - config/cluster/policy.env
         - config/cluster/nodes/**
         - config/cluster/foundation/**
+        - config/Caddyfile
+        - compose/foundation/**
+        - ops/**
       on_empty: false
 
 EOF

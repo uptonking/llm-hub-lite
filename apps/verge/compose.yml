@@ -26,6 +26,8 @@ services:
       HYSTERIA_ACME_DIR: /var/lib/hysteria/acme
       HYSTERIA_DISABLE_UPDATE_CHECK: "true"
       HYSTERIA_LOG_LEVEL: ${VERGE_LOG_LEVEL:-warn}
+      GOMAXPROCS: ${VERGE_GOMAXPROCS:-1}
+      GOMEMLIMIT: ${VERGE_GOMEMLIMIT:-450MiB}
     ports:
       - "0.0.0.0:443:443/udp"
     volumes:

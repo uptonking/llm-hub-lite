@@ -469,6 +469,8 @@ if grep -Fq 'rm -f -- "$runtime_env"' "$repo_root/ops/platformctl.sh"; then
 	exit 1
 fi
 grep -Fq 'firewall-reconcile.request' "$repo_root/ops/platform-submit.sh"
+grep -Fq 'direct publication requires firewall reconciler' "$repo_root/ops/platform-submit.sh"
+grep -Fq 'reconcile_caddy_udp_policy' "$repo_root/ops/platformctl.sh"
 for node in leader worker-1 worker-2 worker-3; do
 	[[ -f "$repo_root/.woodpecker/cluster-reconcile-$node.yml" ]] || {
 		printf 'missing generated cluster reconciliation workflow: %s\n' "$node" >&2
@@ -476,6 +478,7 @@ for node in leader worker-1 worker-2 worker-3; do
 	}
 done
 grep -Fq 'config/cluster/foundation/**' "$repo_root/.woodpecker/cluster-reconcile-leader.yml"
+grep -Fq 'ops/**' "$repo_root/.woodpecker/cluster-reconcile-leader.yml"
 grep -Fq 'cluster-reconcile-leader' "$repo_root/.woodpecker/cluster-reconcile-worker-1.yml"
 for compose_file in "$repo_root"/compose/foundation/*.yml; do
 	grep -Fq 'mem_limit:' "$compose_file"

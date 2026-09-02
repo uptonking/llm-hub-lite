@@ -159,6 +159,9 @@ for node in leader worker-1 worker-2 worker-3; do
 	}
 done
 grep -Fq 'config/cluster/foundation/**' "$base/workflows/cluster-reconcile-leader.yml"
+grep -Fq 'config/Caddyfile' "$base/workflows/cluster-reconcile-leader.yml"
+grep -Fq 'compose/foundation/**' "$base/workflows/cluster-reconcile-leader.yml"
+grep -Fq 'ops/**' "$base/workflows/cluster-reconcile-leader.yml"
 grep -Fq $'depends_on:\n  - cluster-reconcile-leader' "$base/workflows/cluster-reconcile-worker-1.yml"
 WOODPECKER_WORKFLOW_ROOT="$base/workflows" "$base/ops/generate-woodpecker-workflows.sh" --check
 

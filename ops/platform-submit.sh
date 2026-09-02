@@ -126,6 +126,18 @@ fi
 if [[ "$status" -eq 0 && "$mode" == cluster-reconcile ]]; then
 	touch /etc/llm-hub-lite/firewall-reconcile.request 2>/dev/null || printf '%s\n' 'warning: firewall reconciliation request could not be queued; timer will retry' >&2
 fi
+if [[ "$status" -eq 0 && "$mode" == direct-publish ]]; then
+	firewall_script="${FIREWALL_SCRIPT:-/usr/local/bin/configure-firewall}"
+	if [[ ! -x "$firewall_script" ]]; then
+		printf 'direct publication requires firewall reconciler: %s\n' "$firewall_script" >&2
+		touch /etc/llm-hub-lite/firewall-reconcile.request 2>/dev/null || true
+		status=1
+	elif ! "$firewall_script"; then
+		printf 'direct publication firewall reconciliation failed; listener remains protected by the previous policy\n' >&2
+		touch /etc/llm-hub-lite/firewall-reconcile.request 2>/dev/null || true
+		status=1
+	fi
+fi
 if [[ "$status" -eq 0 && "$mode" == node-retire ]]; then
 	cleanup_job='llm-hub-lite-node-retire'
 	docker rm -f "$cleanup_job" >/dev/null 2>&1 || true

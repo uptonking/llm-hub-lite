@@ -133,6 +133,17 @@ env_value() {
 	done <"$f"
 	printf '%s\n' "$value"
 }
+set_runtime_key() {
+	local file="$1" key="$2" value="$3" tmp
+	install -d -m 700 "$(dirname "$file")"
+	tmp="$(mktemp "${file}.tmp.XXXXXX")"
+	if [[ -f "$file" ]]; then
+		sed "/^${key}=/d" "$file" >"$tmp"
+	fi
+	printf '%s=%s\n' "$key" "$value" >>"$tmp"
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$file"
+}
 path_bytes() {
 	local path="$1" bytes
 	[[ -e "$path" || -L "$path" ]] || return 1
@@ -1528,6 +1539,24 @@ projects_foundation() {
 		foundation_active "$component" && printf '%s\n' "$component"
 	done <<<"$(foundation_ids)"
 }
+reconcile_caddy_udp_policy() {
+	local env_file fallback bind host_port role
+	env_file="$(foundation_env caddy)"
+	[[ -n "$env_file" ]] || return 0
+	fallback="$(policy_value CADDY_HTTPS_UDP_FALLBACK_PORT)"
+	fallback="${fallback:-8443}"
+	[[ "$fallback" =~ ^[1-9][0-9]*$ && "$fallback" -le 65535 ]] || die 'CADDY_HTTPS_UDP_FALLBACK_PORT must be a valid port'
+	role="$(node_role)"
+	if [[ "$role" == leader ]]; then
+		bind=0.0.0.0
+		host_port=443
+	else
+		bind=127.0.0.1
+		host_port="$fallback"
+	fi
+	set_runtime_key "$env_file" CADDY_HTTPS_UDP_BIND "$bind"
+	set_runtime_key "$env_file" CADDY_HTTPS_UDP_HOST_PORT "$host_port"
+}
 projects_apps() {
 	local d
 	while IFS= read -r d; do
@@ -1757,6 +1786,7 @@ compose_up_wait() {
 start_project() {
 	local p="$1"
 	project_enabled "$p" || return
+	[[ "$p" == caddy ]] && reconcile_caddy_udp_policy
 	ensure_network
 	PLATFORM_COMPOSE_PROJECT="$p"
 	if beszel_enrollment_pending "$p"; then
@@ -1875,6 +1905,7 @@ recover() {
 		retire_node
 		return 0
 	fi
+	reconcile_caddy_udp_policy
 	if ((recover_full == 1)); then
 		VALIDATE_STAGE_ONLY=1 validate
 	elif validation_stamp_matches; then
@@ -1936,6 +1967,7 @@ sync() {
 	[[ "$scope" == apps || "$scope" == foundation || "$scope" == all ]] || die 'sync scope must be apps, foundation, or all'
 	[[ "${PLATFORM_RECREATE_FOUNDATION:-0}" == 0 || "${PLATFORM_RECREATE_FOUNDATION:-0}" == 1 ]] || die 'PLATFORM_RECREATE_FOUNDATION must be 0 or 1'
 	[[ "${PLATFORM_RECREATE_APPS:-0}" == 0 || "${PLATFORM_RECREATE_APPS:-0}" == 1 ]] || die 'PLATFORM_RECREATE_APPS must be 0 or 1'
+	reconcile_caddy_udp_policy
 	if [[ "${PLATFORM_BOOTSTRAP_VALIDATION_REUSE:-0}" == 1 ]]; then
 		VALIDATE_SKIP_EXTERNAL=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 VALIDATE_STAGE_ONLY=1 validate
 	elif [[ "$PLATFORM_TEST_SKIP_SYNC_VALIDATION" == 0 ]]; then

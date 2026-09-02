@@ -8,6 +8,10 @@ before consumers. A failed consumer leaves the last valid Caddy routes in
 place and is retried by the recovery timer. Direct/orphan consumers are part
 of the same ordered consumer recovery, so their bind-mounted runtime files and
 persistent data are available before the service is started.
+Recovery also derives Caddy's UDP bind from the live node role before starting
+foundation services: the Leader owns public UDP/443, while followers keep
+Caddy on the configured loopback fallback so reviewed direct listeners can own
+their public UDP ports.
 
 The bootstrap script uses the same ordering: it holds the platform lock while
 installing and reconciling files, completes the post-bootstrap snapshot, then

@@ -76,7 +76,8 @@ To add a consumer, add `apps/<id>/manifest.env` , `config.env` , its Compose and
 route templates, a policy under `config/cluster/apps/` , and digest-pinned image
 keys. The workflow generator derives all stage, publish, stop, and singleton
 finalizer jobs from that contract. It also emits a serial Leader-first
-`cluster-reconcile-*` chain for cluster inventory and foundation-policy pushes.
+`cluster-reconcile-*` chain for cluster inventory, foundation policy, Caddy,
+foundation Compose, and reviewed `ops/**` control-path pushes.
 `PUBLIC_ENDPOINTS` maps each public URL key
 to a DNS label; both Caddy and Compose derive the full URL from that declaration
 and `DOMAIN_NAME` . Shared credentials belong in `CLUSTER_SECRET_KEYS` , while
@@ -586,4 +587,8 @@ application and defaults to `worker-4`; its Cloudflare record must remain
 DNS-only because UDP/443 is served by the follower. Follower Caddy's optional
 HTTP/3 listener is bound to loopback on the reviewed
 `CADDY_HTTPS_UDP_FALLBACK_PORT` (8443 by default), so this behavior is shared by
-future direct services rather than tied to a node name.
+future direct services rather than tied to a node name. Synchronization and
+recovery reconcile this bind from the current node role, so moving a direct app
+does not depend on rerunning bootstrap. A direct publication applies the host
+firewall synchronously after its container smoke check; CI fails and queues the
+systemd retry request if that firewall reconciliation cannot complete.

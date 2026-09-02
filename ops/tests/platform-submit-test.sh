@@ -19,17 +19,27 @@ esac
 exit 0
 EOF
 chmod +x "$tmp/bin/docker"
+cat >"$tmp/bin/firewall" <<'EOF'
+#!/bin/sh
+printf '%s\n' firewall >>"${FIREWALL_CALL_LOG:?}"
+EOF
+chmod +x "$tmp/bin/firewall"
 cat >"$tmp/platform.env" <<'EOF'
 PLATFORM_RUNNER_IMAGE=llm-hub-lite/deploy-runner:0.4.0
 PLATFORM_RUNNER_IMAGE_ID=sha256:runner-id
 EOF
 export PATH="$tmp/bin:$PATH" PLATFORM_ENV_FILE="$tmp/platform.env" DOCKER_CALL_LOG="$tmp/docker.log" PLATFORM_CONTROLLER_SOURCE="$tmp/controller/deploy-controller.sh"
+export FIREWALL_CALL_LOG="$tmp/firewall.log"
 bash "$repo_root/ops/platform-submit.sh" deploy "0123456789abcdef0123456789abcdef01234567"
 grep -Fq -- 'run -d --name' "$tmp/docker.log"
 grep -Fq -- 'llm-hub-lite/deploy-runner:0.4.0' "$tmp/docker.log"
 grep -Fq -- '/usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro' "$tmp/docker.log"
 grep -Fq -- 'logs -f llm-hub-lite-platform-apply-deploy-0123456789abcdef0123456789abcdef01234567' "$tmp/docker.log"
 grep -Fq -- 'PLATFORM_ONLY_APP_ID=' "$tmp/docker.log"
+
+: >"$tmp/firewall.log"
+FIREWALL_SCRIPT="$tmp/bin/firewall" DIRECT_APP_ID=verge bash "$repo_root/ops/platform-submit.sh" direct-publish "0123456789abcdef0123456789abcdef01234567"
+grep -Fqx firewall "$tmp/firewall.log"
 
 if output="$(PLATFORM_CONTROLLER_SOURCE="$tmp/controller/missing" bash "$repo_root/ops/platform-submit.sh" deploy "0123456789abcdef0123456789abcdef01234567" 2>&1)"; then
 	printf 'platform-submit accepted a missing controller wrapper\n' >&2

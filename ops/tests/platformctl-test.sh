@@ -275,6 +275,19 @@ if grep -Fq ' config --quiet' "$tmp/compose.log"; then
 	exit 1
 fi
 
+# Caddy's optional UDP listener is reconciled from the live node role on every
+# sync/recovery, so a node moved between Leader and follower roles cannot retain
+# a stale public bind from an earlier bootstrap.
+reconcile_caddy_udp_policy
+grep -qx 'CADDY_HTTPS_UDP_BIND=0.0.0.0' "$tmp/foundation/env/caddy.env"
+grep -qx 'CADDY_HTTPS_UDP_HOST_PORT=443' "$tmp/foundation/env/caddy.env"
+cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+reconcile_caddy_udp_policy
+grep -qx 'CADDY_HTTPS_UDP_BIND=127.0.0.1' "$tmp/foundation/env/caddy.env"
+grep -qx 'CADDY_HTTPS_UDP_HOST_PORT=8443' "$tmp/foundation/env/caddy.env"
+cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+reconcile_caddy_udp_policy
+
 # Validation-only matrix cases can share the controller functions loaded above.
 # Keep an EXIT trap inside the subshell because a failed render would otherwise
 # leave its private staging directory behind. Do not call platformctl's full
