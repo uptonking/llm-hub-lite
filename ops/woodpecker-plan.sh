@@ -34,7 +34,9 @@ response="$(curl -fsS -H "Authorization: Bearer $WOODPECKER_API_TOKEN" "$api?bra
 command -v jq >/dev/null 2>&1 || exit 0
 
 while IFS='|' read -r number status commit; do
-	[[ "$number" =~ ^[0-9]+$ && "$number" != "$current_pipeline" ]] || continue
+	# Only supersede older queued work. A concurrent newer push may already be
+	# visible in the API response and must never be declined by this planner.
+	[[ "$number" =~ ^[0-9]+$ && "$number" -lt "$current_pipeline" ]] || continue
 	case "$status" in
 	pending | blocked | enqueued | waiting)
 		curl -fsS -X POST -H "Authorization: Bearer $WOODPECKER_API_TOKEN" \

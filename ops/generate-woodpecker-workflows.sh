@@ -252,6 +252,9 @@ when:
 
 EOF
 	if [[ -n "$dependency" ]]; then
+		# The Leader workflow is path-filtered and is absent on application-only
+		# pushes. Keep this edge optional so follower reconciliation still runs
+		# for its own selected changes; control-sync remains the strict gate.
 		printf 'depends_on:\n  - name: %s\n    optional: true\n  - control-sync-%s\n\n' "$dependency" "$id" >>"$file"
 	else
 		printf 'depends_on:\n  - control-sync-%s\n\n' "$id" >>"$file"
