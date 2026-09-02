@@ -60,7 +60,9 @@ grep -Fxq 'NODE_WABASE_ORIGIN_HOST=worker3-wabase-origin.example.test' "$fixture
 grep -Fxq 'NODE_WAPDF_ORIGIN_HOST=worker3-wapdf-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'WOODPECKER_AGENT_LABELS=node=worker-3,deployment=true,target=production,repo=uptonking/llm-hub-lite' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NEW_API_NODE_TYPE=slave' "$fixture/config/cluster/nodes/worker-3.env"
-[[ -f "$fixture/.woodpecker/foundation-upgrade-worker-3.yml" ]]
+# Joining nodes receive only the bootstrap/control-sync workflow. Foundation
+# upgrade jobs are generated once the node is explicitly activated.
+[[ ! -e "$fixture/.woodpecker/foundation-upgrade-worker-3.yml" ]]
 [[ ! -e "$fixture/.woodpecker/consumer-secrets-cpapi-worker-3.yml" ]]
 [[ ! -e "$fixture/.woodpecker/consumer-stage-librechat-worker-3.yml" ]]
 
@@ -107,7 +109,10 @@ fi
 
 CLUSTER_NODE_ASSUME_YES=1 bash "$fixture/ops/configure-cluster-node.sh" state worker-3 active >/dev/null
 grep -Fxq 'NODE_STATE=active' "$fixture/config/cluster/nodes/worker-3.env"
-[[ -f "$fixture/.woodpecker/consumer-secrets-cpapi-worker-3.yml" ]]
+[[ -f "$fixture/.woodpecker/foundation-upgrade-worker-3.yml" ]]
+# Activating a node must not manufacture consumer credentials for services
+# that are not assigned to it; CPAPI remains targeted to worker-1.
+[[ ! -e "$fixture/.woodpecker/consumer-secrets-cpapi-worker-3.yml" ]]
 [[ -f "$fixture/.woodpecker/rollback-worker-3.yml" ]]
 
 sed 's/^NODES=.*/NODES=worker-1,worker-2,worker-3/' "$fixture/config/cluster/apps/librechat.policy" >"$fixture/librechat.policy"
