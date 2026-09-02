@@ -208,8 +208,17 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level /usr/local/bin/platform-submit $command "\$CI_COMMIT_SHA"
 EOF
+	if [[ "$command" == control-verify ]]; then
+		# During a rolling upgrade a follower may still have the previous
+		# platform-submit/controller installed.  That wrapper cannot parse
+		# control-verify yet, so fall back to the compatible full control-sync
+		# path; once this release is installed, subsequent pushes use the
+		# cheaper verification-only path.
+		printf '      - if [ -f /opt/platform/control/current/ops/platform-submit.sh ] && grep -q control-verify /opt/platform/control/current/ops/platform-submit.sh; then DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit control-verify "$CI_COMMIT_SHA"; else DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"; fi\n' "$deploy_debug_level" "$deploy_debug_level" >>"$file"
+	else
+		printf '      - DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit %s "$CI_COMMIT_SHA"\n' "$deploy_debug_level" "$command" >>"$file"
+	fi
 }
 
 render_cluster_reconcile() {

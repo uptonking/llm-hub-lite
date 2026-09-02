@@ -119,6 +119,8 @@ grep -Fq $'depends_on:\n  - push-audit' "$base/workflows/control-sync-leader.yml
 for node in worker-1 worker-2 worker-3 worker-4; do
 	grep -Fq $'depends_on:\n  - control-sync-leader' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'platform-submit control-verify' "$base/workflows/control-sync-$node.yml"
+	grep -Fq 'grep -q control-verify /opt/platform/control/current/ops/platform-submit.sh' "$base/workflows/control-sync-$node.yml"
+	grep -Fq 'else DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-sync' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'skip_clone: true' "$base/workflows/control-sync-$node.yml"
 done
 grep -Fq 'platform-submit control-sync' "$base/workflows/control-sync-leader.yml"
