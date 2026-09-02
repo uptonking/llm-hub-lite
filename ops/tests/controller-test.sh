@@ -471,6 +471,7 @@ fi
 grep -Fq 'firewall-reconcile.request' "$repo_root/ops/platform-submit.sh"
 grep -Fq 'direct publication requires firewall reconciler' "$repo_root/ops/platform-submit.sh"
 grep -Fq 'reconcile_caddy_udp_policy' "$repo_root/ops/platformctl.sh"
+grep -Fq 'port --protocol "$proto" "$service" "$container_port"' "$repo_root/ops/platformctl.sh"
 for node in leader worker-1 worker-2 worker-3; do
 	[[ -f "$repo_root/.woodpecker/cluster-reconcile-$node.yml" ]] || {
 		printf 'missing generated cluster reconciliation workflow: %s\n' "$node" >&2

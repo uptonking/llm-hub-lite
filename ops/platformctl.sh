@@ -2730,7 +2730,9 @@ direct_smoke() {
 	while IFS= read -r listener; do
 		[[ -n "$listener" ]] || continue
 		IFS=':' read -r proto host_port container_port <<<"$listener"
-		mapped="$("${compose_command[@]}" port "$service" "$container_port/$proto" 2>/dev/null || true)"
+		# Compose expects the private port and protocol as separate arguments;
+		# passing `443/udp` as one token is rejected by current Compose plugins.
+		mapped="$("${compose_command[@]}" port --protocol "$proto" "$service" "$container_port" 2>/dev/null || true)"
 		printf '%s\n' "$mapped" | awk -v p=":$host_port$" '$0 ~ p {found=1} END {exit found ? 0 : 1}' || die "direct listener is not published as expected: $proto/$host_port"
 	done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
 	printf 'direct service healthy: %s\n' "$(basename "$d")"
