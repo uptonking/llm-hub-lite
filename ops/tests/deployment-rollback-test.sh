@@ -440,6 +440,6 @@ git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-ingress-scope-
 git -C "$work" push --quiet origin HEAD:main
 sha_consumer_ingress_scope="$(git -C "$work" rev-parse HEAD)"
 CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_ingress_scope" >"$tmp/deploy-consumer-ingress-scope.log" 2>&1
-[[ "$(readlink "$platform_root/app/current")" == "$platform_root/control/releases/$sha_consumer_ingress_scope" ]]
+assert_equal "$platform_root/control/releases/$sha_consumer_ingress_scope" "$(readlink "$app_root/current")" 'consumer stage must advance app release for ingress-scoped change'
 
 printf 'deployment rollback tests passed\n'
