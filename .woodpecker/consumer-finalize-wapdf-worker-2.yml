@@ -13,6 +13,9 @@ when:
       on_empty: false
 
 depends_on:
+  - consumer-publish-wapdf
+  - consumer-stop-wapdf-worker-1
+  - consumer-stop-wapdf-worker-3
   - consumer-stop-wapdf-worker-4
   - control-sync-worker-2
   - name: foundation-reconcile-worker-2
@@ -28,7 +31,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-2
 
 steps:
   finalize:

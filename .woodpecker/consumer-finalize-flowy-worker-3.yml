@@ -13,6 +13,9 @@ when:
       on_empty: false
 
 depends_on:
+  - consumer-publish-flowy
+  - consumer-stop-flowy-worker-1
+  - consumer-stop-flowy-worker-2
   - consumer-stop-flowy-worker-4
   - control-sync-worker-3
   - name: foundation-reconcile-worker-3
@@ -28,7 +31,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-3
 
 steps:
   finalize:

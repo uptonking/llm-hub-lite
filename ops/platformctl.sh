@@ -53,12 +53,14 @@ PLATFORM_PRESERVE_CONSUMER_ROUTES="${PLATFORM_PRESERVE_CONSUMER_ROUTES:-0}"
 # disable the extra wait after an initial health check. A zero interval means
 # "check once and return"; it never creates a busy loop.
 PLATFORM_WAIT_INTERVAL_SECONDS="${PLATFORM_WAIT_INTERVAL_SECONDS:-3}"
+PLATFORM_RECOVERY_APP_PARALLELISM="${PLATFORM_RECOVERY_APP_PARALLELISM:-2}"
 # Internal transaction modes. These are set only after a successful full
 # validation or a matching validation stamp; ordinary operators cannot use
 # them to bypass validation accidentally.
 VALIDATE_SKIP_EXTERNAL="${VALIDATE_SKIP_EXTERNAL:-0}"
 PLATFORM_RECOVERY_STAMP_MATCH="${PLATFORM_RECOVERY_STAMP_MATCH:-0}"
 PLATFORM_BOOTSTRAP_VALIDATION_REUSE="${PLATFORM_BOOTSTRAP_VALIDATION_REUSE:-0}"
+PLATFORM_DEPLOYMENT_VALIDATED="${PLATFORM_DEPLOYMENT_VALIDATED:-0}"
 # Descriptor discovery is used by many validation and reconciliation helpers,
 # including from process substitutions. Keep it private to each invocation so
 # concurrent platformctl processes cannot observe a partially-written cache.
@@ -116,9 +118,11 @@ cleanup_stale_candidates() {
 }
 trap cleanup_candidate EXIT
 [[ "$PLATFORM_WAIT_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || die 'PLATFORM_WAIT_INTERVAL_SECONDS must be a non-negative integer'
+[[ "$PLATFORM_RECOVERY_APP_PARALLELISM" =~ ^[1-9][0-9]*$ && "$PLATFORM_RECOVERY_APP_PARALLELISM" -le 8 ]] || die 'PLATFORM_RECOVERY_APP_PARALLELISM must be an integer between 1 and 8'
 validate_test_flags
 [[ "$PLATFORM_FORCE_SINGLETON_ROUTE" == 0 || "$PLATFORM_FORCE_SINGLETON_ROUTE" == 1 ]] || die 'PLATFORM_FORCE_SINGLETON_ROUTE must be 0 or 1'
 [[ "$PLATFORM_PRESERVE_CONSUMER_ROUTES" == 0 || "$PLATFORM_PRESERVE_CONSUMER_ROUTES" == 1 ]] || die 'PLATFORM_PRESERVE_CONSUMER_ROUTES must be 0 or 1'
+[[ "$PLATFORM_DEPLOYMENT_VALIDATED" == 0 || "$PLATFORM_DEPLOYMENT_VALIDATED" == 1 ]] || die 'PLATFORM_DEPLOYMENT_VALIDATED must be 0 or 1'
 need_file() { [[ -f "$1" ]] || die "missing file: $1"; }
 env_value() {
 	local k="$1" f="${2:-$APP_ENV}" line value=''
@@ -262,7 +266,15 @@ release_read_lock() {
 edge_network() { printf '%s\n' "$(env_value PLATFORM_EDGE_NETWORK)" | sed '/^$/s//platform_edge/'; }
 ensure_network() {
 	local n
-	for n in "$(edge_network)" foundation-woodpecker_private foundation-observer_private; do docker network inspect "$n" >/dev/null 2>&1 || docker network create "$n" >/dev/null; done
+	for n in "$(edge_network)" foundation-woodpecker_private foundation-observer_private; do
+		if docker network inspect "$n" >/dev/null 2>&1; then
+			continue
+		fi
+		# Recovery may start several application projects concurrently. A second
+		# worker can race the create after the first worker's inspect; accept that
+		# benign loser outcome only when the network is present afterward.
+		docker network create "$n" >/dev/null 2>&1 || docker network inspect "$n" >/dev/null 2>&1 || return 1
+	done
 }
 node_id() { printf '%s\n' "${NODE_ID:-$(node_value NODE_ID)}" | sed '/^$/s//leader/'; }
 leader_node_id() { printf '%s\n' "$(policy_value LEADER_NODE_ID)"; }
@@ -751,7 +763,10 @@ render_routes() {
 		[[ -n "$d" ]] || continue
 		a="$(basename "$d")"
 		current_route="$RUNTIME_ROOT/config/routes.d/$a.caddy"
-		if [[ "$PLATFORM_PRESERVE_CONSUMER_ROUTES" == 1 || (-n "$PLATFORM_ONLY_ROUTE_APP_ID" && "$a" != "$PLATFORM_ONLY_ROUTE_APP_ID") ]]; then
+		# Preserve unrelated consumer routes during a scoped route sync, while
+		# still rendering the explicitly selected route (for singleton moves and
+		# consumer publication).
+		if [[ (-n "$PLATFORM_ONLY_ROUTE_APP_ID" && "$a" != "$PLATFORM_ONLY_ROUTE_APP_ID") || ("$PLATFORM_PRESERVE_CONSUMER_ROUTES" == 1 && -z "$PLATFORM_ONLY_ROUTE_APP_ID") ]]; then
 			[[ -f "$current_route" ]] && cp "$current_route" "$s/routes.d/$a.caddy"
 			continue
 		fi
@@ -1899,6 +1914,41 @@ wait_project() {
 	done
 	return 1
 }
+start_consumer_projects_parallel() {
+	local p failed=0 count=0
+	local -a pids=() projects=()
+	while IFS= read -r p; do
+		[[ -n "$p" ]] || continue
+		start_project "$p" &
+		pids[${#pids[@]}]=$!
+		projects[${#projects[@]}]="$p"
+		count=$((count + 1))
+		if ((count >= PLATFORM_RECOVERY_APP_PARALLELISM)); then
+			local i status
+			for i in "${!pids[@]}"; do
+				status=0
+				wait "${pids[$i]}" || status=$?
+				if ((status != 0)); then
+					printf 'platformctl: consumer start failed: %s\n' "${projects[$i]}" >&2
+					failed=1
+				fi
+			done
+			pids=()
+			projects=()
+			count=0
+		fi
+	done <<<"$(projects_apps)"
+	local i status
+	for i in "${!pids[@]}"; do
+		status=0
+		wait "${pids[$i]}" || status=$?
+		if ((status != 0)); then
+			printf 'platformctl: consumer start failed: %s\n' "${projects[$i]}" >&2
+			failed=1
+		fi
+	done
+	return "$failed"
+}
 reload_caddy() {
 	foundation_compose caddy
 	if ! "${compose_command[@]}" exec caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
@@ -1938,13 +1988,7 @@ recover() {
 		start_project "$p"
 	done <<<"$(projects_foundation)"
 	health_scope foundation || die 'foundation recovery failed'
-	while IFS= read -r p; do
-		[[ -n "$p" ]] || continue
-		if ! start_project "$p"; then
-			printf 'platformctl: consumer start failed: %s\n' "$p" >&2
-			failed=1
-		fi
-	done <<<"$(projects_apps)"
+	start_consumer_projects_parallel || failed=1
 	if ! stop_inactive; then
 		printf 'platformctl: one or more inactive projects could not be stopped; recovery will retry\n' >&2
 		failed=1
@@ -1975,12 +2019,35 @@ retire_node() {
 	printf 'retired node %s; persistent application and foundation data were retained\n' "$(node_id)"
 }
 sync() {
-	local scope="${1:-all}" p
-	[[ "$scope" == apps || "$scope" == foundation || "$scope" == all ]] || die 'sync scope must be apps, foundation, or all'
+	local scope="${1:-all}" p scoped_app='' route_only=0
+	case "$scope" in
+	apps | foundation | all) ;;
+	app:*)
+		scoped_app="${scope#app:}"
+		[[ "$scoped_app" =~ ^[a-z][a-z0-9-]*$ ]] || die 'sync app scope must name a valid application'
+		PLATFORM_ONLY_APP_ID="$scoped_app"
+		PLATFORM_ONLY_ROUTE_APP_ID="$scoped_app"
+		scope=apps
+		;;
+	route:*)
+		scoped_app="${scope#route:}"
+		[[ "$scoped_app" =~ ^[a-z][a-z0-9-]*$ ]] || die 'sync route scope must name a valid application'
+		PLATFORM_ONLY_ROUTE_APP_ID="$scoped_app"
+		PLATFORM_PRESERVE_CONSUMER_ROUTES=1
+		route_only=1
+		scope=none
+		;;
+	*) die 'sync scope must be apps, foundation, all, app:<id>, or route:<id>' ;;
+	esac
 	[[ "${PLATFORM_RECREATE_FOUNDATION:-0}" == 0 || "${PLATFORM_RECREATE_FOUNDATION:-0}" == 1 ]] || die 'PLATFORM_RECREATE_FOUNDATION must be 0 or 1'
 	[[ "${PLATFORM_RECREATE_APPS:-0}" == 0 || "${PLATFORM_RECREATE_APPS:-0}" == 1 ]] || die 'PLATFORM_RECREATE_APPS must be 0 or 1'
 	reconcile_caddy_udp_policy
-	if [[ "${PLATFORM_BOOTSTRAP_VALIDATION_REUSE:-0}" == 1 ]]; then
+	if [[ "$PLATFORM_DEPLOYMENT_VALIDATED" == 1 ]]; then
+		# deploy-controller already performed the complete candidate validation.
+		# Re-render the private route tree, but avoid repeating Compose/Caddy
+		# inspection before every scoped stage/publish operation.
+		render_routes
+	elif [[ "${PLATFORM_BOOTSTRAP_VALIDATION_REUSE:-0}" == 1 ]]; then
 		VALIDATE_SKIP_EXTERNAL=1 PLATFORM_BOOTSTRAP_VALIDATION_REUSE=1 VALIDATE_STAGE_ONLY=1 validate
 	elif [[ "$PLATFORM_TEST_SKIP_SYNC_VALIDATION" == 0 ]]; then
 		VALIDATE_STAGE_ONLY=1 validate
@@ -2017,7 +2084,7 @@ sync() {
 	fi
 	commit_routes
 	reload_caddy
-	write_validation_stamp "$(validation_stamp_release 2>/dev/null || true)"
+	[[ "$route_only" == 1 ]] || write_validation_stamp "$(validation_stamp_release 2>/dev/null || true)"
 }
 diagnose_projects() {
 	case "$1" in
@@ -2621,7 +2688,7 @@ EOF
 	# Run synchronization through a child platformctl process. Validation uses
 	# explicit fatal exits, so a function call in an `if` condition could exit this
 	# transaction before its rollback handler gets control.
-	if ! PLATFORM_LOCK_HELD=1 PLATFORM_SKIP_SINGLETONS=0 PLATFORM_FORCE_SINGLETON_ROUTE=1 PLATFORM_ONLY_ROUTE_APP_ID="$(basename "$d")" "$PLATFORMCTL_SCRIPT_PATH" sync apps; then
+	if ! PLATFORM_LOCK_HELD=1 PLATFORM_DEPLOYMENT_VALIDATED="${PLATFORM_DEPLOYMENT_VALIDATED:-0}" PLATFORM_SKIP_SINGLETONS=0 PLATFORM_FORCE_SINGLETON_ROUTE=1 PLATFORM_ONLY_ROUTE_APP_ID="$(basename "$d")" "$PLATFORMCTL_SCRIPT_PATH" sync "route:$(basename "$d")"; then
 		transition_set "$journal" PHASE route-publish-failed
 		switch_failed=1
 	fi
@@ -2835,7 +2902,7 @@ consumer_publish_generic() {
 	else
 		missing=1
 	fi
-	if ! PLATFORM_LOCK_HELD=1 PLATFORM_ONLY_ROUTE_APP_ID="$id" PLATFORM_FORCE_SINGLETON_ROUTE=1 "$PLATFORMCTL_SCRIPT_PATH" sync apps; then
+	if ! PLATFORM_LOCK_HELD=1 PLATFORM_DEPLOYMENT_VALIDATED="${PLATFORM_DEPLOYMENT_VALIDATED:-0}" PLATFORM_ONLY_ROUTE_APP_ID="$id" PLATFORM_FORCE_SINGLETON_ROUTE=1 "$PLATFORMCTL_SCRIPT_PATH" sync "route:$id"; then
 		failed=1
 	fi
 	if ((failed == 0)) && app_policy_enabled "$id"; then

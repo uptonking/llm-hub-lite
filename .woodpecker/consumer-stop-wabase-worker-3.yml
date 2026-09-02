@@ -13,7 +13,7 @@ when:
       on_empty: false
 
 depends_on:
-  - consumer-stop-wabase-worker-2
+  - consumer-publish-wabase
   - control-sync-worker-3
   - name: foundation-reconcile-worker-3
     optional: true
@@ -28,7 +28,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-3
 
 steps:
   stop:

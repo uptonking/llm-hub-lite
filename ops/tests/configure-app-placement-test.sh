@@ -58,7 +58,10 @@ fi
 active_active="$(make_fixture active-active)"
 run_placement "$active_active" librechat worker-2,worker-1 >/dev/null
 grep -Fxq 'NODES=worker-2,worker-1' "$active_active/config/cluster/apps/librechat.policy"
-grep -Fq 'consumer-stage-librechat-worker-2' "$active_active/.woodpecker/consumer-stage-librechat-worker-1.yml"
+if grep -Fq 'consumer-stage-librechat-worker-2' "$active_active/.woodpecker/consumer-stage-librechat-worker-1.yml"; then
+	printf 'active-active stage workflows must not depend on each other\n' >&2
+	exit 1
+fi
 grep -Fq 'consumer-stage-librechat-worker-1' "$active_active/.woodpecker/consumer-publish-librechat.yml"
 expect_failure 'singleton app cpapi requires exactly one node' \
 	run_placement "$active_active" cpapi worker-1,worker-2

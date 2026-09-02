@@ -27,7 +27,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-2
 
 steps:
   stage:

@@ -15,7 +15,7 @@ when:
 
 depends_on:
   - control-sync-worker-3
-  - name: foundation-reconcile-worker-2
+  - name: foundation-reconcile-leader
     optional: true
 
 labels:
@@ -26,7 +26,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-3
 
 steps:
   foundation:

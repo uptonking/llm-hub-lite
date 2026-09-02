@@ -13,7 +13,6 @@ when:
       on_empty: false
 
 depends_on:
-  - consumer-stage-librechat-worker-1
   - control-sync-worker-2
   - name: foundation-reconcile-worker-2
     optional: true
@@ -28,7 +27,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-2
 
 steps:
   stage:

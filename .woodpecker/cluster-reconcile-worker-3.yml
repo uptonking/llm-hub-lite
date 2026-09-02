@@ -14,7 +14,8 @@ when:
       on_empty: false
 
 depends_on:
-  - cluster-reconcile-worker-2
+  - name: cluster-reconcile-leader
+    optional: true
   - control-sync-worker-3
 
 labels:
@@ -25,7 +26,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-3
 
 steps:
   reconcile:

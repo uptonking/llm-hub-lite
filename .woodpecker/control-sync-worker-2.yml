@@ -4,9 +4,6 @@ when:
   - event: push
     branch: main
 
-depends_on:
-  - control-sync-worker-1
-
 labels:
   node: worker-2
   deployment: "true"
@@ -15,7 +12,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-2
 
 steps:
   control-sync:

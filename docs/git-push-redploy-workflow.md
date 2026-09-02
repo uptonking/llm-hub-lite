@@ -11,7 +11,7 @@ hook automatically after the server is healthy. It is safe to run repeatedly.
 
 ## TL; DR
 
-`git push` → GitHub webhook → Woodpecker server (on the Leader) → sequential `control-sync-<node>` workflows validate and install the immutable control release on every node → targeted app/foundation workflows run on the selected agents in a strict order (stage → publish → stop) → each step runs `deploy-controller` locally on that node, which fetches the same commit, validates it, swaps the service release only after the control release is ready, and recreates only the
+`git push` → GitHub webhook → Woodpecker server (on the Leader) → per-node `control-sync-<node>` workflows validate and install the immutable control release on every node in parallel → targeted app/foundation workflows run on the selected agents (active-active stages fan out in parallel; singleton stage → publish → stop remains ordered) → each step runs `deploy-controller` locally on that node, which fetches the same commit, validates it, swaps the service release only after the control release is ready, and recreates only the
 affected Compose projects, health-checks them, and only then does the Leader rewrite the Caddy route and reload. GitHub Actions ( `validate.yml` ) never deploys; it is test-only. There is no SSH fan-out: every node pulls the commit itself.
 
 ## The pieces and where they live
@@ -58,11 +58,13 @@ never removes hand-authored workflows.
   `platform-woodpecker-repair.service`; a repaired hook should show a new
   `POST /api/hook` delivery in GitHub.
 - **Placement**: `labels: node: <node>` routes each step to that VPS's agent.
-- **Serialization**: every mutating workflow shares
-`concurrency: group: llm-hub-lite-deployment, limit: 1` , so deployments run
-  one at a time across the whole cluster. A queued build is not stuck; wait
-  for the earlier mutating workflow.
-- **Chaining** via `depends_on`, in policy `NODES` order.
+- **Concurrency**: each node has its own
+  `concurrency: {group: llm-hub-lite-node-<node>, limit: 1}`. Deployments on
+  different VPSs can run concurrently, while the host lock still serializes
+  mutations on one VPS. Woodpecker's queue preserves order across pushes.
+- **Chaining** via `depends_on`: foundation reconciliation is Leader-first;
+  active-active stages fan out and publish waits for every selected node;
+  singleton transitions remain stage → publish → stale-node stop → finalize.
 
 Cluster inventory, Leader policy, and foundation-policy changes use a separate
 generated chain, `cluster-reconcile-leader` followed by each active Follower.
@@ -81,10 +83,10 @@ For the current placement ( `librechat` on worker-1 and worker-2 as
 active-active; `aichorouter` , `cpapi` , and `cursorapi` as singletons on
 worker-1), the generated chains are:
 
-- LibreChat (active-active,      `NODES=worker-1,worker-2`):
-`consumer-stage-librechat-worker-1` →
-`consumer-stage-librechat-worker-2` →
-`consumer-publish-librechat` (Leader).
+- LibreChat (active-active, `NODES=worker-1,worker-2`):
+  `consumer-stage-librechat-worker-1` and
+  `consumer-stage-librechat-worker-2` run in parallel, then
+  `consumer-publish-librechat` (Leader) waits for both.
 - aichorouter / cpapi / cursorapi (singleton,      `NODES=worker-1`):
 `consumer-stage-<app>-worker-1` → `consumer-publish-<app>` (Leader) →
 `consumer-stop-<app>-worker-2` (the unselected follower) →
@@ -124,7 +126,10 @@ role-aware:
 `platformctl validate --check` ( `validate_release` ): it renders the full
    Caddy configuration into a staging directory, checks `docker compose
    config`, verifies digest-pinned image locks, and checks policy
-   consistency. A candidate that fails validation mutates nothing.
+   consistency. A candidate that fails validation mutates nothing. Successful
+   validation is cached per commit and controller checksum on that node, so
+   later scoped stages reuse the attestation instead of repeating Compose/Caddy
+   inspection.
 5. **Scope and ordering.** Control sync runs first on every node, so a consumer
    job may accompany control-plane, foundation, policy, documentation, or test
    changes in one commit. `verify_consumer_scope` still requires the selected
@@ -212,9 +217,9 @@ stale instances only after publication succeeded.
 
 1. The push hits `main`; the GitHub webhook notifies the Woodpecker server on
    the Leader.
-2. Woodpecker matches the `path` filters for the librechat workflows. The
-   concurrency group is free, so it queues: stage worker-1 → stage worker-2 →
-   publish.
+2. Woodpecker matches the `path` filters for the librechat workflows. Both
+   stage jobs are scheduled on their respective followers, then publish waits
+   for both completion signals.
 3. worker-1's agent picks up the stage step:
 `deploy-controller consumer-stage <sha>` → fetch, validate, backup →
 `current` symlink swap → `docker compose up -d app-librechat` on worker-1 →

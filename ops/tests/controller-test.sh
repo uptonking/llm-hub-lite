@@ -422,7 +422,11 @@ grep -Fq 'CONSUMER_APP_ID=wapdf /usr/local/bin/platform-submit consumer-stage' "
 grep -Fq 'consumer-stage-wapdf-worker-2' "$repo_root/.woodpecker/consumer-publish-wapdf.yml"
 grep -Fq 'consumer-publish-wapdf' "$repo_root/.woodpecker/consumer-stop-wapdf-worker-1.yml"
 [[ ! -e "$repo_root/.woodpecker/consumer-secrets-wapdf-worker-2.yml" ]]
-grep -Fq 'consumer-stage-librechat-worker-1' "$repo_root/.woodpecker/consumer-stage-librechat-worker-2.yml"
+if grep -Fq 'consumer-stage-librechat-worker-1' "$repo_root/.woodpecker/consumer-stage-librechat-worker-2.yml"; then
+	printf 'active-active stages must be parallel\n' >&2
+	exit 1
+fi
+grep -Fq 'consumer-stage-librechat-worker-1' "$repo_root/.woodpecker/consumer-publish-librechat.yml"
 grep -Fq 'consumer-stage-librechat-worker-2' "$repo_root/.woodpecker/consumer-publish-librechat.yml"
 grep -q '^NEW_API_NODE_TYPE=master$' "$repo_root/config/cluster/nodes/worker-1.env"
 grep -q '^NEW_API_NODE_TYPE=slave$' "$repo_root/config/cluster/nodes/worker-2.env"
@@ -461,6 +465,8 @@ grep -Fq 'unsupported cluster configuration path in application deployment' "$re
 grep -Fq 'application image manifest changes require the reviewed consumer workflow' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'prune_stale_image_keys' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'removing stale image key' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'validate_release_cached' "$repo_root/ops/deploy-controller.sh"
+grep -Fq 'control_sync_matches_sha' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'ops/*.sh | ops/deploy-runner/** | ops/tests/**' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}"' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton-state' "$repo_root/ops/backup-platform.sh"
@@ -480,7 +486,7 @@ for node in leader worker-1 worker-2 worker-3; do
 done
 grep -Fq 'config/cluster/foundation/**' "$repo_root/.woodpecker/cluster-reconcile-leader.yml"
 grep -Fq 'ops/**' "$repo_root/.woodpecker/cluster-reconcile-leader.yml"
-grep -Fq 'cluster-reconcile-leader' "$repo_root/.woodpecker/cluster-reconcile-worker-1.yml"
+grep -Fq $'depends_on:\n  - name: cluster-reconcile-leader\n    optional: true' "$repo_root/.woodpecker/cluster-reconcile-worker-1.yml"
 for compose_file in "$repo_root"/compose/foundation/*.yml; do
 	grep -Fq 'mem_limit:' "$compose_file"
 	grep -Fq 'cpus:' "$compose_file"
@@ -545,7 +551,7 @@ grep -Fq 'git-auth.sh:/usr/local/bin/git-auth.sh:ro' "$repo_root/ops/platform-su
 grep -Fq 'RESTORE_IDENTITY' "$repo_root/ops/restore-platform.sh"
 recover_body="$(sed -n '/^recover() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
 foundation_line="$(printf '%s\n' "$recover_body" | grep -n 'projects_foundation' | head -n1 | cut -d: -f1)"
-consumer_line="$(printf '%s\n' "$recover_body" | grep -n 'projects_apps' | head -n1 | cut -d: -f1)"
+consumer_line="$(printf '%s\n' "$recover_body" | grep -n 'start_consumer_projects_parallel' | head -n1 | cut -d: -f1)"
 [[ -n "$foundation_line" && -n "$consumer_line" && "$foundation_line" -lt "$consumer_line" ]]
 if grep -q 'NEW_API_SITE' "$repo_root/apps/newapi/route.follower.caddy"; then
 	exit 1

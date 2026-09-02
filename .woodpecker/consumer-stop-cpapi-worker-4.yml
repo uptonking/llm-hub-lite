@@ -13,7 +13,7 @@ when:
       on_empty: false
 
 depends_on:
-  - consumer-stop-cpapi-worker-3
+  - consumer-publish-cpapi
   - control-sync-worker-4
   - name: foundation-reconcile-worker-4
     optional: true
@@ -28,7 +28,7 @@ labels:
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-deployment
+  group: llm-hub-lite-node-worker-4
 
 steps:
   stop:

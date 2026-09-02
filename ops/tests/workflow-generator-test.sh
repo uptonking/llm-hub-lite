@@ -92,22 +92,30 @@ done
 [[ ! -e "$base/workflows/consumer-stage-pigeon-worker-2.yml" ]]
 [[ ! -e "$base/workflows/consumer-stop-librechat-worker-1.yml" ]]
 [[ ! -e "$base/workflows/consumer-secrets-wapdf-worker-2.yml" ]]
-grep -Fq $'depends_on:\n  - consumer-stage-librechat-worker-1' "$base/workflows/consumer-stage-librechat-worker-2.yml"
-grep -Fq $'depends_on:\n  - consumer-stage-librechat-worker-2' "$base/workflows/consumer-publish-librechat.yml"
+if grep -Fq 'consumer-stage-librechat-worker-1' "$base/workflows/consumer-stage-librechat-worker-2.yml"; then
+	printf 'active-active stages must fan out without stage dependencies\n' >&2
+	exit 1
+fi
+grep -Fq 'consumer-stage-librechat-worker-1' "$base/workflows/consumer-publish-librechat.yml"
+grep -Fq 'consumer-stage-librechat-worker-2' "$base/workflows/consumer-publish-librechat.yml"
 grep -Fq $'depends_on:\n  - consumer-stage-aichorouter-worker-1' "$base/workflows/consumer-publish-aichorouter.yml"
 grep -Fq $'depends_on:\n  - consumer-publish-aichorouter' "$base/workflows/consumer-stop-aichorouter-worker-2.yml"
-grep -Fq $'depends_on:\n  - consumer-stop-aichorouter-worker-2' "$base/workflows/consumer-finalize-aichorouter-worker-1.yml"
+grep -Fq 'consumer-stop-aichorouter-worker-2' "$base/workflows/consumer-finalize-aichorouter-worker-1.yml"
+grep -Fq 'consumer-stop-aichorouter-worker-3' "$base/workflows/consumer-finalize-aichorouter-worker-1.yml"
+grep -Fq 'consumer-stop-aichorouter-worker-4' "$base/workflows/consumer-finalize-aichorouter-worker-1.yml"
 grep -Fq 'SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=aichorouter' "$base/workflows/consumer-finalize-aichorouter-worker-1.yml"
 if grep -Fq 'SINGLETON_FINAL_STOP=1' "$base/workflows/consumer-stop-aichorouter-worker-2.yml"; then
 	printf 'stale-node stop must not finalize the selected target journal\n' >&2
 	exit 1
 fi
-grep -Fq $'depends_on:\n  - consumer-stop-newapi-worker-1' "$base/workflows/consumer-stop-newapi-worker-2.yml"
+grep -Fq $'depends_on:\n  - consumer-publish-newapi' "$base/workflows/consumer-stop-newapi-worker-2.yml"
 grep -Fq 'CONSUMER_APP_ID=librechat /usr/local/bin/platform-submit consumer-stage' "$base/workflows/consumer-stage-librechat-worker-1.yml"
-grep -Fq $'depends_on:\n  - control-sync-leader' "$base/workflows/control-sync-worker-1.yml"
-grep -Fq $'depends_on:\n  - control-sync-worker-1' "$base/workflows/control-sync-worker-2.yml"
-grep -Fq $'depends_on:\n  - control-sync-worker-2' "$base/workflows/control-sync-worker-3.yml"
-grep -Fq $'depends_on:\n  - control-sync-worker-3' "$base/workflows/control-sync-worker-4.yml"
+for node in leader worker-1 worker-2 worker-3 worker-4; do
+	if grep -q '^depends_on:' "$base/workflows/control-sync-$node.yml"; then
+		printf 'control synchronization must be independently schedulable per node\n' >&2
+		exit 1
+	fi
+done
 for node in leader worker-1 worker-2 worker-3 worker-4; do
 	grep -Fq 'platform-submit control-sync' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'skip_clone: true' "$base/workflows/control-sync-$node.yml"
@@ -161,7 +169,7 @@ if grep -q '^depends_on:' "$base/workflows/consumer-secrets-cpapi-worker-1.yml";
 	printf 'manual consumer secret workflow must be independently runnable\n' >&2
 	exit 1
 fi
-grep -Fq 'group: llm-hub-lite-deployment' "$base/workflows/consumer-publish-cpapi.yml"
+grep -Fq 'group: llm-hub-lite-node-leader' "$base/workflows/consumer-publish-cpapi.yml"
 for node in leader worker-1 worker-2 worker-3; do
 	[[ -f "$base/workflows/cluster-reconcile-$node.yml" ]] || {
 		printf 'missing cluster reconciliation workflow: %s\n' "$node" >&2
@@ -172,7 +180,7 @@ grep -Fq 'config/cluster/foundation/**' "$base/workflows/cluster-reconcile-leade
 grep -Fq 'config/Caddyfile' "$base/workflows/cluster-reconcile-leader.yml"
 grep -Fq 'compose/foundation/**' "$base/workflows/cluster-reconcile-leader.yml"
 grep -Fq 'ops/**' "$base/workflows/cluster-reconcile-leader.yml"
-grep -Fq $'depends_on:\n  - cluster-reconcile-leader' "$base/workflows/cluster-reconcile-worker-1.yml"
+grep -Fq $'depends_on:\n  - name: cluster-reconcile-leader\n    optional: true' "$base/workflows/cluster-reconcile-worker-1.yml"
 WOODPECKER_WORKFLOW_ROOT="$base/workflows" "$base/ops/generate-woodpecker-workflows.sh" --check
 
 # Rendering is staged before the live generated set is touched. An invalid

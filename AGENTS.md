@@ -32,16 +32,20 @@ Legacy New API remains retained and disabled by policy.
 
 ## Operations
 
-`ops/bootstrap-vps.sh` is for first deployment only. Daily changes are GitHub push → Woodpecker → `deploy-controller` ; do not add SSH-based daily procedures. `platformctl recover` must remain safe after a VPS reboot and must never pull mutable images.
+`ops/bootstrap-vps.sh` is for first deployment only. Daily changes are GitHub push -> Woodpecker -> `deploy-controller`; do not add SSH-based daily procedures. `platformctl recover` must remain safe after a VPS reboot and must never pull mutable images.
 
 Production images stay digest-pinned in `ops/images.foundation.prod.env` and
-`ops/images.apps.prod.env` . Caddy remains mandatory and exposes 80, 443/TCP,
+`ops/images.apps.prod.env`. Caddy remains mandatory and exposes 80, 443/TCP,
 and 443/UDP on the external `platform_edge` network.
 Role placement and intentional service disablement are committed in
 `config/cluster/policy.env` and `config/cluster/apps/*.policy`; logical
 Follower inventory is managed with `ops/configure-cluster-node.sh`: new nodes
 enter `joining`, are bootstrapped for foundation only, and become
 consumer-eligible only after an explicit `active` policy change.
+
+## Code Conventions
+
+-  make sure all bash scripts and tests files should have less than **700** lines of code(auto-generated files, other code-unrelated or unimportant files are not required). because large file is bad for long-term maintenance. small files and modular architecture are always preferred.
 
 ## Validation
 

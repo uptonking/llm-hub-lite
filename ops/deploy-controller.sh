@@ -37,6 +37,7 @@ source "$config_file"
 : "${GITHUB_TOKEN_FILE:=$CONFIG_ROOT/github-token}"
 : "${SINGLETON_STATE_ROOT:=$CONFIG_ROOT/singleton-state}"
 : "${CONTROL_SYNC_STATE_FILE:=$CONFIG_ROOT/control-sync.state}"
+: "${VALIDATION_CACHE_ROOT:=$CONTROL_ROOT/validation-cache}"
 # Production defaults retain the existing retry backoff. Tests and operators
 # may set these to zero to avoid waiting after a mocked/transient failure.
 : "${DEPLOY_FETCH_RETRY_DELAY_SECONDS:=5}"
@@ -272,7 +273,7 @@ apply_control_sync() {
 		die 'unable to prepare control release'
 	fi
 	debug_log "prepared release=$release"
-	if ! validate_release "$release"; then
+	if ! validate_release_cached "$release"; then
 		write_control_sync_state failed "$sha" "$old_sha" 'candidate validation failed'
 		die 'candidate control release validation failed'
 	fi
@@ -402,6 +403,15 @@ verify_target() {
 	local sha="$1"
 	git -C "$SOURCE_MIRROR" cat-file -e "$sha^{commit}" || die 'target is not in mirror'
 	git -C "$SOURCE_MIRROR" merge-base --is-ancestor "$sha" "refs/remotes/origin/$MAIN_BRANCH" || die 'target is not reachable from main'
+}
+
+control_sync_matches_sha() {
+	local sha="$1" state_sha state_status current_sha
+	[[ -f "$CONTROL_SYNC_STATE_FILE" ]] || return 1
+	state_status="$(sed -n 's/^state=//p' "$CONTROL_SYNC_STATE_FILE" | tail -n1)"
+	state_sha="$(sed -n 's/^target_sha=//p' "$CONTROL_SYNC_STATE_FILE" | tail -n1)"
+	current_sha="$(basename "$(readlink "$CURRENT" 2>/dev/null || true)")"
+	[[ "$state_status" == succeeded && "$state_sha" == "$sha" && "$current_sha" == "$sha" ]]
 }
 
 verify_fast_forward() {
@@ -694,6 +704,27 @@ validate_release() {
 	rm -rf -- "$runtime" "$foundation_validate" "$control_validate"
 }
 
+validation_cache_key() {
+	local release="$1"
+	# The cache is scoped to the immutable commit and the validator script. A
+	# changed controller automatically invalidates the attestation.
+	printf '%s.%s' "$(basename "$release")" "$(cksum <"${BASH_SOURCE[0]}" | awk '{print $1}')"
+}
+validate_release_cached() {
+	local release="$1" cache key
+	[[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 1 ]] && return 0
+	key="$(validation_cache_key "$release")"
+	cache="$VALIDATION_CACHE_ROOT/$key.ok"
+	if [[ -f "$cache" ]] && grep -Fxq "sha=$(basename "$release")" "$cache"; then
+		debug_log "reusing validated release: $(basename "$release")"
+		return 0
+	fi
+	validate_release "$release" || return 1
+	install -d -m 700 "$VALIDATION_CACHE_ROOT"
+	printf 'schema=1\nsha=%s\nvalidated_utc=%s\n' "$(basename "$release")" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$cache"
+	chmod 600 "$cache"
+}
+
 copy_foundation_payload() {
 	local release="$1" destination="$2" file mode
 	install -d -m 700 "$destination"
@@ -719,9 +750,33 @@ pull_image() {
 }
 
 backup() {
+	local reason="${1:-pre-deploy}" pipeline="${DEPLOY_PIPELINE:-}" marker_root marker_key marker tmp node
 	[[ -x "$BACKUP_SCRIPT" ]] || die "backup script is not executable: $BACKUP_SCRIPT"
-	log 'Creating verified pre-change snapshot'
-	PLATFORM_LOCK_HELD=1 "$BACKUP_SCRIPT" snapshot "${1:-pre-deploy}" || die 'verified backup failed'
+	# A pipeline can stage several applications on the same host. The host lock
+	# serializes those stages, so one verified snapshot is sufficient for the
+	# whole pipeline. Unknown/manual invocations intentionally retain the old
+	# per-operation behavior.
+	if [[ "${DEPLOY_FORCE_BACKUP:-0}" != 1 && -n "$pipeline" && "$pipeline" != unknown && "$pipeline" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
+		node="$(node_value NODE_ID)"
+		marker_root="${DEPLOY_BACKUP_MARKER_ROOT:-$PLATFORM_ROOT/deployment-backups}"
+		marker_key="${node}.${pipeline}.${sha:-unknown}"
+		marker_key="$(printf '%s' "$marker_key" | tr -c 'A-Za-z0-9_.-' '_')"
+		marker="$marker_root/$marker_key.env"
+		if [[ -f "$marker" && "$(sed -n 's/^SCHEMA=//p' "$marker" | tail -n1)" == 1 && "$(sed -n 's/^NODE_ID=//p' "$marker" | tail -n1)" == "$node" && "$(sed -n 's/^PIPELINE=//p' "$marker" | tail -n1)" == "$pipeline" && "$(sed -n 's/^SHA=//p' "$marker" | tail -n1)" == "$sha" ]]; then
+			log "verified backup already exists for node=$node pipeline=$pipeline sha=$sha"
+			return 0
+		fi
+	fi
+	log "Creating verified pre-change snapshot: $reason"
+	PLATFORM_LOCK_HELD=1 "$BACKUP_SCRIPT" snapshot "$reason" || die 'verified backup failed'
+	if [[ -n "${marker:-}" ]]; then
+		install -d -m 700 "$marker_root"
+		tmp="$(mktemp "$marker.tmp.XXXXXX")"
+		printf 'SCHEMA=1\nNODE_ID=%s\nPIPELINE=%s\nSHA=%s\nREASON=%s\nCREATED_UTC=%s\n' \
+			"$node" "$pipeline" "$sha" "$reason" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$tmp"
+		chmod 600 "$tmp"
+		mv -f -- "$tmp" "$marker"
+	fi
 }
 
 install_foundation_files() {
@@ -861,6 +916,7 @@ reconcile() {
 		PLATFORM_TEST_FAST_VALIDATE="$PLATFORM_TEST_FAST_VALIDATE" PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR" PLATFORM_TEST_SKIP_CLUSTER_VALIDATION="$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" \
 		PLATFORM_RECREATE_FOUNDATION="${DEPLOY_RECREATE_FOUNDATION:-0}" \
 		PLATFORM_RECREATE_APPS="${DEPLOY_RECREATE_APPS:-0}" \
+		PLATFORM_DEPLOYMENT_VALIDATED="${DEPLOYMENT_VALIDATED:-0}" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
 		PLATFORM_LOCK_HELD=1 \
 		"$PLATFORMCTL_SCRIPT" sync "${DEPLOY_SYNC_SCOPE:-apps}"
@@ -885,7 +941,7 @@ smoke_apps() {
 }
 
 cleanup() {
-	local path stamp kept=0 current_target previous_target keep_file
+	local path stamp kept=0 current_target previous_target keep_file old_sha cache
 	current_target="$(readlink "$CURRENT" 2>/dev/null || true)"
 	previous_target="$(readlink "$PREVIOUS" 2>/dev/null || true)"
 	keep_file="${RETAIN_RELEASES_FILE:-$CONTROL_ROOT/retain-releases}"
@@ -898,7 +954,12 @@ cleanup() {
 		if [[ -f "$keep_file" ]] && grep -Fxq "$(basename "$path")" "$keep_file"; then continue; fi
 		kept=$((kept + 1))
 		if ((kept > RETAIN_RELEASES)); then
+			old_sha="$(basename "$path")"
 			git -C "$SOURCE_MIRROR" worktree remove --force "$path" >/dev/null 2>&1 || true
+			for cache in "$VALIDATION_CACHE_ROOT/${old_sha}."*.ok; do
+				[[ -f "$cache" ]] || continue
+				rm -f -- "$cache"
+			done
 		fi
 	done < <(for path in "$RELEASES"/*; do
 		[[ -d "$path" ]] || continue
@@ -927,9 +988,11 @@ apply() {
 			# Recreate only the staged app so its committed config is applied.
 			DEPLOY_RECREATE_APPS=1
 			PLATFORM_ONLY_ROUTE_APP_ID="$CONSUMER_APP_ID"
+			DEPLOY_SYNC_SCOPE="app:$CONSUMER_APP_ID"
 		else
 			DEPLOY_SKIP_SINGLETONS=1
 			PLATFORM_PRESERVE_CONSUMER_ROUTES=1
+			DEPLOY_SYNC_SCOPE="route:$CONSUMER_APP_ID"
 		fi
 	fi
 	sha_valid "$sha"
@@ -940,7 +1003,11 @@ apply() {
 	if [[ "$mode" == rollback ]]; then
 		git -C "$SOURCE_MIRROR" cat-file -e "$sha^{commit}" || die 'rollback target is not retained in the local mirror'
 	else
-		fetch_main || die 'unable to fetch repository'
+		if [[ "$mode" == consumer-stage || "$mode" == consumer-publish || "$mode" == consumer-stop || "$mode" == direct-publish ]] && control_sync_matches_sha "$sha"; then
+			log "reusing control-sync mirror for $sha"
+		else
+			fetch_main || die 'unable to fetch repository'
+		fi
 		verify_target "$sha"
 	fi
 	release="$(prepare_release "$sha")"
@@ -952,7 +1019,11 @@ apply() {
 	if [[ "$DEPLOY_TEST_SKIP_RELEASE_VALIDATION" == 1 ]]; then
 		log 'test mode: skipping candidate release validation (platformctl is mocked)'
 	else
-		validate_release "$release"
+		validate_release_cached "$release"
+		# The candidate was fully validated before any pointers or containers are
+		# changed. Child platformctl sync calls can reuse that attestation and only
+		# perform the scoped reconciliation work.
+		DEPLOYMENT_VALIDATED=1
 	fi
 	verify_woodpecker_self_disable "$old_control_current" "$release"
 	old_previous="$(readlink "$PREVIOUS" 2>/dev/null || true)"
@@ -963,7 +1034,14 @@ apply() {
 	if [[ "$mode" == consumer-stage && -n "${CONSUMER_APP_ID:-}" && "$(env_value UPSTREAM_MODE "$release/apps/$CONSUMER_APP_ID/manifest.env")" == singleton ]]; then
 		previous_singleton_target="$(singleton_previous_target "$old_current" "$CONSUMER_APP_ID")"
 	fi
-	backup "pre-$mode"
+	case "$mode" in
+	consumer-publish | consumer-stop | direct-publish)
+		# These operations publish/withdraw routes or stop stale containers; they
+		# do not mutate persistent release data and therefore do not need a backup.
+		log "skipping backup for route/stop-only operation: $mode"
+		;;
+	*) backup "pre-$mode" ;;
+	esac
 	if [[ "$mode" != consumer-stage && "$mode" != consumer-publish && "$mode" != consumer-stop && "$mode" != direct-publish ]]; then
 		if ! stop_removed_projects "$old_current" "$release"; then
 			cleanup_failed=1
@@ -1091,7 +1169,7 @@ retire_node_release() {
 	[[ "$descriptor_state" == retired ]] || die "target release does not mark this node retired: $node/$descriptor_state"
 	old_current="$(readlink "$CURRENT" 2>/dev/null || true)"
 	verify_fast_forward "$old_current" "$sha" node-retire
-	validate_release "$release"
+	validate_release_cached "$release"
 	backup pre-node-retire
 	if [[ -n "$old_current" ]]; then
 		atomic_link "$old_current" "$PREVIOUS"
@@ -1116,7 +1194,7 @@ consumer-stage)
 consumer-publish)
 	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-publish <sha>'
 	apply "$2" consumer-publish
-	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-publish "$CONSUMER_APP_ID"
+	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_DEPLOYMENT_VALIDATED=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-publish "$CONSUMER_APP_ID"
 	;;
 direct-publish)
 	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: DIRECT_APP_ID=<id> deploy-controller direct-publish <sha>'
@@ -1128,7 +1206,7 @@ direct-publish)
 consumer-stop)
 	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-stop <sha>'
 	apply "$2" consumer-stop
-	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-stop "$CONSUMER_APP_ID"
+	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_DEPLOYMENT_VALIDATED=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-stop "$CONSUMER_APP_ID"
 	;;
 foundation-upgrade)
 	[[ $# -eq 2 ]] || die 'usage: deploy-controller foundation-upgrade <sha>'
