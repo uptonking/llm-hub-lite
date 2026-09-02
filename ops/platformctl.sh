@@ -916,7 +916,7 @@ write_validation_stamp() {
 	mv -f -- "$tmp" "$VALIDATION_STAMP_FILE"
 }
 validate_cluster() {
-	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor
+	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor direct_seen='' listeners listener proto host_port container_port key caddy_udp_fallback
 	need_file "$CLUSTER_POLICY_FILE"
 	need_file "$NODE_CONFIG_FILE"
 	[[ "$(policy_value CLUSTER_CONFIG_VERSION)" == 3 ]] || die 'unsupported cluster policy version'
@@ -958,6 +958,31 @@ validate_cluster() {
 	done <<<"$(printf '%s\n' "$(policy_value NODE_IDS)" | tr ',' '\n' | sed '/^$/d')"
 	[[ "$node_count" -eq "$(printf '%s\n' "$(policy_value NODE_IDS)" | tr ',' '\n' | sed '/^$/d' | sort -u | wc -l | tr -d ' ')" ]] || die 'NODE_IDS contains duplicate entries'
 	csv_has "$(policy_value NODE_IDS)" "$(leader_node_id)" || die 'LEADER_NODE_ID is absent from NODE_IDS'
+	caddy_udp_fallback="$(policy_value CADDY_HTTPS_UDP_FALLBACK_PORT)"
+	caddy_udp_fallback="${caddy_udp_fallback:-8443}"
+	[[ "$caddy_udp_fallback" =~ ^[1-9][0-9]*$ && "$caddy_udp_fallback" -le 65535 ]] || die 'CADDY_HTTPS_UDP_FALLBACK_PORT must be a valid port'
+	while IFS= read -r d; do
+		[[ -n "$d" ]] || continue
+		[[ "$(app_ingress_mode "$d")" == direct ]] || continue
+		[[ "$(app_policy_enabled "$(basename "$d")")" == true ]] || continue
+		listeners="$(descriptor_value "$d" DIRECT_LISTENERS)"
+		while IFS= read -r node; do
+			[[ -n "$node" ]] || continue
+			while IFS= read -r listener; do
+				[[ -n "$listener" ]] || continue
+				IFS=':' read -r proto host_port container_port <<<"$listener"
+				key="$node/$proto/$host_port"
+				! csv_has "$direct_seen" "$key" || die "duplicate direct listener reservation: $key"
+				direct_seen="${direct_seen:+$direct_seen,}$key"
+				if [[ "$proto" == tcp && ("$host_port" == 80 || "$host_port" == 443) ]]; then
+					die "direct TCP listener conflicts with Caddy: $key"
+				fi
+				if [[ "$node" != "$(leader_node_id)" && "$proto" == udp && "$host_port" == "$caddy_udp_fallback" ]]; then
+					die "direct UDP listener conflicts with Caddy fallback: $key"
+				fi
+			done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
+		done <<<"$(printf '%s\n' "$(app_nodes "$d")" | tr ',' '\n')"
+	done <<<"$(cluster_validation_descriptor_ids)"
 	app_policy_enabled newapi && newapi_enabled=1
 	newapi_descriptor="$APPS_ROOT/newapi"
 	if ((newapi_enabled == 1)); then
@@ -989,7 +1014,7 @@ validate_descriptor() {
 	done
 	case "$(descriptor_value "$d" SMOKE_LOCAL)" in public | healthcheck) ;; *) die "SMOKE_LOCAL must be public or healthcheck in $d/manifest.env" ;; esac
 	case "$(descriptor_value "$d" HEALTH_MODE)" in healthcheck | process) ;; *) die "HEALTH_MODE must be healthcheck or process in $d/manifest.env" ;; esac
-	case "$(descriptor_value "$d" DIRECT_PROBE)" in '' | socket | healthcheck | command) ;; *) die "DIRECT_PROBE must be socket, healthcheck, or command in $d/manifest.env" ;; esac
+	case "$(descriptor_value "$d" DIRECT_PROBE)" in '' | socket | healthcheck) ;; *) die "DIRECT_PROBE must be socket or healthcheck in $d/manifest.env" ;; esac
 	[[ "$(descriptor_value "$d" MANIFEST_VERSION)" == 5 ]] || die 'unsupported app manifest version'
 	[[ "$(descriptor_value "$d" PLACEMENT)" == consumer ]] || die "app PLACEMENT must be consumer: $d"
 	ingress="$(app_ingress_mode "$d")"
@@ -1013,6 +1038,9 @@ validate_descriptor() {
 				grep -Eq "${host_port}:[[:space:]]*${container_port}/tcp|${host_port}:${container_port}/tcp" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "direct TCP listener is absent from Compose: $listener"
 			fi
 		done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
+		if [[ "$ingress" == direct ]]; then
+			[[ -z "$(descriptor_value "$d" ROUTE_GROUPS)" ]] || die "ROUTE_GROUPS is not valid for direct-only app: $d"
+		fi
 	else
 		[[ -z "$(descriptor_value "$d" DIRECT_LISTENERS)" ]] || die "DIRECT_LISTENERS is only valid for direct apps: $d"
 	fi
@@ -2235,6 +2263,10 @@ observer_collector_status() {
 		printf 'state=disabled\n'
 		return 0
 	}
+	if ! command -v jq >/dev/null 2>&1; then
+		printf 'state=unavailable\nreason=jq_missing detail=install jq to query Vector metrics\n'
+		return 1
+	fi
 	env_file="$(foundation_env observer-collector)"
 	probe_image="$(env_value OBSERVER_HEALTH_PROBE_IMAGE "$FOUNDATION_IMAGE_ENV")"
 	if [[ -z "$probe_image" ]]; then
@@ -2646,7 +2678,7 @@ direct_descriptor() {
 	printf '%s\n' "$d"
 }
 direct_smoke() {
-	local d="$1" service project listeners listener proto host_port container_port target
+	local d="$1" service project listeners listener proto host_port container_port target probe container_id mapped
 	[[ "$(node_role)" == follower ]] || die 'direct smoke must run on a follower'
 	d="$(direct_descriptor "$d")"
 	target="$(app_target_node "$d")"
@@ -2654,17 +2686,20 @@ direct_smoke() {
 	app_active "$d" || die "direct app is not active on this node: $(basename "$d")"
 	service="$(descriptor_value "$d" SERVICE_NAME)"
 	project="$(descriptor_value "$d" COMPOSE_PROJECT)"
+	probe="$(descriptor_value "$d" DIRECT_PROBE)"
 	app_compose "$d"
 	"${compose_command[@]}" ps --status running --services 2>/dev/null | grep -Fxq "$service" || die "direct service is not running: $(basename "$d")"
+	container_id="$("${compose_command[@]}" ps -q "$service" 2>/dev/null | head -n1)"
+	[[ -n "$container_id" ]] || die "direct service container is missing: $(basename "$d")"
+	if [[ "$probe" == healthcheck ]]; then
+		[[ "$(docker inspect --format '{{.State.Health.Status}}' "$container_id" 2>/dev/null || true)" == healthy ]] || die "direct service healthcheck is not healthy: $(basename "$d")"
+	fi
 	listeners="$(descriptor_value "$d" DIRECT_LISTENERS)"
 	while IFS= read -r listener; do
 		[[ -n "$listener" ]] || continue
 		IFS=':' read -r proto host_port container_port <<<"$listener"
-		if command -v ss >/dev/null 2>&1; then
-			ss_args=(-l -n)
-			[[ "$proto" == udp ]] && ss_args+=(-u) || ss_args+=(-t)
-			ss "${ss_args[@]}" 2>/dev/null | awk -v p=":$host_port" '$0 ~ p {found=1} END {exit found ? 0 : 1}' || die "direct listener is not bound: $proto/$host_port"
-		fi
+		mapped="$("${compose_command[@]}" port "$service" "$container_port/$proto" 2>/dev/null || true)"
+		printf '%s\n' "$mapped" | awk -v p=":$host_port$" '$0 ~ p {found=1} END {exit found ? 0 : 1}' || die "direct listener is not published as expected: $proto/$host_port"
 	done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
 	printf 'direct service healthy: %s\n' "$(basename "$d")"
 }

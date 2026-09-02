@@ -6,10 +6,13 @@
 
 Update every `worker<N>-*-origin.aichorage.de` DNS-only record for the node in
 Cloudflare to the new VPS address. Remove stale AAAA records. The command
-checks only enabled routes placed on the source node; disabled-app origins do
-not block a migration. Keep `observer-ingest.<domain>` pointed directly at the
-Leader. Public records such as `ci` , `status` , and public app names may be
-Cloudflare-proxied and are checked manually after the cutover.
+checks enabled proxy routes and direct/orphan public origins placed on the
+source node; disabled-app origins do not block a migration. For each active
+direct app it also verifies the node-local runtime environment and persistent
+data directory before shutdown, then repeats those checks and runs
+`platformctl direct-smoke` on the target. Keep `observer-ingest.<domain>` pointed
+directly at the Leader. Public records such as `ci`, `status`, and public app
+names may be Cloudflare-proxied and are checked manually after the cutover.
 
 The target must be a new VPS reachable as `root` ; the source must be healthy.
 If reusing a VPS that was cleaned with `clean-vps.sh` , remove its preserved local Restic tree first ( `/opt/backups/llm-hub-lite` ). Migration intentionally

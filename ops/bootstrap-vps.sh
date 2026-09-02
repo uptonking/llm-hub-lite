@@ -1246,14 +1246,19 @@ chmod 600 "$woodpecker_env"
 
 caddy_env="$FOUNDATION_ROOT/env/caddy.env"
 if [[ ! -f "$caddy_env" ]]; then : >"$caddy_env"; fi
-for pair in "CADDY_DATA_ROOT=$PLATFORM_ROOT/caddy" "CADDY_CONFIG_ROOT=$APP_ROOT/shared/runtime/config" "CADDY_HTTP_BIND=0.0.0.0" "CADDY_HTTPS_BIND=0.0.0.0" "CADDY_HTTPS_UDP_BIND=0.0.0.0"; do
+for pair in "CADDY_DATA_ROOT=$PLATFORM_ROOT/caddy" "CADDY_CONFIG_ROOT=$APP_ROOT/shared/runtime/config" "CADDY_HTTP_BIND=0.0.0.0" "CADDY_HTTPS_BIND=0.0.0.0"; do
 	ensure_key "$caddy_env" "${pair%%=*}" "${pair#*=}"
 done
-if [[ "$NODE_ROLE" == follower && "$NODE_ID" == worker-4 ]]; then
-	# worker-4 reserves public UDP/443 for the direct Verge service; keep
-	# follower Caddy's optional HTTP/3 listener on a non-public fallback port.
-	set_key "$caddy_env" CADDY_HTTPS_UDP_HOST_PORT 8443
+fallback_udp_port="$(sed -n 's/^CADDY_HTTPS_UDP_FALLBACK_PORT=//p' "$policy_file" | tail -n1)"
+fallback_udp_port="${fallback_udp_port:-8443}"
+[[ "$fallback_udp_port" =~ ^[1-9][0-9]*$ && "$fallback_udp_port" -le 65535 ]] || die 'CADDY_HTTPS_UDP_FALLBACK_PORT must be a valid port'
+if [[ "$NODE_ROLE" == follower ]]; then
+	# Followers keep Caddy's optional HTTP/3 listener private. Direct/orphan
+	# applications reserve their reviewed public UDP ports independently.
+	set_key "$caddy_env" CADDY_HTTPS_UDP_BIND 127.0.0.1
+	set_key "$caddy_env" CADDY_HTTPS_UDP_HOST_PORT "$fallback_udp_port"
 else
+	set_key "$caddy_env" CADDY_HTTPS_UDP_BIND 0.0.0.0
 	set_key "$caddy_env" CADDY_HTTPS_UDP_HOST_PORT 443
 fi
 chmod 600 "$caddy_env"

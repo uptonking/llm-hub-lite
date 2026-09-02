@@ -5,7 +5,9 @@ mutable images. Docker restart policies start individual containers; systemd
 then recreates the shared network, applies the firewall, and runs
 `platformctl recover`. Foundation projects are started and health-checked
 before consumers. A failed consumer leaves the last valid Caddy routes in
-place and is retried by the recovery timer.
+place and is retried by the recovery timer. Direct/orphan consumers are part
+of the same ordered consumer recovery, so their bind-mounted runtime files and
+persistent data are available before the service is started.
 
 The bootstrap script uses the same ordering: it holds the platform lock while
 installing and reconciling files, completes the post-bootstrap snapshot, then
@@ -84,6 +86,7 @@ For an unhealthy project, inspect its Compose state and recent diagnostics:
 platformctl diagnose foundation
 platformctl diagnose consumers
 platformctl diagnose app:aichorouter
+platformctl diagnose app:verge
 journalctl -u platform-recovery.service -n 200 --no-pager
 ```
 

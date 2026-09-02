@@ -310,7 +310,7 @@ discover_source_origins() {
 	# A consumer manifest may expose one origin (singleton apps) or several
 	# origins (LibreChat's public and admin routes). Read route groups so every
 	# enabled origin on the node is checked before DNS cutover.
-	ssh_source "node_id='$node_id' bash -s" <<'REMOTE_ORIGIN_DISCOVERY'
+	ssh_source "node_id='$node_id' domain='$domain' bash -s" <<'REMOTE_ORIGIN_DISCOVERY'
 set -Eeuo pipefail
 current=/opt/platform/control/current
 node_file=/etc/llm-hub-lite/node.env
@@ -324,6 +324,18 @@ for manifest in "$current"/apps/*/manifest.env; do
 	[ "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" = true ] || continue
 	nodes="$(sed -n 's/^NODES=//p' "$policy" | tail -n1)"
 	csv_has "$nodes" "$node_id" || continue
+	ingress="$(sed -n 's/^INGRESS_MODE=//p' "$manifest" | tail -n1)"
+	if [ "$ingress" = direct ]; then
+		while IFS= read -r endpoint; do
+			[ -n "$endpoint" ] || continue
+			public_key="${endpoint%%|*}"
+			host="${endpoint#*|}"
+			printf '%s\t%s\t%s\n' "$host.$domain" "$app" "$public_key"
+		done <<EOF_ENDPOINTS
+$(printf '%s\n' "$(sed -n 's/^PUBLIC_ENDPOINTS=//p' "$manifest" | tail -n1)" | tr ';' '\n')
+EOF_ENDPOINTS
+		continue
+	fi
 	groups="$(sed -n 's/^ROUTE_GROUPS=//p' "$manifest" | tail -n1)"
 	[ -n "$groups" ] || continue
 	while IFS= read -r group; do
@@ -346,6 +358,32 @@ $(printf '%s\n' "$groups" | tr ';' '\n')
 EOF_GROUPS
 done | sort -u
 REMOTE_ORIGIN_DISCOVERY
+}
+discover_source_direct_state() {
+	ssh_source "node_id='$node_id' bash -s" <<'REMOTE_DIRECT_STATE'
+set -Eeuo pipefail
+current=/opt/platform/control/current
+csv_has() { case ",${1//[[:space:]]/}," in *",$2,"*) return 0 ;; *) return 1 ;; esac; }
+for manifest in "$current"/apps/*/manifest.env; do
+	[ -f "$manifest" ] || continue
+	app="${manifest%/manifest.env}"; app="${app##*/}"
+	rel="$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)"; policy="$current/config/$rel"
+	[ "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" = true ] || continue
+	[ "$(sed -n 's/^INGRESS_MODE=//p' "$manifest" | tail -n1)" = direct ] || continue
+	nodes="$(sed -n 's/^NODES=//p' "$policy" | tail -n1)"; csv_has "$nodes" "$node_id" || continue
+	runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
+	config_rel="$(sed -n 's/^RUNTIME_CONFIG_TEMPLATE=//p' "$manifest" | tail -n1)"
+	data_rel="$(sed -n 's/^DATA_ROOT_REL=//p' "$manifest" | tail -n1)"
+	data_root="$(sed -n 's/^DATA_ROOT=//p' /opt/apps/llm-hub-lite/shared/.env.prod | tail -n1)"; data_root="${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}"
+	runtime=''; rendered=''; data="$data_root/$data_rel"
+	[ -z "$runtime_rel" ] || runtime="/etc/llm-hub-lite/$runtime_rel"
+	[ -z "$config_rel" ] || rendered="/etc/llm-hub-lite/runtime/$app/config.yaml"
+	[ -z "$runtime_rel" ] || [ -s "$runtime" ] || { printf 'direct runtime env is missing: %s\n' "$runtime" >&2; exit 1; }
+	[ -z "$config_rel" ] || [ -s "$rendered" ] || { printf 'direct rendered runtime config is missing: %s\n' "$rendered" >&2; exit 1; }
+	[ -d "$data" ] || { printf 'direct data directory is missing: %s\n' "$data" >&2; exit 1; }
+	printf '%s\t%s\t%s\t%s\n' "$app" "$runtime" "$rendered" "$data"
+done
+REMOTE_DIRECT_STATE
 }
 if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; then
 	log 'checking source and target SSH identity, policy, health, storage, and DNS'
@@ -404,6 +442,16 @@ if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; 
 	fi
 	active_origins="$(discover_source_origins)"
 	[[ -n "$active_origins" ]] || die 'no active origin records were discovered'
+	direct_state="$(discover_source_direct_state)"
+	while IFS=$'\t' read -r direct_app direct_runtime direct_rendered direct_data; do
+		[[ -n "$direct_app" ]] || continue
+		[[ "$direct_runtime$direct_rendered$direct_data" != *"'"* && "$direct_runtime$direct_rendered$direct_data" != *$'\n'* && "$direct_runtime$direct_rendered$direct_data" != *$'\r'* ]] || die "unsafe direct state path characters for $direct_app"
+		[[ -z "$direct_runtime" || "$direct_runtime" == /etc/llm-hub-lite/* ]] || die "unsafe direct runtime path for $direct_app"
+		[[ -z "$direct_rendered" || "$direct_rendered" == /etc/llm-hub-lite/runtime/* ]] || die "unsafe direct rendered config path for $direct_app"
+		[[ "$direct_data" == /opt/apps/llm-hub-lite/* ]] || die "unsafe direct data path for $direct_app"
+		ssh_source "if [ -n '$direct_runtime' ]; then test -s '$direct_runtime' || { printf 'direct app runtime env is missing or empty: $direct_app ($direct_runtime)\\n' >&2; exit 1; }; fi; if [ -n '$direct_rendered' ]; then test -s '$direct_rendered' || { printf 'direct rendered runtime config is missing or empty: $direct_app ($direct_rendered)\\n' >&2; exit 1; }; fi; test -d '$direct_data' || { printf 'direct app data directory is missing: $direct_app ($direct_data)\\n' >&2; exit 1; }"
+		log "direct state: $direct_app runtime=${direct_runtime:-none} config=${direct_rendered:-none} data=$direct_data"
+	done <<<"$direct_state"
 	while IFS='	' read -r origin app route; do
 		[[ "$origin" =~ ^[A-Za-z0-9.-]+$ ]] || die "invalid origin hostname for $app"
 		resolved_a="$(dig +short A "$origin" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
@@ -705,6 +753,9 @@ verify_target_health() {
 	done
 	die 'target platform health did not pass after retries; inspect target platformctl diagnose output'
 }
+verify_target_direct_state() {
+	ssh_target 'set -Eeuo pipefail; current=/opt/platform/control/current; node_id=$(sed -n "s/^NODE_ID=//p" /etc/llm-hub-lite/node.env | tail -n1); data_root=$(sed -n "s/^DATA_ROOT=//p" /opt/apps/llm-hub-lite/shared/.env.prod | tail -n1); data_root=${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}; csv_has(){ case ",$1," in *",$2,"*) return 0;; *) return 1;; esac; }; found=0; for manifest in "$current"/apps/*/manifest.env; do [ -f "$manifest" ] || continue; app=${manifest%/manifest.env}; app=${app##*/}; rel=$(sed -n "s/^POLICY_FILE=//p" "$manifest" | tail -n1); policy="$current/config/$rel"; [ "$(sed -n "s/^ENABLED=//p" "$policy" | tail -n1)" = true ] || continue; [ "$(sed -n "s/^INGRESS_MODE=//p" "$manifest" | tail -n1)" = direct ] || continue; nodes=$(sed -n "s/^NODES=//p" "$policy" | tail -n1); csv_has "$nodes" "$node_id" || continue; runtime_rel=$(sed -n "s/^RUNTIME_ENV_FILE=//p" "$manifest" | tail -n1); config_rel=$(sed -n "s/^RUNTIME_CONFIG_TEMPLATE=//p" "$manifest" | tail -n1); data_rel=$(sed -n "s/^DATA_ROOT_REL=//p" "$manifest" | tail -n1); runtime="/etc/llm-hub-lite/$runtime_rel"; rendered="/etc/llm-hub-lite/runtime/$app/config.yaml"; data="$data_root/$data_rel"; [ -z "$runtime_rel" ] || [ -s "$runtime" ] || { printf "direct runtime env missing: %s\\n" "$runtime" >&2; exit 1; }; [ -z "$config_rel" ] || [ -s "$rendered" ] || { printf "direct rendered runtime config missing: %s\\n" "$rendered" >&2; exit 1; }; [ -d "$data" ] || { printf "direct data directory missing: %s\\n" "$data" >&2; exit 1; }; platformctl direct-smoke "$app"; found=1; done; [ "$found" -eq 1 ] || { printf "no active direct applications found on target\\n" >&2; exit 1; }'
+}
 if [[ "$transfer_mode" == local ]] && phase_at_least local-copy-verified; then verify_local_archive; fi
 if [[ "$phase" == target-copy-verified ]]; then verify_target_archive; fi
 if phase_at_least target-extracted; then
@@ -789,6 +840,7 @@ if ! phase_at_least verification-complete; then
 		ssh_target 'test "$(systemctl is-enabled platform-backup.timer 2>/dev/null || true)" = disabled; test "$(systemctl is-enabled platform-backup-prune.timer 2>/dev/null || true)" = disabled; test "$(systemctl is-enabled platform-backup-check.timer 2>/dev/null || true)" = disabled'
 	fi
 	verify_target_health
+	verify_target_direct_state
 	ssh_source 'test -z "$(docker ps --filter label=com.aichorage.platform=llm-hub-lite -q)"; test -f /etc/llm-hub-lite/maintenance'
 	set_phase verification-complete
 fi

@@ -108,8 +108,19 @@ while IFS= read -r manifest; do
 		proto="${listener%%:*}"
 		ports="${listener#*:}"
 		port="${ports%%:*}"
-		[[ "$proto" == tcp || "$proto" == udp ]] || continue
-		[[ ",$direct_allowlist," == *",$proto/$port,"* ]] || continue
+		container_port="${ports#*:}"
+		[[ "$proto" == tcp || "$proto" == udp ]] || {
+			printf 'configure-firewall: malformed direct listener protocol: %s (%s)\n' "$listener" "$app" >&2
+			exit 1
+		}
+		[[ "$port" =~ ^[1-9][0-9]*$ && "$port" -le 65535 && "$container_port" =~ ^[1-9][0-9]*$ && "$container_port" -le 65535 ]] || {
+			printf 'configure-firewall: malformed direct listener: %s (%s)\n' "$listener" "$app" >&2
+			exit 1
+		}
+		[[ ",$direct_allowlist," == *",$proto/$port,"* ]] || {
+			printf 'configure-firewall: direct listener is not allowlisted: %s/%s (%s)\n' "$proto" "$port" "$app" >&2
+			exit 1
+		}
 		iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j RETURN
 		ufw allow "$port/$proto" comment "Direct $app" >/dev/null
 	done <<<"$(value DIRECT_LISTENERS "$manifest" | tr ',' '\n')"

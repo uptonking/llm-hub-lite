@@ -579,7 +579,11 @@ An application may declare `INGRESS_MODE=direct` and a reviewed
 `DIRECT_LISTENERS` value such as `udp:443:443`. The selected follower publishes
 that listener itself and no Leader Caddy route is created; the protocol/port
 must also appear in the cluster policy's `DIRECT_PORT_ALLOWLIST`. The
-`platformctl direct-smoke` operation verifies the selected Compose service and
-host socket. Hysteria `verge` is the first direct application and defaults to
-`worker-4`; its Cloudflare record must remain DNS-only because UDP/443 is served
-by the follower.
+`platformctl direct-smoke` operation verifies the selected Compose service,
+health state, and exact published host-port mapping. Direct-only manifests may
+not declare proxy route groups. Hysteria `verge` is the first direct
+application and defaults to `worker-4`; its Cloudflare record must remain
+DNS-only because UDP/443 is served by the follower. Follower Caddy's optional
+HTTP/3 listener is bound to loopback on the reviewed
+`CADDY_HTTPS_UDP_FALLBACK_PORT` (8443 by default), so this behavior is shared by
+future direct services rather than tied to a node name.
