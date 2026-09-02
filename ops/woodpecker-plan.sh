@@ -14,7 +14,7 @@ if [[ -n "${MIRROR_PATH:-}" && -d "$MIRROR_PATH" && -n "$sha" ]]; then
 	if git --git-dir="$MIRROR_PATH" cat-file -e "$sha^{commit}" 2>/dev/null; then
 		git --git-dir="$MIRROR_PATH" show --format= --name-only "$sha" | sed '/^$/d'
 	else
-		printf 'Woodpecker audit: commit %s is not in the local mirror yet; continuing without changed-file listing\n' "$sha"
+		printf 'Woodpecker audit commit %s is not in the local mirror yet; continuing without changed-file listing\n' "$sha"
 	fi
 fi
 
