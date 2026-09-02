@@ -58,7 +58,7 @@ log_root="$(mktemp -d "${TMPDIR:-/tmp}/llm-hub-lite-tests.XXXXXX")"
 active_pids=()
 active_names=()
 active_logs=()
-# shellcheck disable=SC2329 # invoked indirectly via `trap cleanup EXIT` below
+# shellcheck disable=SC2317,SC2329 # cleanup is invoked indirectly via EXIT trap
 cleanup() {
 	local pid
 	for pid in "${active_pids[@]:-}"; do

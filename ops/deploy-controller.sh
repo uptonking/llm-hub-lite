@@ -1323,6 +1323,6 @@ control-verify)
 	apply_control_verify "$2"
 	;;
 rollback) rollback "${2:-previous}" ;;
-status) printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\ncontrol_sync_state=%s\n' "$(readlink "$CURRENT" 2>/dev/null || true)" "$(readlink "$PREVIOUS" 2>/dev/null || true)" "$(readlink "$APP_CURRENT" 2>/dev/null || true)" "$(readlink "$APP_PREVIOUS" 2>/dev/null || true)" "$(cat "$CONTROL_SYNC_STATE_FILE" 2>/dev/null | tr '\n' ' ' | cut -c1-240)" ;;
+status) printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\ncontrol_sync_state=%s\n' "$(readlink "$CURRENT" 2>/dev/null || true)" "$(readlink "$PREVIOUS" 2>/dev/null || true)" "$(readlink "$APP_CURRENT" 2>/dev/null || true)" "$(readlink "$APP_PREVIOUS" 2>/dev/null || true)" "$(tr '\n' ' ' <"$CONTROL_SYNC_STATE_FILE" 2>/dev/null | cut -c1-240)" ;;
 *) die 'usage: deploy-controller {deploy|control-sync|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback|status} <sha>' ;;
 esac

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015 # diagnostics intentionally continue after optional commands
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC1091
+source "$repo_root/ops/tests/test-helpers.sh"
 lock_key="${repo_root//[^A-Za-z0-9]/_}"
 test_lock_dir="${TMPDIR:-/tmp}/llm-hub-lite-${lock_key}-deployment-rollback-test.lock"
 acquire_test_lock() {
@@ -50,8 +53,8 @@ debug_on_failure() {
 		printf '\n[release directories]\n' >&2
 		find "$tmp/platform/control/releases" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort >&2 || true
 		printf '\n[worktree git state]\n' >&2
-		[[ -n "$work" ]] && git -C "$work" status --short 2>&1 || true
-		[[ -n "$work" ]] && git -C "$work" log --oneline -5 2>&1 || true
+		if [[ -n "$work" ]]; then git -C "$work" status --short 2>&1 || true; fi
+		if [[ -n "$work" ]]; then git -C "$work" log --oneline -5 2>&1 || true; fi
 		printf '\n[mirror refs]\n' >&2
 		git -C "$tmp/platform/control/mirror.git" show-ref 2>&1 || true
 		printf '%s\n' '--- end deployment rollback test diagnostics ---' >&2
@@ -325,7 +328,8 @@ git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-docs-tests
 git -C "$work" push --quiet origin HEAD:main
 sha_consumer_docs_tests="$(git -C "$work" rev-parse HEAD)"
 CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_docs_tests" >"$tmp/deploy-consumer-docs-tests.log" 2>&1
-[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_consumer_docs_tests" ]]
+assert_equal "$platform_root/control/releases/$sha_template_app" "$(readlink "$platform_root/control/current")" 'consumer stage must not advance control release for docs-only change'
+assert_equal "$platform_root/control/releases/$sha_consumer_docs_tests" "$(readlink "$app_root/current")" 'consumer stage must advance app release for docs-only change'
 
 # Consumer jobs may carry coordinated app and control-plane changes. Control
 # sync is a prerequisite in production, so this stage only reconciles cpapi;
@@ -337,7 +341,8 @@ git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-scope-change
 git -C "$work" push --quiet origin HEAD:main
 sha_consumer_scope="$(git -C "$work" rev-parse HEAD)"
 CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_scope" >"$tmp/deploy-consumer-scope.log" 2>&1
-[[ "$(readlink "$platform_root/app/current")" == "$platform_root/control/releases/$sha_consumer_scope" ]]
+assert_equal "$platform_root/control/releases/$sha_template_app" "$(readlink "$platform_root/control/current")" 'consumer stage must keep control release while control sync is pending'
+assert_equal "$platform_root/control/releases/$sha_consumer_scope" "$(readlink "$app_root/current")" 'consumer stage must advance app release for scoped change'
 
 aichorouter_image="$(sed -n 's/^AICHOROUTER_IMAGE=//p' "$work/ops/images.apps.prod.env")"
 aichorouter_prefix="${aichorouter_image%@sha256:*}"
