@@ -69,6 +69,7 @@ grep -Fq 'event: push' "$base/workflows/push-audit.yml"
 grep -Fq 'node: leader' "$base/workflows/push-audit.yml"
 grep -Fq '/usr/local/bin/woodpecker-plan' "$base/workflows/push-audit.yml"
 grep -Fq 'elif [ -f /usr/local/bin/woodpecker-plan ]' "$base/workflows/push-audit.yml"
+grep -Fq "cat-file -e \"\$CI_COMMIT_SHA^{commit}\"" "$base/workflows/push-audit.yml"
 if grep -Fq '/usr/local/bin/woodpecker-plan:/usr/local/bin/woodpecker-plan' "$base/workflows/push-audit.yml"; then
 	printf 'push audit must not bind-mount an optional planner path (Docker creates missing targets as directories)\n' >&2
 	exit 1
