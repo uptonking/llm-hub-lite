@@ -230,6 +230,9 @@ EOF
 chmod +x "$tmp/bin"/*
 export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" FOUNDATION_MANIFEST_ROOT="$tmp/foundation/manifests" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
 export COMPOSE_CALL_LOG="$tmp/compose.log" DOCKER_CALL_LOG="$tmp/docker.log" CURL_CALL_LOG="$tmp/curl.log"
+# Keep the singleton transition fixture independent of any operator or CI
+# environment variable that may already be set when this test is launched.
+export SINGLETON_STATE_ROOT="$tmp/config/singleton-state"
 foundation_env_function="$(sed -n '/^env_value() {/,/^}/p; /^foundation_manifest_file() {/,/^}/p; /^foundation_manifest_value() {/,/^}/p; /^foundation_env() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
 foundation_env_result="$(FOUNDATION_ENV_FUNCTION="$foundation_env_function" FOUNDATION_ENV_ROOT=/foundation FOUNDATION_MANIFEST_ROOT="$tmp/foundation/manifests" bash -c '
 	eval "$FOUNDATION_ENV_FUNCTION"

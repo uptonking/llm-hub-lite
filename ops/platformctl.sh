@@ -1600,6 +1600,25 @@ all_projects() {
 		printf 'app:%s\n' "$d"
 	done <<<"$(descriptor_ids)"
 }
+validate_singleton_transition_state() {
+	local d id state_file previous_target
+	# Validate transition markers before route rendering. Rendering evaluates
+	# templates through command substitutions, where Bash may intentionally
+	# suppress errexit when the caller is checking a negative case. Keeping this
+	# invariant at the validation boundary makes stale or unsafe targets fail
+	# closed regardless of invocation context.
+	[[ "$(node_role)" == leader ]] || return 0
+	while IFS= read -r d; do
+		[[ -n "$d" ]] || continue
+		id="$(basename "$d")"
+		app_policy_enabled "$id" || continue
+		[[ "$(app_upstream_mode "$d")" == singleton ]] || continue
+		state_file="$(singleton_state_file "$d")"
+		previous_target="$(sed -n '1p' "$state_file" 2>/dev/null || true)"
+		[[ -z "$previous_target" ]] && continue
+		active_follower_node "$previous_target" || die "singleton previous target is not an active follower: $previous_target"
+	done <<<"$(descriptor_ids)"
+}
 validate() {
 	local d id project alias n ids='' projects='' aliases='' local_scope="${PLATFORM_VALIDATE_LOCAL:-0}"
 	if [[ "$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" != 1 ]]; then
@@ -1614,6 +1633,7 @@ validate() {
 	fi
 	need_file "$CONTROL_ROOT/current/config/Caddyfile"
 	need_file "$FOUNDATION_ROOT/caddy.yml"
+	validate_singleton_transition_state
 	while IFS= read -r d; do
 		[[ -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" || "$(basename "$d")" == "$PLATFORM_TEST_ONLY_DESCRIPTOR" ]] || continue
 		[[ -n "$d" ]] || continue

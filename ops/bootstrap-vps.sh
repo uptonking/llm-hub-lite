@@ -278,8 +278,12 @@ set_derived_key() {
 	set_key "$file" "$key" "$value"
 }
 set_key() {
-	local file="$1" key="$2" value="$3" tmp
-	install -d -m 700 "$(dirname "$file")"
+	local file="$1" key="$2" value="$3" tmp parent
+	parent="$(dirname "$file")"
+	# GNU install applies -m even when the directory already exists. That can
+	# fail for shared locations such as /tmp (and could weaken their mode), so
+	# only create a missing parent with the private mode.
+	[[ -d "$parent" ]] || install -d -m 700 "$parent"
 	tmp="$(mktemp "${file}.tmp.XXXXXX")"
 	[[ -f "$file" ]] && sed "/^${key}=/d" "$file" >"$tmp"
 	printf '%s=%s\n' "$key" "$value" >>"$tmp"
