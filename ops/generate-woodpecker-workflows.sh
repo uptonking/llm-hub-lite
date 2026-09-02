@@ -342,7 +342,7 @@ EOF
 	printf '      - /usr/local/bin/woodpecker-plan:/usr/local/bin/woodpecker-plan:ro\n' >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git /usr/local/bin/woodpecker-plan
+      - if [ -x /usr/local/bin/woodpecker-plan ]; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git /usr/local/bin/woodpecker-plan; elif [ -x /opt/platform/control/current/ops/woodpecker-plan.sh ]; then CI_COMMIT_BRANCH="\$CI_COMMIT_BRANCH" CI_PIPELINE_NUMBER="\$CI_PIPELINE_NUMBER" CI_COMMIT_SHA="\$CI_COMMIT_SHA" CI_REPO="\$CI_REPO" MIRROR_PATH=/opt/platform/control/mirror.git /opt/platform/control/current/ops/woodpecker-plan.sh; else printf 'Woodpecker push received sha=%s ref=%s repo=%s\\n' "\$CI_COMMIT_SHA" "\$CI_COMMIT_REF" "\$CI_REPO"; git --git-dir=/opt/platform/control/mirror.git show --format= --name-only "\$CI_COMMIT_SHA" | sed '/^\$/d'; fi
 EOF
 }
 
