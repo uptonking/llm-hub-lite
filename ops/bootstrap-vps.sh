@@ -1530,7 +1530,9 @@ for script in platformctl restart-platform backup-platform restore-platform conf
 #!/bin/sh
 exec /opt/platform/control/current/ops/$script.sh "\$@"
 EOF
-	chmod 700 "/usr/local/bin/$script"
+	# The audit planner is invoked directly by the unprivileged deploy-runner;
+	# keep the other root-only wrappers restricted to their existing mode.
+	if [[ "$script" == woodpecker-plan ]]; then chmod 755 "/usr/local/bin/$script"; else chmod 700 "/usr/local/bin/$script"; fi
 done
 cat >/usr/local/bin/git-auth.sh <<EOF
 #!/bin/sh
