@@ -5,6 +5,9 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
+    # Explicitly start in agent mode (--mode agent) as used in local testing. Env
+    # also defaults to agent; the CLI arg cements the intent.
+    command: ["--mode", "agent"]
     mem_limit: ${CURSORAPI_MEMORY_LIMIT:-512m}
     cpus: ${CURSORAPI_CPUS:-0.50}
     pids_limit: ${CURSORAPI_PIDS_LIMIT:-128}
@@ -24,14 +27,14 @@ services:
       CURSOR_BRIDGE_API_KEY: ${CURSORAPI_BRIDGE_API_KEY:?CURSORAPI_BRIDGE_API_KEY must be set}
       CURSOR_BRIDGE_HOST: 0.0.0.0
       CURSOR_BRIDGE_PORT: "8765"
-      CURSOR_BRIDGE_MODE: ${CURSORAPI_MODE:-ask}
+      CURSOR_BRIDGE_MODE: ${CURSORAPI_MODE:-agent}
       CURSOR_BRIDGE_TIMEOUT_MS: ${CURSORAPI_TIMEOUT_MS:-300000}
       CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE: ${CURSORAPI_CHAT_ONLY_WORKSPACE:-true}
       CURSOR_BRIDGE_USE_ACP: ${CURSORAPI_USE_ACP:-false}
       CURSOR_BRIDGE_VERBOSE: ${CURSORAPI_VERBOSE:-false}
       CURSOR_BRIDGE_MAX_MODE: ${CURSORAPI_MAX_MODE:-false}
       CURSOR_BRIDGE_MULTI_PORT: ${CURSORAPI_MULTI_PORT:-false}
-      CURSOR_BRIDGE_FORCE: "false"
+      CURSOR_BRIDGE_FORCE: ${CURSORAPI_FORCE:-true}
       CURSOR_BRIDGE_APPROVE_MCPS: "false"
       CURSOR_BRIDGE_STRICT_MODEL: "true"
       CURSOR_BRIDGE_SESSIONS_LOG: /home/node/sessions.log
