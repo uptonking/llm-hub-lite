@@ -92,4 +92,14 @@ if grep -Fq 'buildx build' "$docker_log"; then
 	exit 1
 fi
 
+# Regression guard: the runtime image must ship a usable CA store, otherwise the
+# statically-linked Cursor Agent cannot perform outbound TLS to agent*.cursor.sh
+# (it reads the system store it links) and every chat completion dies with
+# "Cannot open directory /etc/ssl/certs" + exit 1.
+if ! grep -Eq '[[:space:]]apt-get install -y --no-install-recommends ca-certificates' \
+	"$repo_root/images/cursorapi/Dockerfile"; then
+	printf 'cursorapi Dockerfile must install ca-certificates in its runtime stage\n' >&2
+	exit 1
+fi
+
 printf 'Cursorapi manual release policy tests passed\n'

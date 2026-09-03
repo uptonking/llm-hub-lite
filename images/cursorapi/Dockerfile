@@ -40,12 +40,24 @@ RUN install -d -m 755 /opt/cursor-agent \
     && ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent \
     && rm -f /tmp/cursor-agent.tar.gz
 
+# The Cursor Agent is a self-contained binary that links its own OpenSSL and
+# reads CA certs from the system store. The slim base image ships no
+# ca-certificates, so outbound TLS to agent*.cursor.sh consistently fails with
+# "Cannot open directory /etc/ssl/certs" plus exit code 1. Install the CA store
+# here (as root, before dropping to USER node). Also export the store so any
+# OpenSSL-based helper resolves it deterministically.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production \
     HOME=/home/node \
     PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     CURSOR_AGENT_BIN=/usr/local/bin/cursor-agent \
     CURSOR_BRIDGE_HOST=0.0.0.0 \
-    CURSOR_BRIDGE_PORT=8765
+    CURSOR_BRIDGE_PORT=8765 \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_DIR=/etc/ssl/certs
 USER node
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=5 \
