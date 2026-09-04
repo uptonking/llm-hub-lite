@@ -34,4 +34,4 @@ steps:
       - /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro
       - /usr/local/bin/upgrade-runner:/usr/local/bin/upgrade-runner:ro
     commands:
-      - /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"
+      - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"

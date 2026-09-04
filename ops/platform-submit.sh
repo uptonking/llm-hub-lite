@@ -8,10 +8,14 @@ sha="${2:-}"
 	printf 'usage: platform-submit {deploy|control-sync|control-verify|consumer-stage|consumer-publish|consumer-stop|direct-publish|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback} <sha-or-previous>\n' >&2
 	exit 2
 }
-[[ -n "$sha" ]] || {
-	printf 'missing target\n' >&2
-	exit 2
-}
+if [[ "$mode" == rollback && "$sha" == previous ]]; then
+	:
+else
+	[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+		printf 'target must be a full 40-character lowercase commit SHA\n' >&2
+		exit 2
+	}
+fi
 
 controller_source="${PLATFORM_CONTROLLER_SOURCE:-/opt/platform/control/current/ops/deploy-controller.sh}"
 platformctl_source="${PLATFORMCTL_SOURCE:-/opt/platform/control/current/ops/platformctl.sh}"

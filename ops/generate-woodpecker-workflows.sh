@@ -34,6 +34,7 @@ die() {
 deploy_debug_level="${DEPLOY_DEBUG_LEVEL:-$(value DEPLOY_DEBUG_LEVEL)}"
 deploy_debug_level="${deploy_debug_level:-off}"
 case "$deploy_debug_level" in off | warn | debug) ;; *) die 'DEPLOY_DEBUG_LEVEL must be off, warn, or debug' ;; esac
+ci_sha_guard='if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi;'
 csv_has() {
 	local csv=",${1//[[:space:]]/},"
 	[[ "$csv" == *",$2,"* ]]
@@ -225,9 +226,9 @@ EOF
 		# control-verify yet, so fall back to the compatible full control-sync
 		# path; once this release is installed, subsequent pushes use the
 		# cheaper verification-only path.
-		printf '      - if [ -f /opt/platform/control/current/ops/platform-submit.sh ] && grep -q control-verify /opt/platform/control/current/ops/platform-submit.sh; then DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit control-verify "$CI_COMMIT_SHA"; else DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"; fi\n' "$deploy_debug_level" "$deploy_debug_level" >>"$file"
+		printf '      - %s if [ -f /opt/platform/control/current/ops/platform-submit.sh ] && grep -q control-verify /opt/platform/control/current/ops/platform-submit.sh; then DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit control-verify "$CI_COMMIT_SHA"; else DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"; fi\n' "$ci_sha_guard" "$deploy_debug_level" "$deploy_debug_level" >>"$file"
 	else
-		printf '      - DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit %s "$CI_COMMIT_SHA"\n' "$deploy_debug_level" "$command" >>"$file"
+		printf '      - %s DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit %s "$CI_COMMIT_SHA"\n' "$ci_sha_guard" "$deploy_debug_level" "$command" >>"$file"
 	fi
 }
 
@@ -275,7 +276,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level /usr/local/bin/platform-submit cluster-reconcile "\$CI_COMMIT_SHA"
+      - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level /usr/local/bin/platform-submit cluster-reconcile "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -324,7 +325,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level /usr/local/bin/platform-submit foundation-upgrade "\$CI_COMMIT_SHA"
+      - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level /usr/local/bin/platform-submit foundation-upgrade "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -500,11 +501,11 @@ EOF
 	fi
 	if [[ -n "$migration_from" ]]; then
 		cat >>"$file" <<EOF
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA" || { status=\$?; rollback_status=0; IDENTITY_MIGRATION_MANIFEST=/opt/platform/control/releases/"\$CI_COMMIT_SHA"/apps/$app/manifest.env bash /opt/platform/control/releases/"\$CI_COMMIT_SHA"/ops/migrate-app-identity.sh rollback $app || rollback_status=\$?; /usr/local/bin/platformctl recover || true; if [ "\$rollback_status" -ne 0 ]; then exit "\$rollback_status"; fi; exit "\$status"; }
+      - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA" || { status=\$?; rollback_status=0; IDENTITY_MIGRATION_MANIFEST=/opt/platform/control/releases/"\$CI_COMMIT_SHA"/apps/$app/manifest.env bash /opt/platform/control/releases/"\$CI_COMMIT_SHA"/ops/migrate-app-identity.sh rollback $app || rollback_status=\$?; /usr/local/bin/platformctl recover || true; if [ "\$rollback_status" -ne 0 ]; then exit "\$rollback_status"; fi; exit "\$status"; }
 EOF
 	else
 		cat >>"$file" <<EOF
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA"
+      - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stage "\$CI_COMMIT_SHA"
 EOF
 	fi
 }
@@ -521,7 +522,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-publish "\$CI_COMMIT_SHA"
+      - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-publish "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -537,7 +538,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level DIRECT_APP_ID=$app /usr/local/bin/platform-submit direct-publish "\$CI_COMMIT_SHA"
+      - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level DIRECT_APP_ID=$app /usr/local/bin/platform-submit direct-publish "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -553,7 +554,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
+      - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
 EOF
 }
 
@@ -571,7 +572,7 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
-      - DEPLOY_DEBUG_LEVEL=$deploy_debug_level SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
+      - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-stop "\$CI_COMMIT_SHA"
 EOF
 	if [[ -n "$migration_from" ]]; then
 		printf '      - bash /opt/platform/control/current/ops/migrate-app-identity.sh finalize %s\n' "$app" >>"$file"
@@ -735,6 +736,9 @@ render_manual_node() {
 	*) die "unknown manual workflow kind: $kind" ;;
 	esac
 	submit="/usr/local/bin/platform-submit $command"
+	case "$kind" in
+	foundation | retire) submit="$ci_sha_guard $submit" ;;
+	esac
 	[[ "$kind" == runner ]] && submit='/usr/local/bin/upgrade-runner'
 	cat >"$file" <<EOF
 # generated by ops/generate-woodpecker-workflows.sh; do not edit

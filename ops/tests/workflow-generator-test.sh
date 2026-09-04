@@ -40,6 +40,8 @@ generate_fixture "$disabled_direct"
 [[ ! -e "$disabled_direct/workflows/direct-publish-verge.yml" ]]
 [[ -f "$disabled_direct/workflows/consumer-publish-verge.yml" ]]
 grep -Fq 'CONSUMER_APP_ID=verge /usr/local/bin/platform-submit consumer-publish' "$disabled_direct/workflows/consumer-publish-verge.yml"
+grep -Fq 'CI_COMMIT_SHA must be a full 40-character lowercase commit SHA' "$base/workflows/consumer-publish-aichorouter.yml"
+grep -Fq 'CI_COMMIT_SHA must be a full 40-character lowercase commit SHA' "$base/workflows/control-sync-leader.yml"
 
 if rg -n $'\t' "$base/workflows"/*.yml >/dev/null 2>&1; then
 	printf 'generated workflows must not contain tab indentation\n' >&2

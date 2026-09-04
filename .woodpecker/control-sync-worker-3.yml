@@ -33,4 +33,4 @@ steps:
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
     commands:
-      - if [ -f /opt/platform/control/current/ops/platform-submit.sh ] && grep -q control-verify /opt/platform/control/current/ops/platform-submit.sh; then DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-verify "$CI_COMMIT_SHA"; else DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"; fi
+      - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; if [ -f /opt/platform/control/current/ops/platform-submit.sh ] && grep -q control-verify /opt/platform/control/current/ops/platform-submit.sh; then DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-verify "$CI_COMMIT_SHA"; else DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"; fi

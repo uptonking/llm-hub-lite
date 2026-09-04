@@ -46,4 +46,4 @@ steps:
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
     commands:
       - /usr/local/bin/configure-app-secrets aichorouter --target-node worker-1 --ensure-generated
-      - DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=aichorouter /usr/local/bin/platform-submit consumer-stage "$CI_COMMIT_SHA"
+      - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=aichorouter /usr/local/bin/platform-submit consumer-stage "$CI_COMMIT_SHA"

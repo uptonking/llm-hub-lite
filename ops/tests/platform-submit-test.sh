@@ -45,6 +45,12 @@ grep -Fq -- 'PLATFORM_ONLY_APP_ID=' "$tmp/docker.log"
 FIREWALL_SCRIPT="$tmp/bin/firewall" DIRECT_APP_ID=verge bash "$repo_root/ops/platform-submit.sh" direct-publish "0123456789abcdef0123456789abcdef01234567"
 grep -Fqx firewall "$tmp/firewall.log"
 
+if output="$(bash "$repo_root/ops/platform-submit.sh" deploy "0123456789abcdef" 2>&1)"; then
+	printf 'platform-submit accepted a short deployment target\n' >&2
+	exit 1
+fi
+grep -Fq 'target must be a full 40-character lowercase commit SHA' <<<"$output"
+
 if output="$(PLATFORM_CONTROLLER_SOURCE="$tmp/controller/missing" bash "$repo_root/ops/platform-submit.sh" deploy "0123456789abcdef0123456789abcdef01234567" 2>&1)"; then
 	printf 'platform-submit accepted a missing controller wrapper\n' >&2
 	exit 1

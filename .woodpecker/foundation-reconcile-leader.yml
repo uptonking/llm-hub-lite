@@ -38,4 +38,4 @@ steps:
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
     commands:
-      - DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"
+      - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit foundation-upgrade "$CI_COMMIT_SHA"
