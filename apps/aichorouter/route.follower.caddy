@@ -1,6 +1,10 @@
 {$NODE_AICHOROUTER_ORIGIN_HOST} {
   import common_proxy
+  # The Leader normalizes X-Forwarded-For to one verified client address. Keep
+  # that value unchanged on this second proxy hop; appending the Leader's
+  # public address would make Gin stop at the Leader instead of the client.
   reverse_proxy aichorouter:3000 {
     flush_interval -1
+    header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
   }
 }

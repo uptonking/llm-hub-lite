@@ -22,6 +22,30 @@ printf '%s\n' '192.0.2.10 198.51.100.20 203.0.113.30' >>"$tmp/allowed.txt"
 git -C "$tmp" add ops/check-ip-privacy.sh allowed.txt
 bash "$tmp/ops/check-ip-privacy.sh" --cached >/dev/null
 
+# Cloudflare proxy network literals are reviewed public infrastructure, not
+# private node/customer addresses, and are allowed in the global Caddyfile.
+mkdir -p "$tmp/config"
+cloudflare_networks="$(printf '%s.%s.%s.%s/20 %s.%s.%s.%s/13' 173 245 48 0 104 16 0 0)"
+printf 'trusted_proxies static %s\n' "$cloudflare_networks" >"$tmp/config/Caddyfile"
+git -C "$tmp" add config/Caddyfile
+bash "$tmp/ops/check-ip-privacy.sh" --cached >/dev/null
+
+# The exception is deliberately narrow: another public address in Caddyfile
+# must still be rejected.
+unreviewed_proxy="$(printf '%s.%s.%s.%s' 9 9 9 9)"
+printf 'trusted_proxies static %s/32\n' "$unreviewed_proxy" >"$tmp/config/Caddyfile"
+git -C "$tmp" add config/Caddyfile
+set +e
+bash "$tmp/ops/check-ip-privacy.sh" --cached >/dev/null 2>&1
+privacy_status=$?
+set -e
+if ((privacy_status == 0)); then
+	printf 'IP privacy checker accepted an unreviewed public Caddy proxy address\n' >&2
+	exit 1
+fi
+git -C "$tmp" rm --cached -q config/Caddyfile
+rm -f "$tmp/config/Caddyfile"
+
 # Privacy-respecting anycast DNS addresses must be allowed (not flagged).
 public_ip_one="$(printf '%s.%s.%s.%s' 8 8 8 8)"
 public_ip_two="$(printf '%s.%s.%s.%s' 1 1 1 1)"

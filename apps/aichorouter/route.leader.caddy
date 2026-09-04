@@ -6,6 +6,9 @@
     health_interval 10s
     health_timeout 3s
     header_up Host {http.reverse_proxy.upstream.hostport}
+    # Send Caddy's verified Cloudflare client address (or direct TCP peer) as
+    # one value. The Follower passes it through without adding the Leader IP.
+    header_up X-Forwarded-For {client_ip}
   }
   handle_errors {
     @upstream_unavailable expression `{http.error.status_code} >= 500`

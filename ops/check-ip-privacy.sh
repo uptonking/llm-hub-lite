@@ -37,6 +37,22 @@ is_public_ipv4() {
 	return 0
 }
 
+is_reviewed_public_infrastructure_cidr() {
+	local path="$1" ip="$2" after="$3" network prefix suffix
+	[[ "$path" == config/Caddyfile ]] || return 1
+	# Cloudflare publishes these CIDRs as shared proxy infrastructure; they
+	# identify no private node or customer endpoint. Keep the exception exact so
+	# unrelated addresses, bare network bases, and malformed prefixes still fail.
+	while IFS=' ' read -r network prefix; do
+		[[ "$ip" == "$network" && "$after" == "/$prefix"* ]] || continue
+		suffix="${after#"/$prefix"}"
+		[[ "${suffix:0:1}" != [0-9] ]] && return 0
+	done <<EOF
+$(printf '%s.%s.%s.%s %s\n' 173 245 48 0 20 103 21 244 0 22 103 22 200 0 22 103 31 4 0 22 141 101 64 0 18 108 162 192 0 18 190 93 240 0 20 188 114 96 0 20 197 234 240 0 22 198 41 128 0 17 162 158 0 0 15 104 16 0 0 13 104 24 0 0 14 172 64 0 0 13 131 0 72 0 22)
+EOF
+	return 1
+}
+
 set +e
 matches="$(git -C "$repo_root" grep "${grep_args[@]}")"
 grep_status=$?
@@ -56,7 +72,7 @@ while IFS= read -r record; do
 		after="${content#*"$ip"}"
 		before_last="${before: -1}"
 		after_first="${after:0:1}"
-		if [[ "$before_last" != [0-9] && "$after_first" != [0-9] && "$ip" != 8.8.8.8 && "$ip" != 1.1.1.1 ]] && is_public_ipv4 "$ip"; then
+		if [[ "$before_last" != [0-9] && "$after_first" != [0-9] && "$ip" != 8.8.8.8 && "$ip" != 1.1.1.1 ]] && is_public_ipv4 "$ip" && ! is_reviewed_public_infrastructure_cidr "$path" "$ip" "$after"; then
 			printf '%s:%s: globally routable IPv4 literal is not allowed in Git\n' "$path" "$line" >&2
 			violations=$((violations + 1))
 		fi
