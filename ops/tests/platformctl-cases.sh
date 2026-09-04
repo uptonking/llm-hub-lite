@@ -321,7 +321,7 @@ fi
 # unhealthy agent must not block that bootstrap window. Once enrolled, the
 # agent healthcheck is mandatory again.
 cp "$tmp/config/node.env" "$tmp/node.env.before-beszel-enrollment"
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 sed -e "s#^BESZEL_KEY_FILE=.*#BESZEL_KEY_FILE=$tmp/missing-beszel-key#" \
 	-e "s#^BESZEL_TOKEN_FILE=.*#BESZEL_TOKEN_FILE=$tmp/missing-beszel-token#" \
 	"$tmp/foundation/env/beszel.env" >"$tmp/foundation/env/beszel.env.tmp"
@@ -337,7 +337,7 @@ if BESZEL_AGENT_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" health >/dev/nu
 	exit 1
 fi
 cp "$tmp/node.env.before-beszel-enrollment" "$tmp/config/node.env"
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 worker_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 if grep -Fq '[observer-storage]' <<<"$worker_diagnose"; then
 	printf 'follower diagnostics reported Leader-only Observer storage\n' >&2
@@ -352,12 +352,12 @@ mv "$tmp/foundation/env/observer.env.tmp" "$tmp/foundation/env/observer.env"
 dd if=/dev/zero of="$tmp/observer/collector-buffer/pressure" bs=1024 count=3072 >/dev/null 2>&1
 warning_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 grep -Fq 'WARNING: Observer collector buffer' <<<"$warning_diagnose"
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+install_test_node leader
 leader_warning_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
 grep -Fq 'WARNING: Observer durable data' <<<"$leader_warning_diagnose"
 cp "$tmp/compose.log" "$tmp/compose-all.log"
 : >"$tmp/compose.log"
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 printf 'retired generated endpoint metadata\n' >"$tmp/app/shared/runtime/app-env/retired-app.env"
 PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_ONLY_DESCRIPTOR=cpapi PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_ONLY_APP_ID=cpapi PLATFORM_ONLY_ROUTE_APP_ID=cpapi bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'app-cpapi' "$tmp/compose.log"
@@ -372,7 +372,7 @@ fi
 # A truly stateless singleton has neither a root-only runtime env file nor a
 # persistent data directory, but its selected-node Compose project must still
 # be fully evaluated and its move transaction must still be journaled.
-cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
+install_test_node worker-2
 : >"$tmp/compose.log"
 PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_ONLY_DESCRIPTOR=wapdf PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_ONLY_APP_ID=wapdf PLATFORM_ONLY_ROUTE_APP_ID=wapdf bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'app-wapdf' "$tmp/compose.log"
@@ -388,10 +388,10 @@ SINGLETON_RELEASE_SHA=wapdf-test bash "$repo_root/ops/platformctl.sh" singleton-
 grep -qx 'PHASE=prepared' "$tmp/config/singleton-state/wapdf.transition.env"
 grep -qx 'ARCHIVE_PATH=' "$tmp/config/singleton-state/wapdf.transition.env"
 [[ ! -e "$tmp/app/shared/data/prod/wapdf" ]]
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 stop_output="$(bash "$repo_root/ops/platformctl.sh" consumer-stop wapdf)"
 grep -Fq 'stopped stateless singleton wapdf; no persistent data retained' <<<"$stop_output"
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 # A reviewed foundation upgrade must preserve installed singleton routes while
 # withholding a brand-new singleton. It must not require the new app's runtime
 # secrets or an app-image key that is not installed until singleton staging.
@@ -399,7 +399,7 @@ cp "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy" "$tmp/cpapi-route.origi
 rm -f "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" "$tmp/config/pigeon.env"
 sed '/^PIGEON_IMAGE=/d' "$tmp/config/images.apps.prod.env" >"$tmp/config/images.apps.prod.env.tmp"
 mv "$tmp/config/images.apps.prod.env.tmp" "$tmp/config/images.apps.prod.env"
-cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
+install_test_node worker-2
 PLATFORM_SKIP_SINGLETONS=1 platform_validate_library cpapi 0 1 0 1
 cmp -s "$tmp/cpapi-route.original" "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
 [[ ! -e "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" ]]
@@ -417,7 +417,7 @@ grep -Fq 'reverse_proxy pigeon:5000' "$tmp/app/shared/runtime/config/routes.d/pi
 cp "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy" "$tmp/pigeon-route.original"
 PLATFORM_SKIP_SINGLETONS=1 platform_validate_library pigeon 0 1 0 1
 cmp -s "$tmp/pigeon-route.original" "$tmp/app/shared/runtime/config/routes.d/pigeon.caddy"
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+install_test_node leader
 platform_validate_library cpapi 0 1 0 1 '' all
 cp "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy" "$tmp/cpapi-route.before-disabled-reconcile"
 sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/pigeon.policy" >"$tmp/control/current/config/cluster/apps/pigeon.policy.tmp"
@@ -455,7 +455,7 @@ grep -Fq 'cpapi.localhost' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
 grep -Fq 'lb_policy random_choose 2' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'header_up Host {http.reverse_proxy.upstream.hostport}' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'reverse_proxy https://worker1-aichorouter-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
-grep -Fq 'header_up X-Forwarded-For {client_ip}' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
+grep -Fq 'import forward_verified_client_ip' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
 grep -Fq 'client_ip_headers CF-Connecting-IP' "$tmp/app/shared/runtime/config/Caddyfile"
 grep -Fq 'location = /health' "$repo_root/apps/librechat/client.nginx.conf"
 grep -Fq 'mem_limit:' "$repo_root/apps/librechat/compose.yml"
@@ -523,7 +523,7 @@ grep -qx 'PHASE=switched' "$tmp/config/singleton-state/cpapi.transition.env"
 
 # Publication completes the Leader's route transaction. The final generated job
 # runs on the selected target and closes that target's matching local journal.
-cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
+install_test_node worker-2
 cat >"$tmp/config/singleton-state/cpapi.transition.env" <<'EOF'
 VERSION=1
 APP_ID=cpapi
@@ -536,7 +536,7 @@ EOF
 SINGLETON_FINAL_STOP=1 SINGLETON_RELEASE_SHA=test bash "$repo_root/ops/platformctl.sh" consumer-stop cpapi
 grep -qx 'PHASE=completed' "$tmp/config/singleton-state/cpapi.transition.env"
 grep -Eq '^COMPLETED_UTC=[0-9]{4}-' "$tmp/config/singleton-state/cpapi.transition.env"
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+install_test_node leader
 
 cp "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy" "$tmp/config/singleton-state/cpapi.route-backup.caddy"
 if output="$(bash "$repo_root/ops/platformctl.sh" singleton-switch cpapi 2>&1)"; then
@@ -577,20 +577,20 @@ cmp -s "$tmp/librechat-route.before-public-failure" "$tmp/app/shared/runtime/con
 # direct smoke invocations must enforce the same lifecycle gate as reconcile.
 cp "$tmp/control/current/config/cluster/nodes/worker-1.env" "$tmp/worker-1.state-original"
 sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$tmp/worker-1.state-original" >"$tmp/control/current/config/cluster/nodes/worker-1.env"
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 if output="$(bash "$repo_root/ops/platformctl.sh" consumer-origin-smoke librechat 2>&1)"; then
 	printf 'draining follower origin smoke was incorrectly accepted\n' >&2
 	exit 1
 fi
 grep -Fq 'consumer origin smoke requires an active follower: librechat/worker-1' <<<"$output"
 mv "$tmp/worker-1.state-original" "$tmp/control/current/config/cluster/nodes/worker-1.env"
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+install_test_node leader
 
 # Restore committed placement, then prove follower reconciliation preserves the
 # active-active LibreChat project while selecting singletons only on their one
 # configured follower.
 cp "$tmp/cpapi-policy.original" "$tmp/control/current/config/cluster/apps/cpapi.policy"
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 : >"$tmp/compose.log"
 bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
 for project in app-librechat app-aichorouter app-cpapi app-cursorapi; do
@@ -615,7 +615,7 @@ if CONSUMER_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" recover >/dev/null 
 	printf 'consumer recovery failure was incorrectly reported as success\n' >&2
 	exit 1
 fi
-cp "$repo_root/config/cluster/nodes/worker-2.env" "$tmp/config/node.env"
+install_test_node worker-2
 : >"$tmp/compose.log"
 bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
 grep -Fq 'app-librechat' "$tmp/compose.log"
@@ -625,19 +625,19 @@ for project in app-aichorouter app-cpapi app-cursorapi; do
 		exit 1
 	fi
 done
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+install_test_node leader
 
 # Direct/orphan smoke requires a public wildcard mapping, not merely the
 # expected port number. Verify both the successful and loopback-only cases.
 mkdir -p "$tmp/config/runtime/verge" "$tmp/app/current/apps/verge"
 printf 'runtime: test\n' >"$tmp/config/runtime/verge/config.yaml"
-cp "$repo_root/config/cluster/nodes/worker-4.env" "$tmp/config/node.env"
+install_test_node worker-4
 bash "$repo_root/ops/platformctl.sh" direct-smoke verge >/dev/null
 if DIRECT_PORT_BIND='127.0.0.1:443' bash "$repo_root/ops/platformctl.sh" direct-smoke verge >/dev/null 2>&1; then
 	printf 'direct smoke accepted a loopback-only listener\n' >&2
 	exit 1
 fi
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+install_test_node leader
 # The final Leader render below covers both active-active upstreams. Avoid a
 # duplicate render here; the preceding worker sync assertions already prove
 # node-local placement and health behavior.
@@ -655,7 +655,7 @@ AICHOROUTER_SESSION_SECRET=test-session
 AICHOROUTER_CRYPTO_SECRET=test-crypto
 AICHOROUTER_NODE_NAME=aichorouter-test
 EOF
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 if PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_fast >/dev/null 2>&1; then
 	printf 'production LibreChat placeholder was accepted\n' >&2
 	exit 1
@@ -667,7 +667,7 @@ bash "$repo_root/ops/platformctl.sh" smoke "app:$tmp/control/current/apps/librec
 # Re-establish the Leader's installed route before simulating a target-policy
 # change. Earlier checks intentionally reuse this fixture as a Follower and
 # therefore replace its staged Caddy route with the Follower template.
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+install_test_node leader
 platform_validate_library librechat 0 1 0 1 '' all
 grep -Fq 'worker1-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'worker2-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"

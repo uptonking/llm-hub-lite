@@ -95,6 +95,7 @@ VERGE_CLOUDFLARE_API_TOKEN=test-cloudflare-token-0123456789
 EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
+LEADER_PUBLIC_IP=192.0.2.10
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi.example.invalid
 NODE_CPAPI_ORIGIN_HOST=worker2-cpapi.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
@@ -230,6 +231,10 @@ EOF
 chmod +x "$tmp/bin"/*
 export PATH="$tmp/bin:$PATH" PLATFORM_COMPOSE_BIN="$tmp/bin/platform-compose" APP_ROOT="$tmp/app" PLATFORM_ROOT="$tmp" CONTROL_ROOT="$tmp/control" FOUNDATION_ROOT="$tmp/foundation" FOUNDATION_MANIFEST_ROOT="$tmp/foundation/manifests" CONFIG_ROOT="$tmp/config" APP_ENV="$tmp/app/shared/.env.prod" APP_IMAGE_ENV="$tmp/config/images.apps.prod.env" FOUNDATION_IMAGE_ENV="$tmp/config/images.foundation.prod.env" NODE_CONFIG_FILE="$tmp/config/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" RUNTIME_ROOT="$tmp/app/shared/runtime" PLATFORM_LOCK_FILE="$tmp/locks/platform.lock"
 export COMPOSE_CALL_LOG="$tmp/compose.log" DOCKER_CALL_LOG="$tmp/docker.log" CURL_CALL_LOG="$tmp/curl.log"
+install_test_node() {
+	cp "$repo_root/config/cluster/nodes/$1.env" "$tmp/config/node.env"
+	printf 'LEADER_PUBLIC_IP=192.0.2.10\n' >>"$tmp/config/node.env"
+}
 # Keep the singleton transition fixture independent of any operator or CI
 # environment variable that may already be set when this test is launched.
 export SINGLETON_STATE_ROOT="$tmp/config/singleton-state"
@@ -252,6 +257,19 @@ PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=0 bash "$repo_root/ops/platformctl.sh" va
 }
 grep -q '^SCHEMA=1$' "$tmp/config/validation.stamp"
 grep -q '^RELEASE_SHA=test$' "$tmp/config/validation.stamp"
+grep -Fq 'trusted_proxies static 192.0.2.10 ' "$tmp/app/shared/runtime/config/Caddyfile"
+grep -Fq 'header_up CF-Connecting-IP {client_ip}' "$tmp/app/shared/runtime/config/Caddyfile"
+grep -Fq 'header_up X-Forwarded-For {client_ip}' "$tmp/app/shared/runtime/config/Caddyfile"
+grep -Fq 'header_up X-Real-IP {client_ip}' "$tmp/app/shared/runtime/config/Caddyfile"
+grep -Fq 'import forward_verified_client_ip' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
+cp "$tmp/config/node.env" "$tmp/node.env.valid"
+sed 's/^LEADER_PUBLIC_IP=.*/LEADER_PUBLIC_IP=999.0.2.10/' "$tmp/node.env.valid" >"$tmp/config/node.env"
+if invalid_output="$(PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1 PLATFORM_TEST_SKIP_RENDER=1 bash "$repo_root/ops/platformctl.sh" validate 2>&1)"; then
+	printf 'platformctl accepted an invalid runtime Leader address\n' >&2
+	exit 1
+fi
+grep -Fq 'runtime LEADER_PUBLIC_IP must be a valid IPv4 address' <<<"$invalid_output"
+mv "$tmp/node.env.valid" "$tmp/config/node.env"
 # All subsequent cases use the same fixture and mocked Compose implementation.
 # Avoid repeating the per-app `config --services` subprocess while retaining
 # the strict pass above as the contract test for descriptor/service wiring.
@@ -294,11 +312,11 @@ fi
 reconcile_caddy_udp_policy
 grep -qx 'CADDY_HTTPS_UDP_BIND=0.0.0.0' "$tmp/foundation/env/caddy.env"
 grep -qx 'CADDY_HTTPS_UDP_HOST_PORT=443' "$tmp/foundation/env/caddy.env"
-cp "$repo_root/config/cluster/nodes/worker-1.env" "$tmp/config/node.env"
+install_test_node worker-1
 reconcile_caddy_udp_policy
 grep -qx 'CADDY_HTTPS_UDP_BIND=127.0.0.1' "$tmp/foundation/env/caddy.env"
 grep -qx 'CADDY_HTTPS_UDP_HOST_PORT=8443' "$tmp/foundation/env/caddy.env"
-cp "$repo_root/config/cluster/nodes/leader.env" "$tmp/config/node.env"
+install_test_node leader
 reconcile_caddy_udp_policy
 
 # Validation-only matrix cases can share the controller functions loaded above.

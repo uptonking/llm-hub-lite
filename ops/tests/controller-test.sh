@@ -82,8 +82,16 @@ grep -q '^LIBRECHAT_CLIENT_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/imag
 grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
-grep -Fq 'header_up X-Forwarded-For {client_ip}' "$repo_root/apps/aichorouter/route.leader.caddy"
-grep -Fq 'header_up X-Forwarded-For {http.request.header.X-Forwarded-For}' "$repo_root/apps/aichorouter/route.follower.caddy"
+grep -Fq 'import forward_verified_client_ip' "$repo_root/apps/aichorouter/route.leader.caddy"
+grep -Fq 'import forward_verified_client_ip' "$repo_root/apps/aichorouter/route.follower.caddy"
+if grep -Fq '{http.request.header.' "$repo_root/apps/aichorouter/route.follower.caddy"; then
+	printf 'Aichorouter follower route forwards an unverified request header\n' >&2
+	exit 1
+fi
+grep -Fq 'trusted_proxies static {$LEADER_PUBLIC_IP} ' "$repo_root/config/Caddyfile"
+grep -Fq 'header_up CF-Connecting-IP {client_ip}' "$repo_root/config/Caddyfile"
+grep -Fq 'header_up X-Forwarded-For {client_ip}' "$repo_root/config/Caddyfile"
+grep -Fq 'header_up X-Real-IP {client_ip}' "$repo_root/config/Caddyfile"
 grep -Fq 'client_ip_headers CF-Connecting-IP' "$repo_root/config/Caddyfile"
 grep -Fq 'trusted_proxies_strict' "$repo_root/config/Caddyfile"
 grep -q '^APP_ID=cursorapi$' "$repo_root/apps/cursorapi/manifest.env"

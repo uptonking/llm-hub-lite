@@ -186,6 +186,16 @@ valid_dns_name() {
 		[[ "$label" =~ ^[a-z0-9][a-z0-9-]*[a-z0-9]$ || "$label" =~ ^[a-z0-9]$ ]] || return 1
 	done
 }
+valid_ipv4() {
+	local ip="$1" octet
+	local -a octets
+	[[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+	IFS=. read -r -a octets <<<"$ip"
+	[[ "${#octets[@]}" -eq 4 ]] || return 1
+	for octet in "${octets[@]}"; do
+		[[ "$octet" =~ ^[0-9]+$ ]] && ((10#$octet <= 255)) || return 1
+	done
+}
 placeholder_value() {
 	case "$1" in
 	'' | replace-with-* | *'<'* | *'>'* | *example.invalid* | *example.* | *your-upstash* | *account-id*) return 0 ;;
@@ -757,6 +767,10 @@ render_routes() {
 	# repeated validations or interrupted reconciliations.
 	RUNTIME_CONFIG_CANDIDATE="$s"
 	cp -a "$CONTROL_ROOT/current/config/." "$s/"
+	# The root Caddyfile carries host-local placeholders such as the Leader proxy
+	# address. Materialize it together with imported fragments so reloads do not
+	# depend on adding mutable environment to the running Caddy container.
+	render_template "$s/Caddyfile"
 	while IFS= read -r f; do
 		[[ -n "$f" ]] || continue
 		render_template "$f"
@@ -955,13 +969,15 @@ write_validation_stamp() {
 	mv -f -- "$tmp" "$VALIDATION_STAMP_FILE"
 }
 validate_cluster() {
-	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor direct_seen='' listeners listener proto host_port container_port key caddy_udp_fallback
+	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor direct_seen='' listeners listener proto host_port container_port key caddy_udp_fallback leader_public_ip
 	need_file "$CLUSTER_POLICY_FILE"
 	need_file "$NODE_CONFIG_FILE"
 	[[ "$(policy_value CLUSTER_CONFIG_VERSION)" == 3 ]] || die 'unsupported cluster policy version'
 	csv_has "$(policy_value NODE_IDS)" "$(node_id)" || die 'node is absent from cluster policy'
 	[[ "$(node_id)" == "$(env_value NODE_ID "$NODE_CONFIG_FILE")" ]] || die 'runtime node identity disagrees with node inventory'
 	[[ "$(node_role)" == leader || "$(node_role)" == follower ]] || die 'invalid derived node role'
+	leader_public_ip="$(node_value LEADER_PUBLIC_IP)"
+	valid_ipv4 "$leader_public_ip" || die 'runtime LEADER_PUBLIC_IP must be a valid IPv4 address'
 	while IFS= read -r node; do
 		[[ -n "$node" ]] || continue
 		node_count=$((node_count + 1))
