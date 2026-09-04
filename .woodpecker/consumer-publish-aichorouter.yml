@@ -45,5 +45,6 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
+      - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
     commands:
       - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=aichorouter /usr/local/bin/platform-submit consumer-publish "$CI_COMMIT_SHA"

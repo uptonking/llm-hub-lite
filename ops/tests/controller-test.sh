@@ -427,9 +427,9 @@ grep -Fq 'consumer-stage-cpapi-worker-1' "$repo_root/.woodpecker/consumer-publis
 for node in leader worker-1 worker-2 worker-3 worker-4; do
 	[[ -f "$repo_root/.woodpecker/control-sync-$node.yml" ]]
 done
-grep -Fq 'platform-submit control-sync' "$repo_root/.woodpecker/control-sync-leader.yml"
+grep -Fq 'bash /opt/platform/control/current/ops/deploy-controller.sh control-sync' "$repo_root/.woodpecker/control-sync-leader.yml"
 for node in worker-1 worker-2 worker-3 worker-4; do
-	grep -Fq 'platform-submit control-verify' "$repo_root/.woodpecker/control-sync-$node.yml"
+	grep -Fq 'bash /opt/platform/control/current/ops/deploy-controller.sh control-verify' "$repo_root/.woodpecker/control-sync-$node.yml"
 done
 grep -Fq 'control-sync-worker-1' "$repo_root/.woodpecker/consumer-stage-cpapi-worker-1.yml"
 grep -Fq 'control-verify' "$repo_root/ops/deploy-controller.sh"
@@ -573,7 +573,8 @@ grep -Fq "s/^NODE_SECRET_KEYS=//p" "$repo_root/ops/bootstrap-vps.sh"
 grep -Fq 'PathExists=/etc/llm-hub-lite/firewall-reconcile.request' "$repo_root/ops/systemd/platform-firewall.path"
 grep -Fq 'deployment failed; restoring previous complete bundle' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'DEPLOY_SYNC_SCOPE=all reconcile || true' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'git-auth.sh:/usr/local/bin/git-auth.sh:ro' "$repo_root/ops/platform-submit.sh"
+grep -Fq 'git_auth_source:/usr/local/bin/git-auth.sh:ro' "$repo_root/ops/platform-submit.sh"
+grep -Fq '/opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro' "$repo_root/.woodpecker/foundation-upgrade-leader.yml"
 grep -Fq 'RESTORE_IDENTITY' "$repo_root/ops/restore-platform.sh"
 recover_body="$(sed -n '/^recover() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
 foundation_line="$(printf '%s\n' "$recover_body" | grep -n 'projects_foundation' | head -n1 | cut -d: -f1)"

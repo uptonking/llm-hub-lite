@@ -29,8 +29,8 @@ steps:
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
+      - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
       - /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro
-      - /usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro
       - /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro
       - /usr/local/bin/upgrade-runner:/usr/local/bin/upgrade-runner:ro
     commands:

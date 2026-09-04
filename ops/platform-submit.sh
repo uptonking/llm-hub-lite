@@ -19,12 +19,17 @@ fi
 
 controller_source="${PLATFORM_CONTROLLER_SOURCE:-/opt/platform/control/current/ops/deploy-controller.sh}"
 platformctl_source="${PLATFORMCTL_SOURCE:-/opt/platform/control/current/ops/platformctl.sh}"
+git_auth_source="${GIT_AUTH_SOURCE:-/opt/platform/control/current/ops/git-auth.sh}"
 if [[ ! -r "$controller_source" ]] || ! grep -q 'control-sync)' "$controller_source"; then
 	printf 'validated deployment controller is unavailable or too old for %s: %s\n' "$mode" "$controller_source" >&2
 	exit 1
 fi
 if [[ ! -r "$platformctl_source" ]]; then
 	printf 'validated platformctl is unavailable: %s\n' "$platformctl_source" >&2
+	exit 1
+fi
+if [[ ! -r "$git_auth_source" ]] || ! grep -q '^setup_github_https_auth()' "$git_auth_source"; then
+	printf 'validated Git authentication helper is unavailable or unsafe to source: %s\n' "$git_auth_source" >&2
 	exit 1
 fi
 
@@ -95,7 +100,7 @@ docker run -d --name "$job" \
 	-e DEPLOY_DEBUG_LEVEL="${DEPLOY_DEBUG_LEVEL:-${PLATFORM_DEBUG_LEVEL:-off}}" \
 	-v "$platformctl_source:/usr/local/bin/platformctl:ro" \
 	-v "$controller_source:/usr/local/bin/deploy-controller:ro" \
-	-v /usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro \
+	-v "$git_auth_source:/usr/local/bin/git-auth.sh:ro" \
 	-v /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro \
 	"$image" /usr/local/bin/deploy-controller "$mode" "$sha" >/dev/null
 run_status=$?

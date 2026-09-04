@@ -118,6 +118,7 @@ write_volumes() {
       - /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
+      - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
 EOF
 }
 
@@ -221,14 +222,13 @@ EOF
     commands:
 EOF
 	if [[ "$command" == control-verify ]]; then
-		# During a rolling upgrade a follower may still have the previous
-		# platform-submit/controller installed.  That wrapper cannot parse
-		# control-verify yet, so fall back to the compatible full control-sync
-		# path; once this release is installed, subsequent pushes use the
-		# cheaper verification-only path.
-		printf '      - %s if [ -f /opt/platform/control/current/ops/platform-submit.sh ] && grep -q control-verify /opt/platform/control/current/ops/platform-submit.sh; then DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit control-verify "$CI_COMMIT_SHA"; else DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit control-sync "$CI_COMMIT_SHA"; fi\n' "$ci_sha_guard" "$deploy_debug_level" "$deploy_debug_level" >>"$file"
+		# Invoke the installed controller directly inside the deploy-runner step.
+		# This keeps control synchronization available even when an older host
+		# platform-submit wrapper is broken and needs this release to repair it.
+		# Older controllers without control-verify use the compatible full sync.
+		printf '      - %s if grep -q "control-verify)" /opt/platform/control/current/ops/deploy-controller.sh; then DEPLOY_DEBUG_LEVEL=%s bash /opt/platform/control/current/ops/deploy-controller.sh control-verify "$CI_COMMIT_SHA"; else DEPLOY_DEBUG_LEVEL=%s bash /opt/platform/control/current/ops/deploy-controller.sh control-sync "$CI_COMMIT_SHA"; fi\n' "$ci_sha_guard" "$deploy_debug_level" "$deploy_debug_level" >>"$file"
 	else
-		printf '      - %s DEPLOY_DEBUG_LEVEL=%s /usr/local/bin/platform-submit %s "$CI_COMMIT_SHA"\n' "$ci_sha_guard" "$deploy_debug_level" "$command" >>"$file"
+		printf '      - %s DEPLOY_DEBUG_LEVEL=%s bash /opt/platform/control/current/ops/deploy-controller.sh %s "$CI_COMMIT_SHA"\n' "$ci_sha_guard" "$deploy_debug_level" "$command" >>"$file"
 	fi
 }
 
@@ -768,7 +768,6 @@ EOF
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
       - /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro
-      - /usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro
       - /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro
       - /usr/local/bin/upgrade-runner:/usr/local/bin/upgrade-runner:ro
     commands:

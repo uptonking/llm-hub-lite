@@ -129,12 +129,12 @@ if grep -Fq 'push-audit' "$base/workflows/control-sync-leader.yml"; then
 fi
 for node in worker-1 worker-2 worker-3 worker-4; do
 	grep -Fq $'depends_on:\n  - control-sync-leader' "$base/workflows/control-sync-$node.yml"
-	grep -Fq 'platform-submit control-verify' "$base/workflows/control-sync-$node.yml"
-	grep -Fq 'grep -q control-verify /opt/platform/control/current/ops/platform-submit.sh' "$base/workflows/control-sync-$node.yml"
-	grep -Fq 'else DEPLOY_DEBUG_LEVEL=off /usr/local/bin/platform-submit control-sync' "$base/workflows/control-sync-$node.yml"
+	grep -Fq 'deploy-controller.sh control-verify' "$base/workflows/control-sync-$node.yml"
+	grep -Fq 'grep -q "control-verify)" /opt/platform/control/current/ops/deploy-controller.sh' "$base/workflows/control-sync-$node.yml"
+	grep -Fq 'else DEPLOY_DEBUG_LEVEL=off bash /opt/platform/control/current/ops/deploy-controller.sh control-sync' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'skip_clone: true' "$base/workflows/control-sync-$node.yml"
 done
-grep -Fq 'platform-submit control-sync' "$base/workflows/control-sync-leader.yml"
+grep -Fq 'bash /opt/platform/control/current/ops/deploy-controller.sh control-sync' "$base/workflows/control-sync-leader.yml"
 grep -Fq '/usr/local/bin/configure-app-secrets aichorouter --target-node worker-1 --ensure-generated' "$base/workflows/consumer-stage-aichorouter-worker-1.yml"
 grep -Fq $'depends_on:\n  - control-sync-worker-1\n  - name: foundation-reconcile-leader\n    optional: true' "$base/workflows/foundation-reconcile-worker-1.yml"
 if grep -R -Fq 'legacy deployment wrapper detected' "$base/workflows"; then
