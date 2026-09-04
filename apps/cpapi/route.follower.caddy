@@ -1,6 +1,10 @@
 {$NODE_CPAPI_ORIGIN_HOST} {
   import common_proxy
+  # This Caddy trusts client headers only from the configured Leader. Rewrite
+  # all downstream headers from the resulting verified address, so CPAPI's
+  # access log never accepts a caller-supplied client address.
   reverse_proxy cpapi:8317 {
     flush_interval -1
+    import forward_verified_client_ip
   }
 }

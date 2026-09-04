@@ -84,10 +84,14 @@ grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
 grep -Fq 'import forward_verified_client_ip' "$repo_root/apps/aichorouter/route.leader.caddy"
 grep -Fq 'import forward_verified_client_ip' "$repo_root/apps/aichorouter/route.follower.caddy"
-if grep -Fq '{http.request.header.' "$repo_root/apps/aichorouter/route.follower.caddy"; then
-	printf 'Aichorouter follower route forwards an unverified request header\n' >&2
-	exit 1
-fi
+grep -Fq 'import forward_verified_client_ip' "$repo_root/apps/cpapi/route.leader.caddy"
+grep -Fq 'import forward_verified_client_ip' "$repo_root/apps/cpapi/route.follower.caddy"
+for route in "$repo_root/apps/aichorouter/route.follower.caddy" "$repo_root/apps/cpapi/route.follower.caddy"; do
+	if grep -Fq '{http.request.header.' "$route"; then
+		printf 'Follower route forwards an unverified request header: %s\n' "$route" >&2
+		exit 1
+	fi
+done
 grep -Fq 'trusted_proxies static {$LEADER_PUBLIC_IP} ' "$repo_root/config/Caddyfile"
 grep -Fq 'header_up CF-Connecting-IP {client_ip}' "$repo_root/config/Caddyfile"
 grep -Fq 'header_up X-Forwarded-For {client_ip}' "$repo_root/config/Caddyfile"
@@ -338,8 +342,16 @@ fi
 grep -Fq 'mem_limit: ${CPAPI_MEMORY_LIMIT:-256m}' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'cpus: ${CPAPI_CPUS:-0.25}' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'pids_limit: ${CPAPI_PIDS_LIMIT:-128}' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'WRITABLE_PATH: /runtime' "$repo_root/apps/cpapi/compose.yml"
 grep -Fq 'enabled: ${CPAPI_PLUGINS_ENABLED:-true}' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'logging-to-file: ${CPAPI_LOGGING_TO_FILE:-true}' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'logs-max-total-size-mb: ${CPAPI_LOGS_MAX_TOTAL_SIZE_MB:-50}' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'request-log: false' "$repo_root/apps/cpapi/compose.yml"
+grep -Fq 'CPAPI_LOGGING_TO_FILE' "$repo_root/apps/cpapi/manifest.env"
+grep -Fq 'CPAPI_LOGS_MAX_TOTAL_SIZE_MB' "$repo_root/apps/cpapi/manifest.env"
 grep -Fq 'CPAPI_PLUGINS_ENABLED' "$repo_root/apps/cpapi/manifest.env"
+grep -Fq 'CPAPI_LOGGING_TO_FILE=true' "$repo_root/apps/cpapi/config.env"
+grep -Fq 'CPAPI_LOGS_MAX_TOTAL_SIZE_MB=50' "$repo_root/apps/cpapi/config.env"
 grep -Fq 'CPAPI_PLUGINS_ENABLED=true' "$repo_root/apps/cpapi/config.env"
 if grep -Eq 'ports:' "$repo_root/apps/cpapi/compose.yml"; then
 	printf 'CPAPI must not publish a host port\n' >&2

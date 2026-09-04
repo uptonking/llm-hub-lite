@@ -354,7 +354,19 @@ bootstrap or repair when Woodpecker is unavailable.
 CPAPI exposes an unauthenticated `/healthz` endpoint that returns `{"status":"ok"}` .
 Its main container also has a native liveness check for the persisted config
 and init process; the `health-probe` sidecar verifies the HTTP endpoint without
-requiring `curl` or `wget` in the minimal CPAPI image. Verify the complete
+requiring `curl` or `wget` in the minimal CPAPI image. `logging-to-file` is
+enabled by default, so CPAPI writes its normal application and access lines to
+`DATA_ROOT/cpapi/logs/main.log` (the container sets `WRITABLE_PATH=/runtime`
+so this is persistent); upstream rotation and the configured 50 MiB total-
+directory cap bound local usage. Access lines contain the status,
+latency, method, path, and client IP. Leader and Follower Caddy instances
+overwrite `CF-Connecting-IP`, `X-Forwarded-For`, and `X-Real-IP` from their
+verified `{client_ip}` before proxying, so CPAPI receives the real Cloudflare
+client address instead of the Leader address and cannot accept a forged public
+header. Full `request-log` capture stays disabled because it can contain request
+and response bodies. Override `CPAPI_LOGGING_TO_FILE` or
+`CPAPI_LOGS_MAX_TOTAL_SIZE_MB` in the node's runtime environment only when a
+reviewed operational need requires different retention. Verify the complete
 project state with:
 
 ```bash
@@ -498,9 +510,13 @@ ssh root@<node> 'tail -n 240 /opt/apps/llm-hub-lite/shared/logs/deploy.log'
 ```
 
 OpenObserve collects platform-labelled Docker logs from every VPS. Woodpecker,
-Aichorouter, CPAPI, Cursorapi, LibreChat, Caddy, and Beszel containers are
-collected unless they carry the opt-out label. Pigeon is enrolled when it is enabled. The
-short-lived deployment runner is intentionally
+Aichorouter, Cursorapi, LibreChat, Caddy, and Beszel containers are collected
+unless they carry the opt-out label. Pigeon is enrolled when it is enabled.
+CPAPI intentionally sends its ongoing application/access output to the bounded
+node-local `logs/main.log` when file logging is enabled, so those lines are not
+part of its Docker stdout stream; startup failures before file output is
+configured remain visible through Docker logs. The short-lived deployment
+runner is intentionally
 excluded because `platform-submit` already streams its complete log into the
 Woodpecker step. The dedicated collector credentials are write-only; the
 OpenObserve root password is never distributed to Followers. The pipeline log

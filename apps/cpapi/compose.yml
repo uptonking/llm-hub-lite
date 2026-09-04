@@ -16,6 +16,9 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
       GOMAXPROCS: ${CPAPI_GOMAXPROCS:-1}
       GOMEMLIMIT: ${CPAPI_GOMEMLIMIT:-192MiB}
+      # CLIProxyAPI resolves file logs beneath WRITABLE_PATH. Keep them on the
+      # persistent /runtime bind mount instead of the image filesystem.
+      WRITABLE_PATH: /runtime
     working_dir: /CLIProxyAPI
     command:
       - sh
@@ -83,9 +86,13 @@ configs:
         enabled: ${CPAPI_PLUGINS_ENABLED:-true}
         dir: "/runtime/plugins"
       commercial-mode: true
-      logging-to-file: false
-      logs-max-total-size-mb: 50
+      # Keep the bounded application access log on persistent storage. It
+      # includes status, latency, method, path, and Gin's verified client IP;
+      # full request/response logging remains disabled to avoid storing bodies.
+      logging-to-file: ${CPAPI_LOGGING_TO_FILE:-true}
+      logs-max-total-size-mb: ${CPAPI_LOGS_MAX_TOTAL_SIZE_MB:-50}
       error-logs-max-files: 5
+      request-log: false
       usage-statistics-enabled: false
       request-retry: 1
       max-retry-credentials: 2

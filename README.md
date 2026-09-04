@@ -523,7 +523,11 @@ by `CPAPI_MANAGEMENT_KEY` . CPAPI has no host-published ports and no Redis or
 database dependency; its default profile is capped at 256 MiB and 0.25 CPU.
 Its native container healthcheck verifies the persisted configuration and
 process liveness, while the small pinned `health-probe` sidecar verifies
-`/healthz` over the private network.
+`/healthz` over the private network. Application access logging is persisted by
+default under the node-local CPAPI data directory with a 50 MiB total cap. Each
+line includes the client IP verified and canonicalized by both Caddy hops; full
+request/response logging remains disabled so bodies and authorization headers
+are not written to these files.
 
 Cursorapi is a separate ephemeral singleton at `cursorapi.aichorage.de` . Its
 target is stored in `config/cluster/apps/cursorapi.policy` and defaults to

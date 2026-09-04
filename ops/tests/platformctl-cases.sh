@@ -452,6 +452,7 @@ grep -Fq 'oom={{.State.OOMKilled}}' "$repo_root/ops/platformctl.sh"
 grep -Fq 'LibreChat Upstash Redis URI must use TLS (rediss://)' "$repo_root/ops/platformctl.sh"
 [[ -f "$tmp/app/shared/runtime/config/Caddyfile" ]]
 grep -Fq 'cpapi.localhost' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
+grep -Fq 'import forward_verified_client_ip' "$tmp/app/shared/runtime/config/routes.d/cpapi.caddy"
 grep -Fq 'lb_policy random_choose 2' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'header_up Host {http.reverse_proxy.upstream.hostport}' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'reverse_proxy https://worker1-aichorouter-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/aichorouter.caddy"
