@@ -14,8 +14,13 @@ sha="${2:-}"
 }
 
 controller_source="${PLATFORM_CONTROLLER_SOURCE:-/opt/platform/control/current/ops/deploy-controller.sh}"
+platformctl_source="${PLATFORMCTL_SOURCE:-/opt/platform/control/current/ops/platformctl.sh}"
 if [[ ! -r "$controller_source" ]] || ! grep -q 'control-sync)' "$controller_source"; then
-	printf 'installed deployment controller is too old for %s; rerun ops/bootstrap-vps.sh in repair mode on this node\n' "$mode" >&2
+	printf 'validated deployment controller is unavailable or too old for %s: %s\n' "$mode" "$controller_source" >&2
+	exit 1
+fi
+if [[ ! -r "$platformctl_source" ]]; then
+	printf 'validated platformctl is unavailable: %s\n' "$platformctl_source" >&2
 	exit 1
 fi
 
@@ -84,8 +89,8 @@ docker run -d --name "$job" \
 	-e DEPLOY_PIPELINE="${CI_PIPELINE_NUMBER:-${CI_PIPELINE:-unknown}}" \
 	-e DEPLOY_BUILD="${CI_BUILD_NUMBER:-${CI_BUILD:-unknown}}" \
 	-e DEPLOY_DEBUG_LEVEL="${DEPLOY_DEBUG_LEVEL:-${PLATFORM_DEBUG_LEVEL:-off}}" \
-	-v /usr/local/bin/platformctl:/usr/local/bin/platformctl:ro \
-	-v /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro \
+	-v "$platformctl_source:/usr/local/bin/platformctl:ro" \
+	-v "$controller_source:/usr/local/bin/deploy-controller:ro" \
 	-v /usr/local/bin/git-auth.sh:/usr/local/bin/git-auth.sh:ro \
 	-v /usr/local/bin/backup-platform:/usr/local/bin/backup-platform:ro \
 	"$image" /usr/local/bin/deploy-controller "$mode" "$sha" >/dev/null

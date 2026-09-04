@@ -109,10 +109,27 @@ if repair_woodpecker_agent_identity woodpecker-worker; then
 fi
 [[ -s "$tmp/agent/agent.conf" ]]
 
+# A generic health failure must fail closed. Recreating an unchanged Caddy,
+# controller, or agent can interrupt the control plane that owns this command.
+: >"$tmp/compose.log"
+rm -f -- "$COMPOSE_UP_MARKER"
+compose_command=("$tmp/bin/compose")
+if PLATFORM_COMPOSE_PROJECT=caddy compose_up_wait >/dev/null 2>&1; then
+	printf 'generic Compose failure triggered an implicit retry\n' >&2
+	exit 1
+fi
+[[ "$(grep -c 'up -d --pull never --wait' "$tmp/compose.log")" == 1 ]]
+if grep -Fq -- '--force-recreate' "$tmp/compose.log"; then
+	printf 'generic Compose failure force-recreated an unchanged project\n' >&2
+	exit 1
+fi
+
 # A failed Compose health wait must quarantine the stale identity and retry
 # without pulling mutable images.
 printf 'agent-id=4\n' >"$tmp/agent/agent.conf"
 export WOODPECKER_STALE_LOG=1
+: >"$tmp/compose.log"
+rm -f -- "$COMPOSE_UP_MARKER"
 compose_command=("$tmp/bin/compose")
 PLATFORM_COMPOSE_PROJECT=woodpecker-worker compose_up_wait
 [[ ! -e "$tmp/agent/agent.conf" ]]

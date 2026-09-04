@@ -53,7 +53,7 @@ never removes hand-authored workflows.
   and changed paths in Woodpecker Activity. This gives webhook and push
   visibility without deploying unrelated changes.
 
-  Foundation runtime changes use generated push workflows (`foundation-reconcile-<node>`) chained in node order. Each downstream foundation job marks the previous job optional, so a broken foundation node does not prevent later nodes or consumer jobs from reconciling. Controller/runner changes still use the manual foundation/runner workflows. If Woodpecker reports no pipeline at
+  Reloadable ingress changes (`config/Caddyfile` and `config/foundation-routes.d/**`) use generated push workflows (`foundation-reconcile-<node>`) chained Leader-first. They validate, rewrite the runtime Caddy tree, and reload Caddy without recreating foundation containers. Foundation Compose, image, environment-template, and controller/runner changes use reviewed manual foundation/runner workflows instead. A foundation upgrade computes the affected Compose projects and recreates only those projects; it refuses to recreate Caddy or Woodpecker from the Woodpecker job that depends on them, so that disruptive stage must be run locally on the target node against the committed SHA. If Woodpecker reports no pipeline at
   all for a push, check the webhook delivery and the Leader's
   `platform-woodpecker-repair.service`; a repaired hook should show a new
   `POST /api/hook` delivery in GitHub.
@@ -75,6 +75,8 @@ never removes hand-authored workflows.
 
 Cluster inventory, Leader policy, and foundation-policy changes use a separate
 generated chain, `cluster-reconcile-leader` followed by each active Follower.
+Ingress and foundation implementation paths are deliberately excluded from this
+chain so one push cannot schedule overlapping reconciles on the same node.
 It runs the same commit on each node and is the normal push-driven path for
 enabling or disabling foundation services and activating joining nodes. It
 refuses `LEADER_NODE_ID` changes; use bootstrap repair for a break-glass Leader
@@ -206,9 +208,16 @@ stale instances only after publication succeeded.
   `foundation-upgrade-leader` → `foundation-upgrade-worker-1` →
   `foundation-upgrade-worker-2` → `foundation-upgrade-worker-3` chain, the `runner-upgrade-*` chain (rebuilds
   the deploy-runner image), `rollback-*` , and the manual
-  `consumer-secrets-<app>-<node>` workflows. A push that mixes consumer and
-  foundation implementation files is rejected by the scope guard; split it
-  and apply the foundation commit first.
+  `consumer-secrets-<app>-<node>` workflows. The deployer executes
+  `deploy-controller` and `platformctl` from the validated `control/current`
+  release, not stale `/usr/local/bin` copies. If a selected foundation change
+  would recreate the target node's Caddy or Woodpecker process, the workflow
+  fails closed: SSH to that node during an approved maintenance window and run
+  `/usr/local/bin/platform-submit foundation-upgrade <full-commit-sha>` locally,
+  then verify `platformctl health` before proceeding to the next node. Do not
+  rerun `bootstrap-vps.sh` for this normal staged upgrade. A push that mixes
+  consumer and foundation implementation files is rejected by the scope guard;
+  split it and apply the foundation commit first.
 - Each node keeps its own `current`/`previous` release pointers under
 `/opt/platform/control/` . If a node was offline, rerun the same Woodpecker
   build; the fast-forward guard lets it catch up to the newest SHA.

@@ -106,8 +106,8 @@ git -C "$work" push --quiet origin HEAD:main
 cat >"$tmp/bin/platformctl" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${PLATFORMCTL_CALL_LOG:?}"
-if [ "${PLATFORM_RECREATE_FOUNDATION:-0}" = 1 ]; then
-  printf '%s\n' "$*" >>"${FOUNDATION_RECREATE_CALL_LOG:?}"
+if [ "${PLATFORM_RECREATE_FOUNDATION:-0}" = 1 ] || [ -n "${PLATFORM_RECREATE_FOUNDATION_PROJECTS:-}" ]; then
+  printf '%s projects=%s\n' "$*" "${PLATFORM_RECREATE_FOUNDATION_PROJECTS:-all}" >>"${FOUNDATION_RECREATE_CALL_LOG:?}"
 fi
 case "$1" in
   sync) [ "${FAIL_SYNC:-0}" = 1 ] && exit 1 ;;
@@ -157,6 +157,10 @@ cp "$repo_root/ops/images.foundation.prod.env" "$config_root/images.foundation.e
 for source in "$repo_root"/ops/foundation/*.env.example; do
 	cp "$source" "$platform_root/foundation/env/$(basename "$source" .example)"
 done
+cp "$repo_root"/compose/foundation/*.yml "$platform_root/foundation/"
+cp "$repo_root"/compose/foundation/*.sh "$repo_root"/compose/foundation/*.toml "$platform_root/foundation/"
+mkdir -p "$platform_root/foundation/manifests"
+cp "$repo_root"/compose/foundation/manifests/*.env "$platform_root/foundation/manifests/"
 sed -e 's#^OBSERVER_ROOT_USER_EMAIL=.*#OBSERVER_ROOT_USER_EMAIL=observer-admin@aichorage.test#' \
 	-e 's#^OBSERVER_ROOT_USER_PASSWORD=.*#OBSERVER_ROOT_USER_PASSWORD=test-observer-password#' \
 	-e 's#^OBSERVER_INGEST_TOKEN=.*#OBSERVER_INGEST_TOKEN=o2oi_00000000000000000000000000000000#' \
@@ -401,12 +405,17 @@ if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha5" >"$tmp/deploy-clust
 fi
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
 
-# Installing foundation files replaces bind-mounted host files. The reviewed
-# foundation path must explicitly recreate containers so they cannot retain
-# an old inode after the release switch.
+# Installing a changed Caddy Compose file must recreate only Caddy. Never let
+# the Woodpecker workflow recreate its own ingress/control plane; the same
+# committed operation remains available locally during approved maintenance.
 : >"$tmp/foundation-recreate.log"
+if DEPLOY_WORKFLOW=foundation-reconcile-leader bash "$repo_root/ops/deploy-controller.sh" foundation-upgrade "$sha5" >"$tmp/deploy-foundation-self-recreate.log" 2>&1; then
+	printf 'Woodpecker foundation workflow was allowed to recreate Caddy\n' >&2
+	exit 1
+fi
+grep -Fq 'refusing to recreate caddy from the Woodpecker control plane' "$tmp/deploy-foundation-self-recreate.log"
 bash "$repo_root/ops/deploy-controller.sh" foundation-upgrade "$sha5" >/dev/null
-grep -qx 'sync foundation' "$tmp/foundation-recreate.log"
+grep -qx 'sync foundation projects=caddy' "$tmp/foundation-recreate.log"
 [[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha5" ]]
 
 # A failed upgrade must also remove an installed foundation file when it was
@@ -439,6 +448,9 @@ git -C "$work" add config/Caddyfile
 git -C "$work" -c commit.gpgsign=false commit --quiet -m consumer-ingress-scope-change
 git -C "$work" push --quiet origin HEAD:main
 sha_consumer_ingress_scope="$(git -C "$work" rev-parse HEAD)"
+: >"$tmp/foundation-recreate.log"
+DEPLOY_WORKFLOW=foundation-reconcile-leader bash "$repo_root/ops/deploy-controller.sh" foundation-upgrade "$sha_consumer_ingress_scope" >/dev/null
+[[ ! -s "$tmp/foundation-recreate.log" ]]
 CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage "$sha_consumer_ingress_scope" >"$tmp/deploy-consumer-ingress-scope.log" 2>&1
 assert_equal "$platform_root/control/releases/$sha_consumer_ingress_scope" "$(readlink "$app_root/current")" 'consumer stage must advance app release for ingress-scoped change'
 

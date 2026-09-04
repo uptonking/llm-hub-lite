@@ -139,6 +139,19 @@ mv "$tmp/caddy.env.original" "$tmp/foundation/manifests/caddy.env"
 : >"$tmp/compose.log"
 PLATFORM_RECREATE_FOUNDATION=1 bash "$repo_root/ops/platformctl.sh" sync foundation >/dev/null
 grep -Fq -- '--force-recreate --wait' "$tmp/compose.log"
+: >"$tmp/compose.log"
+PLATFORM_RECREATE_FOUNDATION_PROJECTS=caddy bash "$repo_root/ops/platformctl.sh" sync foundation >/dev/null
+[[ "$(grep -c -- '--force-recreate --wait' "$tmp/compose.log")" == 1 ]]
+grep -F 'caddy.yml' "$tmp/compose.log" | grep -Fq -- '--force-recreate --wait'
+if grep -E 'woodpecker|beszel|observer' "$tmp/compose.log" | grep -Fq -- '--force-recreate'; then
+	printf 'selective foundation reconcile recreated an unchanged project\n' >&2
+	exit 1
+fi
+if output="$(PLATFORM_RECREATE_FOUNDATION_PROJECTS='caddy,../unsafe' bash "$repo_root/ops/platformctl.sh" sync foundation 2>&1)"; then
+	printf 'platformctl accepted an unsafe foundation project list\n' >&2
+	exit 1
+fi
+grep -Fq 'PLATFORM_RECREATE_FOUNDATION_PROJECTS must be a comma-separated component list' <<<"$output"
 # The first sync above proves the production path validates before mutation.
 # Later sync cases exercise reconciliation branches against the same fixture;
 # avoid repeating the complete validator for each mocked Compose call.

@@ -310,17 +310,19 @@ apply_control_sync() {
 		write_control_sync_state failed "$sha" "$old_sha" 'unable to install control metadata' || true
 		die 'unable to install control metadata'
 	fi
-	if [[ -n "$old_current" ]] && ! atomic_link "$old_current" "$PREVIOUS"; then
-		rollback_control_sync_metadata "$stage"
-		rm -rf -- "$stage"
-		write_control_sync_state failed "$sha" "$old_sha" 'unable to update previous control pointer' || true
-		die 'unable to update previous control pointer'
-	fi
-	if ! atomic_link "$release" "$CURRENT"; then
-		rollback_control_sync_metadata "$stage"
-		rm -rf -- "$stage"
-		write_control_sync_state failed "$sha" "$old_sha" 'unable to update current control pointer' || true
-		die 'unable to update current control pointer'
+	if [[ "$old_current" != "$release" ]]; then
+		if [[ -n "$old_current" ]] && ! atomic_link "$old_current" "$PREVIOUS"; then
+			rollback_control_sync_metadata "$stage"
+			rm -rf -- "$stage"
+			write_control_sync_state failed "$sha" "$old_sha" 'unable to update previous control pointer' || true
+			die 'unable to update previous control pointer'
+		fi
+		if ! atomic_link "$release" "$CURRENT"; then
+			rollback_control_sync_metadata "$stage"
+			rm -rf -- "$stage"
+			write_control_sync_state failed "$sha" "$old_sha" 'unable to update current control pointer' || true
+			die 'unable to update current control pointer'
+		fi
 	fi
 	# This controller was loaded from the previously installed release; the
 	# command below becomes available to a newly installed controller next sync.
@@ -813,6 +815,56 @@ copy_foundation_payload() {
 	done
 }
 
+append_csv_unique() {
+	local list="$1" item="$2"
+	case ",$list," in *",$item,"*) printf '%s\n' "$list" ;; *) printf '%s%s\n' "${list}${list:+,}" "$item" ;; esac
+}
+changed_foundation_projects() {
+	local release="$1" force_all="${2:-0}" component manifest compose payload key candidate_image installed_image projects=''
+	while IFS= read -r manifest; do
+		[[ -f "$manifest" ]] || continue
+		component="$(basename "$manifest" .env)"
+		compose="$(env_value COMPOSE_FILE "$manifest")"
+		if [[ "$force_all" == 1 ]] || ! cmp -s "$manifest" "$FOUNDATION_ROOT/manifests/$component.env" || ! cmp -s "$release/compose/foundation/$compose" "$FOUNDATION_ROOT/$compose"; then
+			projects="$(append_csv_unique "$projects" "$component")"
+		fi
+		while IFS= read -r payload; do
+			payload="${payload#./}"
+			payload="${payload%:}"
+			[[ "$payload" =~ ^[A-Za-z0-9._-]+$ ]] || die "unsafe relative foundation payload in $compose: $payload"
+			cmp -s "$release/compose/foundation/$payload" "$FOUNDATION_ROOT/$payload" || projects="$(append_csv_unique "$projects" "$component")"
+		done < <(grep -oE '\./[A-Za-z0-9._-]+:' "$release/compose/foundation/$compose" 2>/dev/null | sort -u || true)
+		while IFS= read -r key; do
+			[[ -n "$key" ]] || continue
+			candidate_image="$(env_value "$key" "$release/ops/images.foundation.prod.env")"
+			installed_image="$(env_value "$key" "$FOUNDATION_IMAGE_ENV")"
+			[[ "$candidate_image" == "$installed_image" ]] || projects="$(append_csv_unique "$projects" "$component")"
+		done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
+	done < <(find "$release/compose/foundation/manifests" -mindepth 1 -maxdepth 1 -type f -name '*.env' -print | sort)
+	# Keep removed components in the transaction list. They are stopped before
+	# installation; if a later step fails, rollback restores their manifests and
+	# this list ensures their containers are recreated from the restored payload.
+	for manifest in "$FOUNDATION_ROOT"/manifests/*.env; do
+		[[ -f "$manifest" ]] || continue
+		component="$(basename "$manifest" .env)"
+		[[ -f "$release/compose/foundation/manifests/$component.env" ]] || projects="$(append_csv_unique "$projects" "$component")"
+	done
+	printf '%s\n' "$projects"
+}
+
+verify_foundation_self_recreate() {
+	local projects=",$1," component
+	[[ "${DEPLOY_WORKFLOW:-unknown}" != unknown ]] || return 0
+	if [[ "$(runtime_node_role)" == leader ]]; then
+		for component in caddy woodpecker-controller woodpecker-deployer; do
+			[[ "$projects" == *",$component,"* ]] || continue
+			die "refusing to recreate $component from the Woodpecker control plane; run this committed foundation upgrade locally on the Leader"
+		done
+	elif [[ "$projects" == *',woodpecker-worker,'* ]]; then
+		die 'refusing to recreate woodpecker-worker from its own agent; run this committed foundation upgrade locally on the Follower'
+	fi
+}
+
 pull_image() {
 	local image="$1" attempt delay
 	for attempt in 1 2 3 4 5; do
@@ -994,6 +1046,7 @@ reconcile() {
 		PLATFORM_TEST_SKIP_COMPOSE_INSPECTION="$PLATFORM_TEST_SKIP_COMPOSE_INSPECTION" \
 		PLATFORM_TEST_FAST_VALIDATE="$PLATFORM_TEST_FAST_VALIDATE" PLATFORM_TEST_ONLY_DESCRIPTOR="$PLATFORM_TEST_ONLY_DESCRIPTOR" PLATFORM_TEST_SKIP_CLUSTER_VALIDATION="$PLATFORM_TEST_SKIP_CLUSTER_VALIDATION" \
 		PLATFORM_RECREATE_FOUNDATION="${DEPLOY_RECREATE_FOUNDATION:-0}" \
+		PLATFORM_RECREATE_FOUNDATION_PROJECTS="${DEPLOY_RECREATE_FOUNDATION_PROJECTS:-}" \
 		PLATFORM_RECREATE_APPS="${DEPLOY_RECREATE_APPS:-0}" \
 		PLATFORM_DEPLOYMENT_VALIDATED="${DEPLOYMENT_VALIDATED:-0}" \
 		PLATFORM_COMPOSE_BIN="${PLATFORM_COMPOSE_BIN:-/usr/local/bin/platform-compose}" \
@@ -1048,7 +1101,7 @@ cleanup() {
 }
 
 apply() {
-	local sha="$1" mode="${2:-app}" release old_current old_control_current old_previous old_app_previous tx sync_scope foundation_changed=0 cleanup_failed=0 previous_singleton_target singleton_prepare_failed=0
+	local sha="$1" mode="${2:-app}" release old_current old_control_current old_previous old_app_previous tx sync_scope foundation_changed=0 foundation_recreate_projects='' cleanup_failed=0 previous_singleton_target singleton_prepare_failed=0
 	# Foundation upgrades install shared control logic but never start, stop, or
 	# publish singleton consumers. Their dedicated workflow owns that change.
 	[[ "$mode" == foundation ]] && DEPLOY_SKIP_SINGLETONS=1
@@ -1116,6 +1169,14 @@ apply() {
 		DEPLOYMENT_VALIDATED=1
 	fi
 	verify_woodpecker_self_disable "$old_control_current" "$release"
+	if [[ "$mode" == foundation ]]; then
+		foundation_changed=1
+		foundation_recreate_projects="$(changed_foundation_projects "$release")"
+		verify_foundation_self_recreate "$foundation_recreate_projects"
+	elif [[ "$mode" == rollback ]]; then
+		foundation_changed=1
+		foundation_recreate_projects="$(changed_foundation_projects "$release" 1)"
+	fi
 	old_previous="$(readlink "$PREVIOUS" 2>/dev/null || true)"
 	old_app_previous="$(readlink "$APP_PREVIOUS" 2>/dev/null || true)"
 	[[ "$mode" == app || "$mode" == app-upgrade ]] && verify_app_scope "$old_current" "$release" "$mode"
@@ -1151,12 +1212,14 @@ apply() {
 	[[ -d "$FOUNDATION_ROOT" ]] && cp -a "$FOUNDATION_ROOT" "$tx/foundation"
 	[[ -d "$CONTROL_ROOT/descriptors" ]] && cp -a "$CONTROL_ROOT/descriptors" "$tx/descriptors"
 	if [[ "$mode" != consumer-stage && "$mode" != consumer-publish && "$mode" != consumer-stop && "$mode" != direct-publish ]]; then
-		if [[ -n "$old_control_current" ]]; then atomic_link "$old_control_current" "$PREVIOUS"; fi
-		atomic_link "$release" "$CURRENT"
+		if [[ "$old_control_current" != "$release" ]]; then
+			if [[ -n "$old_control_current" ]]; then atomic_link "$old_control_current" "$PREVIOUS"; fi
+			atomic_link "$release" "$CURRENT"
+		fi
 		sync_node_config "$release" "${NODE_CONFIG_FILE:-$CONFIG_ROOT/node.env}"
 		refresh_descriptor_registry "$release"
 	fi
-	if [[ "$mode" != foundation && "$mode" != consumer-stop ]]; then
+	if [[ "$mode" != foundation && "$mode" != consumer-stop && "$old_current" != "$release" ]]; then
 		if [[ -n "$old_current" ]]; then atomic_link "$old_current" "$APP_PREVIOUS"; fi
 		atomic_link "$release" "$APP_CURRENT"
 	fi
@@ -1182,13 +1245,11 @@ apply() {
 	# changes are explicit app-upgrade operations so a routine push cannot
 	# silently move production to a new image set.
 	if [[ "$mode" == foundation ]]; then
-		foundation_changed=1
 		install_foundation_files "$release"
 		install -m 600 "$release/ops/images.foundation.prod.env" "$FOUNDATION_IMAGE_ENV"
 	elif [[ "$mode" == rollback ]]; then
 		# A rollback restores the complete release contract, including the
 		# foundation files and both immutable image manifests.
-		foundation_changed=1
 		install_foundation_files "$release"
 		install -m 600 "$release/ops/images.apps.prod.env" "$APP_IMAGE_ENV"
 		install -m 600 "$release/ops/images.foundation.prod.env" "$FOUNDATION_IMAGE_ENV"
@@ -1201,7 +1262,7 @@ apply() {
 	sync_scope=apps
 	[[ "$mode" == foundation ]] && sync_scope=foundation
 	[[ "$mode" == cluster-reconcile || "$mode" == rollback ]] && sync_scope=all
-	if ((singleton_prepare_failed == 0)) && prefetch_images "$mode" && DEPLOY_RECREATE_FOUNDATION="$foundation_changed" DEPLOY_SYNC_SCOPE="$sync_scope" reconcile && smoke_apps && {
+	if ((singleton_prepare_failed == 0)) && prefetch_images "$mode" && DEPLOY_RECREATE_FOUNDATION=0 DEPLOY_RECREATE_FOUNDATION_PROJECTS="$foundation_recreate_projects" DEPLOY_SYNC_SCOPE="$sync_scope" reconcile && smoke_apps && {
 		[[ "$mode" != consumer-stage ]] ||
 			SINGLETON_RELEASE_SHA="$sha" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-origin-smoke "$CONSUMER_APP_ID"
 	}; then
@@ -1229,7 +1290,7 @@ apply() {
 		DEPLOY_SKIP_SINGLETONS=0
 		PLATFORM_RECONCILE_DISABLED_SINGLETONS=0
 	fi
-	DEPLOY_RECREATE_FOUNDATION="$foundation_changed" DEPLOY_SYNC_SCOPE=all reconcile || true
+	DEPLOY_RECREATE_FOUNDATION=0 DEPLOY_RECREATE_FOUNDATION_PROJECTS="$foundation_recreate_projects" DEPLOY_SYNC_SCOPE=all reconcile || true
 	if [[ "$mode" == consumer-stage && -n "${CONSUMER_APP_ID:-}" && "$(env_value UPSTREAM_MODE "$release/apps/$CONSUMER_APP_ID/manifest.env")" == singleton ]]; then
 		SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" singleton-transition-fail "$CONSUMER_APP_ID" || true
 	fi

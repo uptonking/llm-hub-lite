@@ -245,9 +245,6 @@ when:
         - config/cluster/policy.env
         - config/cluster/nodes/**
         - config/cluster/foundation/**
-        - config/Caddyfile
-        - compose/foundation/**
-        - ops/**
       on_empty: false
 
 EOF
@@ -293,12 +290,8 @@ when:
     branch: main
     path:
       include:
-        - compose/foundation/**
         - config/Caddyfile
         - config/foundation-routes.d/**
-        - config/cluster/foundation/**
-        - ops/foundation/**
-        - ops/images.foundation.prod.env
       on_empty: false
 
 depends_on:

@@ -190,9 +190,16 @@ for node in leader worker-1 worker-2 worker-3; do
 	}
 done
 grep -Fq 'config/cluster/foundation/**' "$base/workflows/cluster-reconcile-leader.yml"
-grep -Fq 'config/Caddyfile' "$base/workflows/cluster-reconcile-leader.yml"
-grep -Fq 'compose/foundation/**' "$base/workflows/cluster-reconcile-leader.yml"
-grep -Fq 'ops/**' "$base/workflows/cluster-reconcile-leader.yml"
+if grep -Eq 'config/Caddyfile|config/foundation-routes\.d|compose/foundation|ops/\*\*' "$base/workflows/cluster-reconcile-leader.yml"; then
+	printf 'cluster reconciliation overlaps ingress or foundation implementation paths\n' >&2
+	exit 1
+fi
+grep -Fq 'config/Caddyfile' "$base/workflows/foundation-reconcile-leader.yml"
+grep -Fq 'config/foundation-routes.d/**' "$base/workflows/foundation-reconcile-leader.yml"
+if grep -Eq 'compose/foundation|ops/images\.foundation|ops/foundation|config/cluster/foundation' "$base/workflows/foundation-reconcile-leader.yml"; then
+	printf 'automatic ingress reconciliation includes disruptive foundation paths\n' >&2
+	exit 1
+fi
 grep -Fq $'depends_on:\n  - name: cluster-reconcile-leader\n    optional: true' "$base/workflows/cluster-reconcile-worker-1.yml"
 WOODPECKER_WORKFLOW_ROOT="$base/workflows" "$base/ops/generate-woodpecker-workflows.sh" --check
 

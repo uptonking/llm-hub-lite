@@ -494,7 +494,16 @@ for node in leader worker-1 worker-2 worker-3; do
 	}
 done
 grep -Fq 'config/cluster/foundation/**' "$repo_root/.woodpecker/cluster-reconcile-leader.yml"
-grep -Fq 'ops/**' "$repo_root/.woodpecker/cluster-reconcile-leader.yml"
+if grep -Eq 'config/Caddyfile|compose/foundation|ops/\*\*' "$repo_root/.woodpecker/cluster-reconcile-leader.yml"; then
+	printf 'cluster workflow overlaps ingress or foundation implementation paths\n' >&2
+	exit 1
+fi
+grep -Fq 'config/Caddyfile' "$repo_root/.woodpecker/foundation-reconcile-leader.yml"
+grep -Fq 'config/foundation-routes.d/**' "$repo_root/.woodpecker/foundation-reconcile-leader.yml"
+if grep -Eq 'compose/foundation|ops/images\.foundation|ops/foundation|config/cluster/foundation' "$repo_root/.woodpecker/foundation-reconcile-leader.yml"; then
+	printf 'automatic ingress workflow includes disruptive foundation paths\n' >&2
+	exit 1
+fi
 grep -Fq $'depends_on:\n  - name: cluster-reconcile-leader\n    optional: true' "$repo_root/.woodpecker/cluster-reconcile-worker-1.yml"
 for compose_file in "$repo_root"/compose/foundation/*.yml; do
 	grep -Fq 'mem_limit:' "$compose_file"

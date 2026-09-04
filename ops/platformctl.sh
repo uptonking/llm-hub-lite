@@ -1826,11 +1826,8 @@ compose_up_wait() {
 		fi
 		return 0
 	fi
-	printf 'platformctl: project did not become healthy; recreating it once\n' >&2
-	if ! "${compose_command[@]}" up -d --pull never --force-recreate --wait --wait-timeout "$COMPOSE_WAIT_TIMEOUT" "$@"; then
-		report_compose_failure
-		return 1
-	fi
+	printf 'platformctl: project did not become healthy; refusing to force-recreate an unchanged project\n' >&2
+	return 1
 }
 start_project() {
 	local p="$1"
@@ -2040,8 +2037,12 @@ retire_node() {
 	done <<<"$(all_projects | awk '{ item[NR]=$0 } END { for (i=NR; i>0; i--) print item[i] }')"
 	printf 'retired node %s; persistent application and foundation data were retained\n' "$(node_id)"
 }
+foundation_recreate_requested() {
+	local project="$1" requested=",${PLATFORM_RECREATE_FOUNDATION_PROJECTS:-},"
+	[[ "${PLATFORM_RECREATE_FOUNDATION:-0}" == 1 || "$requested" == *",$project,"* ]]
+}
 sync() {
-	local scope="${1:-all}" p scoped_app='' route_only=0
+	local scope="${1:-all}" p scoped_app='' route_only=0 recreate_projects="${PLATFORM_RECREATE_FOUNDATION_PROJECTS:-}"
 	case "$scope" in
 	apps | foundation | all) ;;
 	app:*)
@@ -2062,6 +2063,7 @@ sync() {
 	*) die 'sync scope must be apps, foundation, all, app:<id>, or route:<id>' ;;
 	esac
 	[[ "${PLATFORM_RECREATE_FOUNDATION:-0}" == 0 || "${PLATFORM_RECREATE_FOUNDATION:-0}" == 1 ]] || die 'PLATFORM_RECREATE_FOUNDATION must be 0 or 1'
+	[[ -z "$recreate_projects" || "$recreate_projects" =~ ^[a-z][a-z0-9-]*(,[a-z][a-z0-9-]*)*$ ]] || die 'PLATFORM_RECREATE_FOUNDATION_PROJECTS must be a comma-separated component list'
 	[[ "${PLATFORM_RECREATE_APPS:-0}" == 0 || "${PLATFORM_RECREATE_APPS:-0}" == 1 ]] || die 'PLATFORM_RECREATE_APPS must be 0 or 1'
 	reconcile_caddy_udp_policy
 	if [[ "$PLATFORM_DEPLOYMENT_VALIDATED" == 1 ]]; then
@@ -2082,8 +2084,8 @@ sync() {
 	if [[ "$scope" == foundation || "$scope" == all ]]; then
 		while IFS= read -r p; do
 			[[ -n "$p" ]] || continue
-			if [[ "${PLATFORM_RECREATE_FOUNDATION:-0}" == 1 ]]; then
-				printf 'Recreating foundation project to apply installed configuration: %s\n' "$p"
+			if foundation_recreate_requested "$p"; then
+				printf 'Recreating changed foundation project: %s\n' "$p"
 				recreate_project "$p"
 			else
 				start_project "$p"
