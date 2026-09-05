@@ -59,16 +59,12 @@ if [[ -n "$expected_image_id" ]]; then
 fi
 job="llm-hub-lite-platform-apply-$(printf '%s' "$mode-$sha" | tr -c 'A-Za-z0-9_.-' '-')"
 docker rm -f "$job" >/dev/null 2>&1 || true
-log_pid=''
 cleanup_runner() {
 	local status="${1:-$?}"
 	# Woodpecker can cancel a step while this wrapper is waiting on Docker. The
 	# deployment container must be removed in that case or its child controller
 	# can retain the platform flock and block all later pushes indefinitely.
 	trap - EXIT INT TERM
-	if [[ -n "$log_pid" ]]; then
-		kill "$log_pid" >/dev/null 2>&1 || true
-	fi
 	docker rm -f "$job" >/dev/null 2>&1 || true
 	exit "$status"
 }
@@ -112,18 +108,13 @@ if [[ "$run_status" -ne 0 ]]; then
 	fi
 	exit "$run_status"
 fi
-docker logs -f "$job" &
-log_pid=$!
 status=0
 wait_result="$(docker wait "$job")" || status=$?
 stream_status=0
-if [[ -n "$log_pid" ]]; then
-	# Descendants of the runner can inherit Docker's log pipe, leaving
-	# `docker logs -f` open after PID 1 exits. The wait result is authoritative;
-	# stop the follower now so CI cannot hang until its step timeout.
-	kill "$log_pid" >/dev/null 2>&1 || true
-	wait "$log_pid" 2>/dev/null || stream_status=$?
-fi
+# Fetch the completed log after the container exits. Following a Docker log
+# stream can remain open when a child inherits the pipe, causing CI to hang
+# even though the deployment runner has already returned.
+docker logs "$job" || stream_status=$?
 if [[ "$status" -eq 0 ]]; then
 	[[ "$wait_result" =~ ^[0-9]+$ ]] || {
 		printf 'deployment runner returned an invalid status: %s\n' "$wait_result" >&2
