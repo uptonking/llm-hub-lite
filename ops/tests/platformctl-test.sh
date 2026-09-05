@@ -113,7 +113,7 @@ cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
-  *" exec -T caddy wget "*) printf '%s\n' '{"status":"ok"}'; exit 0;;
+  *" ps -q caddy"*) printf 'caddy-container\n'; exit 0;;
   *"-p app-verge "*" ps --status running --services"*) printf 'verge\n'; exit 0;;
   *"-p app-verge "*" ps -q verge"*) printf 'verge-container\n'; exit 0;;
   *"-p app-verge "*" port --protocol udp verge 443"*) printf '%s\n' "${DIRECT_PORT_BIND:-0.0.0.0:443}"; exit 0;;
@@ -181,6 +181,8 @@ case "$*" in
     ;;
 esac
 case "$*" in
+  *"inspect --format"*caddy-container*) printf '172.30.0.5\n'; exit 0;;
+  *"run --rm --pull=never --network platform_edge"*curlimages/curl*) printf '%s\n' '{"status":"ok"}'; exit 0;;
   *"inspect --format"*aichorouter*)
     [ "${CONSUMER_UNHEALTHY:-0}" = 1 ] && printf 'running unhealthy\n' && exit 0
     ;;

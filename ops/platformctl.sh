@@ -2624,7 +2624,7 @@ singleton_prepare() {
 	printf 'archived previous singleton data at %s and created fresh path %s\n' "$archive" "$root"
 }
 singleton_origin_smoke() {
-	local d="$1" target origin_key origin health expected response journal release
+	local d="$1" target origin_key origin health expected response journal release probe_image caddy_id caddy_ip
 	[[ "$(node_role)" == follower ]] || die 'singleton origin smoke must run on a follower'
 	d="$(singleton_descriptor "$d")"
 	target="$(app_target_node "$d")"
@@ -2637,13 +2637,18 @@ EOF
 	expected="$(descriptor_value "$d" HEALTH_EXPECT)"
 	[[ -n "$origin" && -n "$health" ]] || die "singleton origin smoke is missing origin or health path: $(basename "$d")"
 	# The follower firewall intentionally permits published HTTPS only from the
-	# Leader. Probe Caddy from its own container so this smoke validates the
-	# complete route without relying on a host-published loopback port or public
-	# Cloudflare hairpinning. The Host header selects the origin route; TLS
-	# verification is relaxed because the request is local to the Caddy container.
+	# Leader. Probe Caddy through the platform edge network so this smoke avoids
+	# host-published loopback ports and public Cloudflare hairpinning while still
+	# using the origin hostname as both TLS SNI and HTTP Host.
 	if [[ "$(node_role)" == follower ]]; then
+		probe_image="$(env_value HEALTH_PROBE_IMAGE "$APP_IMAGE_ENV")"
+		[[ -n "$probe_image" ]] || die 'singleton origin smoke probe image is missing'
 		foundation_compose caddy
-		response="$("${compose_command[@]}" exec -T caddy wget -q -O - --no-check-certificate --header="Host: $origin" "https://127.0.0.1${health}")" || die "singleton origin is unhealthy: $origin"
+		caddy_id="$("${compose_command[@]}" ps -q caddy 2>/dev/null | head -n1)"
+		[[ -n "$caddy_id" ]] || die 'singleton origin smoke could not find the Caddy container'
+		caddy_ip="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$caddy_id" 2>/dev/null || true)"
+		[[ "$caddy_ip" =~ ^[0-9a-fA-F:.]+$ ]] || die 'singleton origin smoke could not determine the Caddy container address'
+		response="$(docker run --rm --pull=never --network "$(edge_network)" "$probe_image" --noproxy '*' --resolve "$origin:443:$caddy_ip" -k -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}")" || die "singleton origin is unhealthy: $origin"
 	else
 		response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}")" || die "singleton origin is unhealthy: $origin"
 	fi

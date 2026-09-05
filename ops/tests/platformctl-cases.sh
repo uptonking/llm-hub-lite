@@ -374,6 +374,13 @@ fi
 # be fully evaluated and its move transaction must still be journaled.
 install_test_node worker-2
 : >"$tmp/compose.log"
+: >"$tmp/docker.log"
+env SINGLETON_RELEASE_SHA=test bash "$repo_root/ops/platformctl.sh" singleton-origin-smoke aichor
+grep -Fq -- 'ps -q caddy' "$tmp/compose.log"
+grep -Fq -- 'inspect --format {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} caddy-container' "$tmp/docker.log"
+grep -Fq -- 'run --rm --pull=never --network platform_edge' "$tmp/docker.log"
+grep -Fq -- '--resolve worker2-aichor.example.invalid:443:172.30.0.5' "$tmp/docker.log"
+: >"$tmp/compose.log"
 PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_ONLY_DESCRIPTOR=wapdf PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_ONLY_APP_ID=wapdf PLATFORM_ONLY_ROUTE_APP_ID=wapdf bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'app-wapdf' "$tmp/compose.log"
 if grep -Fq "$tmp/config/wapdf.env" "$tmp/compose.log"; then
