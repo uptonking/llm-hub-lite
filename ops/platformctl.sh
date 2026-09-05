@@ -2688,7 +2688,7 @@ singleton_restore_route() {
 	printf 'restored previous Leader route for singleton %s\n' "$(basename "$d")" >&2
 }
 singleton_switch() {
-	local d="$1" target origin_key origin public_key public_url enabled public_host domain journal release previous state_file health expected response route backup missing backup_tmp switch_failed=0
+	local d="$1" target origin_key origin public_key public_url enabled public_host domain journal release previous state_file health expected response route backup missing backup_tmp switch_failed=0 journal_target journal_release journal_phase
 	[[ "$(node_role)" == leader ]] || die 'singleton switch must run on the Leader'
 	d="$(singleton_descriptor "$d")"
 	target="$(app_target_node "$d")"
@@ -2710,10 +2710,21 @@ EOF
 	health="$(descriptor_value "$d" HEALTH_URL)"
 	expected="$(descriptor_value "$d" HEALTH_EXPECT)"
 	[[ -n "$origin" && -n "$health" ]] || die "singleton switch is missing origin or health path: $(basename "$d")"
-	response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
-	[[ -z "$expected" || "$response" == *"$expected"* ]] || die "singleton origin response did not match HEALTH_EXPECT: $(basename "$d")"
-
 	install -d -m 700 "$SINGLETON_STATE_ROOT"
+	journal="$(singleton_transition_file "$d")"
+	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
+	journal_target="$(transition_value NEW_TARGET "$journal")"
+	journal_release="$(transition_value RELEASE_SHA "$journal")"
+	journal_phase="$(transition_value PHASE "$journal")"
+	# Stage performs the follower-local origin check through the shared Docker
+	# edge network. Reuse that attestation for the same target/release so
+	# publication does not depend on a newly-issued public origin certificate.
+	if [[ "$journal_target" == "$target" && "$journal_release" == "$release" && "$journal_phase" == origin-healthy ]]; then
+		printf 'reusing follower origin health attestation: %s\n' "$origin"
+	else
+		response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
+		[[ -z "$expected" || "$response" == *"$expected"* ]] || die "singleton origin response did not match HEALTH_EXPECT: $(basename "$d")"
+	fi
 	route="$RUNTIME_ROOT/config/routes.d/$(basename "$d").caddy"
 	backup="$(singleton_route_backup_file "$d")"
 	missing="$(singleton_route_missing_file "$d")"
@@ -2729,8 +2740,6 @@ EOF
 		chmod 600 "$missing"
 	fi
 
-	journal="$(singleton_transition_file "$d")"
-	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
 	state_file="$(singleton_state_file "$d")"
 	previous="$(cat "$state_file" 2>/dev/null || true)"
 	if [[ "$(transition_value NEW_TARGET "$journal")" != "$target" || "$(transition_value RELEASE_SHA "$journal")" != "$release" ]]; then

@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2154 # tmp and repo_root are initialized by platformctl-test.sh
 
-# Public endpoint declarations are the single source for both Caddy routes and
-# Compose URL variables. Reject malformed, duplicate, missing, and unused
-# mappings before a release can mutate runtime state.
 aichorouter_manifest="$tmp/control/current/apps/aichorouter/manifest.env"
 cp "$aichorouter_manifest" "$tmp/aichorouter.manifest.original"
 assert_invalid_public_endpoints() {
@@ -22,8 +19,6 @@ assert_invalid_public_endpoints 'OTHER_SITE|aichorouter' 'ROUTE_GROUPS public ke
 assert_invalid_public_endpoints 'AICHOROUTER_SITE|aichorouter;OTHER_SITE|other' 'PUBLIC_ENDPOINTS key is absent from ROUTE_GROUPS'
 mv "$tmp/aichorouter.manifest.original" "$aichorouter_manifest"
 
-# Origin records are DNS-only routing identities. Reject hand-edited IP
-# literals and malformed/uppercase names before Caddy can publish them.
 worker_node="$tmp/control/current/config/cluster/nodes/worker-1.env"
 cp "$worker_node" "$tmp/worker-1.node.original"
 assert_invalid_origin_host() {
@@ -40,8 +35,6 @@ assert_invalid_origin_host '192.0.2.1' 'invalid origin host NODE_AICHOROUTER_ORI
 assert_invalid_origin_host 'Worker1-aichorouter-origin.example.invalid' 'invalid origin host NODE_AICHOROUTER_ORIGIN_HOST for worker-1'
 mv "$tmp/worker-1.node.original" "$worker_node"
 
-# Restic backup is enabled by default, but a node may opt out explicitly. A
-# malformed value must fail control validation before the node is reconciled.
 cp "$worker_node" "$tmp/worker-1.backup-policy.original"
 printf 'BACKUP_ENABLED=maybe\n' >>"$worker_node"
 if output="$(PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_library aichorouter 1 1 0 1 2>&1)"; then
@@ -51,8 +44,6 @@ fi
 grep -Fq 'BACKUP_ENABLED must be true or false: worker-1' <<<"$output"
 mv "$tmp/worker-1.backup-policy.original" "$worker_node"
 
-# Node-local defaults are explicit, single-line values and may not overwrite
-# identity or role fields used by bootstrap and workflow routing.
 newapi_manifest="$tmp/control/current/apps/newapi/manifest.env"
 cp "$newapi_manifest" "$tmp/newapi.manifest.original"
 assert_invalid_node_defaults() {
@@ -377,7 +368,7 @@ install_test_node worker-2
 : >"$tmp/docker.log"
 env SINGLETON_RELEASE_SHA=test bash "$repo_root/ops/platformctl.sh" singleton-origin-smoke aichor
 grep -Fq -- 'run --rm --pull=never --network platform_edge' "$tmp/docker.log"
-grep -Fq -- '-H Host: worker2-aichor.example.invalid http://aichor:6767/api/health' "$tmp/docker.log"
+grep -Fq -- '-H Host: worker2-aichor-origin.aichorage.de http://aichor:6767/api/health' "$tmp/docker.log"
 : >"$tmp/compose.log"
 PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=0 PLATFORM_TEST_ONLY_DESCRIPTOR=wapdf PLATFORM_TEST_SKIP_RENDER=0 PLATFORM_ONLY_APP_ID=wapdf PLATFORM_ONLY_ROUTE_APP_ID=wapdf bash "$repo_root/ops/platformctl.sh" validate
 grep -Fq 'app-wapdf' "$tmp/compose.log"
@@ -526,6 +517,8 @@ grep -Fq 'reverse_proxy https://worker2-cpapi-origin.aichorage.de' "$tmp/app/sha
 cmp -s "$tmp/librechat-route.before-switch" "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 [[ ! -e "$tmp/config/singleton-state/cpapi.previous-target" ]]
 grep -qx 'PHASE=switched' "$tmp/config/singleton-state/cpapi.transition.env"
+
+source "$repo_root/ops/tests/platformctl-singleton-cases.sh"
 
 # Publication completes the Leader's route transaction. The final generated job
 # runs on the selected target and closes that target's matching local journal.
