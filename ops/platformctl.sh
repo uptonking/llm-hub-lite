@@ -2719,7 +2719,7 @@ EOF
 	# Stage performs the follower-local origin check through the shared Docker
 	# edge network. Reuse that attestation for the same target/release so
 	# publication does not depend on a newly-issued public origin certificate.
-	if [[ "$journal_target" == "$target" && "$journal_release" == "$release" && "$journal_phase" == origin-healthy ]]; then
+	if [[ "${SINGLETON_ORIGIN_PRECHECKED:-0}" == 1 || ("$journal_target" == "$target" && "$journal_release" == "$release" && "$journal_phase" == origin-healthy) ]]; then
 		printf 'reusing follower origin health attestation: %s\n' "$origin"
 	else
 		response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"

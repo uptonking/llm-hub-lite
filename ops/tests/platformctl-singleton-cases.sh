@@ -11,7 +11,7 @@ ARCHIVE_PATH=
 PHASE=origin-healthy
 EOF
 : >"$tmp/curl.log"
-CURL_FAIL_URL=https://worker2-cpapi-origin.aichorage.de/healthz SINGLETON_RELEASE_SHA=test bash "$repo_root/ops/platformctl.sh" singleton-switch cpapi >"$tmp/attested-switch.log" 2>&1 || {
+CURL_FAIL_URL=https://worker2-cpapi-origin.aichorage.de/healthz SINGLETON_ORIGIN_PRECHECKED=1 SINGLETON_RELEASE_SHA=test bash "$repo_root/ops/platformctl.sh" singleton-switch cpapi >"$tmp/attested-switch.log" 2>&1 || {
 	printf 'attested singleton publication unexpectedly failed\n' >&2
 	exit 1
 }

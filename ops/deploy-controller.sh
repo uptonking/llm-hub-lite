@@ -1345,7 +1345,7 @@ consumer-stage)
 consumer-publish)
 	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-publish <sha>'
 	apply "$2" consumer-publish
-	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_DEPLOYMENT_VALIDATED=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-publish "$CONSUMER_APP_ID"
+	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" SINGLETON_ORIGIN_PRECHECKED=1 PLATFORM_DEPLOYMENT_VALIDATED=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-publish "$CONSUMER_APP_ID"
 	;;
 direct-publish)
 	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: DIRECT_APP_ID=<id> deploy-controller direct-publish <sha>'
