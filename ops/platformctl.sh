@@ -2640,7 +2640,9 @@ EOF
 	# Leader. Probe the local Caddy listener with the origin hostname as SNI and
 	# Host so this smoke validates the complete route without public hairpinning.
 	if [[ "$(node_role)" == follower ]]; then
-		curl_args=(--resolve "$origin:443:127.0.0.1")
+		# CI runners may inherit HTTPS_PROXY. --resolve only changes DNS lookup;
+		# --noproxy is required to keep this health check on the follower.
+		curl_args=(--noproxy '*' --resolve "$origin:443:127.0.0.1")
 	fi
 	# A newly added origin may still be using Caddy's locally trusted
 	# certificate while ACME issuance catches up. The Leader-side public smoke
