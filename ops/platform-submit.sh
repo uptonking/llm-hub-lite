@@ -110,11 +110,6 @@ if [[ "$run_status" -ne 0 ]]; then
 fi
 status=0
 wait_result="$(docker wait "$job")" || status=$?
-stream_status=0
-# Fetch the completed log after the container exits. Following a Docker log
-# stream can remain open when a child inherits the pipe, causing CI to hang
-# even though the deployment runner has already returned.
-docker logs "$job" || stream_status=$?
 if [[ "$status" -eq 0 ]]; then
 	[[ "$wait_result" =~ ^[0-9]+$ ]] || {
 		printf 'deployment runner returned an invalid status: %s\n' "$wait_result" >&2
@@ -130,8 +125,8 @@ if [[ "$status" -eq 78 ]]; then
 	printf 'deployment skipped: commit superseded before mutation\n'
 	status=0
 fi
-[[ "$stream_status" -eq 0 ]] || docker logs "$job" || true
 if [[ "$status" -ne 0 && -x /usr/local/bin/platformctl ]]; then
+	docker logs "$job" || true
 	printf '%s\n' '--- host deployment diagnostics ---' >&2
 	if [[ -n "${CONSUMER_APP_ID:-}" ]]; then
 		/usr/local/bin/platformctl diagnose "app:${CONSUMER_APP_ID}" || true

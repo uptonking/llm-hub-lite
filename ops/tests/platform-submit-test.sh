@@ -41,7 +41,10 @@ grep -Fq -- 'llm-hub-lite/deploy-runner:0.4.0' "$tmp/docker.log"
 grep -Fq -- "$tmp/controller/deploy-controller.sh:/usr/local/bin/deploy-controller:ro" "$tmp/docker.log"
 grep -Fq -- "$tmp/controller/platformctl.sh:/usr/local/bin/platformctl:ro" "$tmp/docker.log"
 grep -Fq -- "$tmp/controller/git-auth.sh:/usr/local/bin/git-auth.sh:ro" "$tmp/docker.log"
-grep -Fq -- 'logs llm-hub-lite-platform-apply-deploy-0123456789abcdef0123456789abcdef01234567' "$tmp/docker.log"
+if grep -Fq -- 'logs llm-hub-lite-platform-apply-deploy-0123456789abcdef0123456789abcdef01234567' "$tmp/docker.log"; then
+	printf 'platform-submit collected success logs synchronously\n' >&2
+	exit 1
+fi
 grep -Fq -- 'PLATFORM_ONLY_APP_ID=' "$tmp/docker.log"
 
 : >"$tmp/firewall.log"
