@@ -2642,7 +2642,10 @@ EOF
 	if [[ "$(node_role)" == follower ]]; then
 		curl_args=(--resolve "$origin:443:127.0.0.1")
 	fi
-	response="$(curl "${curl_args[@]}" -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
+	# A newly added origin may still be using Caddy's locally trusted
+	# certificate while ACME issuance catches up. The Leader-side public smoke
+	# remains certificate-verifying; only this loopback probe is relaxed.
+	response="$(curl "${curl_args[@]}" -k -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
 	[[ -z "$expected" || "$response" == *"$expected"* ]] || die "singleton origin response did not match HEALTH_EXPECT: $(basename "$d")"
 	journal="$(singleton_transition_file "$d")"
 	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
