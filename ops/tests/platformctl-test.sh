@@ -113,6 +113,7 @@ cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
+  *" exec -T caddy wget "*) printf '%s\n' '{"status":"ok"}'; exit 0;;
   *"-p app-verge "*" ps --status running --services"*) printf 'verge\n'; exit 0;;
   *"-p app-verge "*" ps -q verge"*) printf 'verge-container\n'; exit 0;;
   *"-p app-verge "*" port --protocol udp verge 443"*) printf '%s\n' "${DIRECT_PORT_BIND:-0.0.0.0:443}"; exit 0;;

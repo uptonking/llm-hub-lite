@@ -2624,7 +2624,7 @@ singleton_prepare() {
 	printf 'archived previous singleton data at %s and created fresh path %s\n' "$archive" "$root"
 }
 singleton_origin_smoke() {
-	local d="$1" target origin_key origin health expected response journal release curl_args=()
+	local d="$1" target origin_key origin health expected response journal release
 	[[ "$(node_role)" == follower ]] || die 'singleton origin smoke must run on a follower'
 	d="$(singleton_descriptor "$d")"
 	target="$(app_target_node "$d")"
@@ -2637,17 +2637,16 @@ EOF
 	expected="$(descriptor_value "$d" HEALTH_EXPECT)"
 	[[ -n "$origin" && -n "$health" ]] || die "singleton origin smoke is missing origin or health path: $(basename "$d")"
 	# The follower firewall intentionally permits published HTTPS only from the
-	# Leader. Probe the local Caddy listener with the origin hostname as SNI and
-	# Host so this smoke validates the complete route without public hairpinning.
+	# Leader. Probe Caddy from its own container so this smoke validates the
+	# complete route without relying on a host-published loopback port or public
+	# Cloudflare hairpinning. The Host header selects the origin route; TLS
+	# verification is relaxed because the request is local to the Caddy container.
 	if [[ "$(node_role)" == follower ]]; then
-		# CI runners may inherit HTTPS_PROXY. --resolve only changes DNS lookup;
-		# --noproxy is required to keep this health check on the follower.
-		curl_args=(--noproxy '*' --resolve "$origin:443:127.0.0.1")
+		foundation_compose caddy
+		response="$("${compose_command[@]}" exec -T caddy wget -q -O - --no-check-certificate --header="Host: $origin" "https://127.0.0.1${health}")" || die "singleton origin is unhealthy: $origin"
+	else
+		response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}")" || die "singleton origin is unhealthy: $origin"
 	fi
-	# A newly added origin may still be using Caddy's locally trusted
-	# certificate while ACME issuance catches up. The Leader-side public smoke
-	# remains certificate-verifying; only this loopback probe is relaxed.
-	response="$(curl "${curl_args[@]}" -k -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}")" || die "singleton origin is unhealthy: $origin"
 	[[ -z "$expected" || "$response" == *"$expected"* ]] || die "singleton origin response did not match HEALTH_EXPECT: $(basename "$d")"
 	journal="$(singleton_transition_file "$d")"
 	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
