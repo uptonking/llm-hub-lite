@@ -6,7 +6,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 grep -Fq 'STAGE_ROOT="${BACKUP_STAGE_ROOT:-$BACKUP_ROOT/stage}"' "$repo_root/ops/backup-platform.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/pigeon" "$tmp/control/current/apps/wabase" "$tmp/control/current/apps/wapdf"
+mkdir -p "$tmp/bin" "$tmp/app" "$tmp/platform/foundation/env" "$tmp/config" "$tmp/stage" "$tmp/control/current/apps/aichorouter" "$tmp/control/current/apps/aichor" "$tmp/control/current/apps/pigeon" "$tmp/control/current/apps/wabase" "$tmp/control/current/apps/wapdf"
 printf 'test-password\n' >"$tmp/config/restic-password"
 printf 'remote-password\n' >"$tmp/config/restic-remote-password"
 cat >"$tmp/control/current/apps/aichorouter/manifest.env" <<'EOF'
@@ -19,6 +19,11 @@ cat >"$tmp/control/current/apps/pigeon/manifest.env" <<'EOF'
 RUNTIME_ENV_FILE=pigeon.env
 DATA_ROOT_REL=pigeon
 SQLITE_PATHS=outlook_accounts.db
+EOF
+cat >"$tmp/control/current/apps/aichor/manifest.env" <<'EOF'
+RUNTIME_ENV_FILE=aichor.env
+DATA_ROOT_REL=aichor
+STATE_MODE=files
 EOF
 cat >"$tmp/control/current/apps/wabase/manifest.env" <<'EOF'
 RUNTIME_ENV_FILE=wabase.env
@@ -36,12 +41,16 @@ SQLITE_GLOBS=
 EOF
 printf 'AICHOROUTER_SESSION_SECRET=test\n' >"$tmp/config/aichorouter.env"
 printf 'PIGEON_SECRET_KEY=test\n' >"$tmp/config/pigeon.env"
+printf 'AICHOR_PASSWORD=test-aichor-password\n' >"$tmp/config/aichor.env"
 printf 'WABASE_SESSION_SECRET=test\n' >"$tmp/config/wabase.env"
 printf 'OBSERVER_DATA_ROOT=%s\n' "$tmp/platform/observer-custom" >"$tmp/platform/foundation/env/observer.env"
 mkdir -p "$tmp/platform/observer-custom/data/db"
 : >"$tmp/platform/observer-custom/data/db/metadata.sqlite"
 mkdir -p "$tmp/app/shared/data/prod/pigeon"
 : >"$tmp/app/shared/data/prod/pigeon/outlook_accounts.db"
+mkdir -p "$tmp/app/shared/data/prod/aichor/workspace"
+: >"$tmp/app/shared/data/prod/aichor/daemon-keypair.json"
+: >"$tmp/app/shared/data/prod/aichor/workspace/README"
 mkdir -p "$tmp/app/shared/data/prod/wabase/docs"
 : >"$tmp/app/shared/data/prod/wabase/home.sqlite3"
 : >"$tmp/app/shared/data/prod/wabase/docs/Quarterly Plan.grist"
@@ -118,9 +127,11 @@ if grep -q -- '--skip-if-unchanged' "$tmp/restic.log"; then
 fi
 grep -q "$tmp/config/aichorouter.env" "$tmp/restic.log"
 grep -q "$tmp/config/pigeon.env" "$tmp/restic.log"
+grep -q "$tmp/config/aichor.env" "$tmp/restic.log"
 grep -qx "$tmp/app/shared/data/prod/pigeon/outlook_accounts.db" "$tmp/sqlite.log"
 grep -Fxq "$tmp/app/shared/data/prod/wabase/home.sqlite3" "$tmp/sqlite.log"
 grep -Fxq "$tmp/app/shared/data/prod/wabase/docs/Quarterly Plan.grist" "$tmp/sqlite.log"
+grep -q "$tmp/app/shared/data/prod/aichor" "$tmp/restic.log"
 grep -Fq -- "--exclude $tmp/app/shared/data/prod/wabase/home.sqlite3-wal" "$tmp/restic.log"
 grep -Fq -- "--exclude $tmp/app/shared/data/prod/wabase/docs/Quarterly Plan.grist-shm" "$tmp/restic.log"
 grep -Fq -- "--exclude $tmp/app/shared/data/prod/wabase/docs/*.grist-journal" "$tmp/restic.log"

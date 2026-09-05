@@ -103,6 +103,13 @@ worker-1), the generated chains are:
   for an enabled singleton the publish step is a health-gated
 `singleton-switch` ).
 
+- Aichor (singleton, `NODES=worker-2`):
+  `consumer-stage-aichor-worker-2` -> `consumer-publish-aichor` (Leader) ->
+  stale-node stops -> `consumer-finalize-aichor-worker-2`. The stage workflow
+  creates only worker-2's generated password; publication health-checks
+  `/api/health` through `worker2-aichor-origin.aichorage.de` before the public
+  route is changed.
+
 Every step's command is a single line:
 
 ```

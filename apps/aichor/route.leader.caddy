@@ -1,0 +1,17 @@
+{$AICHOR_SITE} {
+  import common_proxy
+  reverse_proxy {$AICHOR_UPSTREAM} {
+    fail_duration 30s
+    health_uri /api/health
+    health_interval 10s
+    health_timeout 5s
+    health_fails 3
+    health_passes 1
+    header_up Host {http.reverse_proxy.upstream.hostport}
+    import forward_verified_client_ip
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "aichor unavailable" 503
+  }
+}

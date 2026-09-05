@@ -1,0 +1,48 @@
+name: app-aichor
+services:
+  aichor:
+    image: ${AICHOR_IMAGE:?AICHOR_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: ${AICHOR_MEMORY_LIMIT:-512m}
+    cpus: ${AICHOR_CPUS:-0.50}
+    pids_limit: ${AICHOR_PIDS_LIMIT:-128}
+    # The upstream entrypoint initializes its non-root user, but bind mounts
+    # created on a fresh target start as root-owned. Fix mount ownership once,
+    # then let Paseo drop to uid/gid 1000 for the daemon itself.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mkdir -p /home/paseo /workspace; chown 1000:1000 /home/paseo /workspace; exec /usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      PASEO_HOME: /home/paseo/.paseo
+      PASEO_LISTEN: 0.0.0.0:6767
+      PASEO_PASSWORD: ${AICHOR_PASSWORD:?AICHOR_PASSWORD must be set}
+      PASEO_HOSTNAMES: ${AICHOR_HOSTNAMES:-.aichorage.de}
+      PASEO_WEB_UI_ENABLED: "true"
+      PASEO_LOG_LEVEL: ${AICHOR_LOG_LEVEL:-warn}
+      PASEO_LOG_FORMAT: ${AICHOR_LOG_FORMAT:-json}
+      PASEO_TRUSTED_PROXIES: ${AICHOR_TRUSTED_PROXIES:-loopback,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      PASEO_CORS_ORIGINS: ${AICHOR_CORS_ORIGINS:-}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/aichor:/home/paseo
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/aichor/workspace:/workspace
+    networks: [aichor_private, platform_edge]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:6767/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: aichor
+      com.aichorage.component: app-aichor
+networks:
+  aichor_private:
+    name: app-aichor_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

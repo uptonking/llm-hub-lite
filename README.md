@@ -66,6 +66,7 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - Beszel agent
     - LibreChat
     - Wapdf (BentoPDF) singleton
+    - Aichor (Paseo) singleton
     - Pigeon package retained but disabled
 - Follower worker-3:
     - Flowy (Activepieces)
@@ -98,6 +99,16 @@ Wapdf follows the same two-hop ingress pattern: the DNS-only
 `wapdf.<domain>` resolves to the Leader. It is a stateless BentoPDF singleton
 with no runtime secret, persistent payload, host port, database, or Redis
 dependency; its app container is capped at 900 MiB and 0.60 CPU.
+
+Aichor is the Paseo singleton at `aichor.aichorage.de`, targeting worker-2 by
+default. Its DNS-only origin is `worker2-aichor-origin.<domain>`; public traffic
+always enters through the Leader and then crosses the selected follower Caddy.
+Paseo state and the managed `/workspace` directory live under
+`data/prod/aichor`. The official image runs without bundled agent CLIs, host
+repository mounts, Docker socket access, or published ports, and starts with a
+512 MiB / 0.50 CPU profile. Change `NODES` in
+`config/cluster/apps/aichor.policy` to move it to another active follower; the
+move is fresh and does not copy sessions, credentials, or workspace contents.
 
 Remote Restic/R2 backup is optional. Local Restic repositories are initialized
 automatically on each VPS. If off-host recovery is required, initialize a

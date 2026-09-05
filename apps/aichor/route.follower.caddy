@@ -1,0 +1,9 @@
+{$NODE_AICHOR_ORIGIN_HOST} {
+  import common_proxy
+  reverse_proxy aichor:6767 {
+    # Paseo's terminal and agent output use long-lived streaming responses.
+    flush_interval -1
+    header_up Host {$NODE_AICHOR_ORIGIN_HOST}
+    import forward_verified_client_ip
+  }
+}

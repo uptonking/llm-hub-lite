@@ -81,6 +81,9 @@ cat >"$tmp/config/aichorouter.env" <<'EOF'
 AICHOROUTER_SESSION_SECRET=test-session-secret
 AICHOROUTER_CRYPTO_SECRET=test-crypto-secret
 EOF
+cat >"$tmp/config/aichor.env" <<'EOF'
+AICHOR_PASSWORD=test-aichor-password-0123456789abcdef
+EOF
 cat >"$tmp/config/cursorapi.env" <<'EOF'
 CURSORAPI_CURSOR_API_KEY=test-cursor-account-key
 CURSORAPI_BRIDGE_API_KEY=test-cursor-bridge-key-0123456789abcdef
@@ -101,6 +104,7 @@ NODE_CPAPI_ORIGIN_HOST=worker2-cpapi.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
+NODE_AICHOR_ORIGIN_HOST=worker2-aichor.example.invalid
 NODE_CURSORAPI_ORIGIN_HOST=worker2-cursorapi.example.invalid
 NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
 NODE_WAPDF_ORIGIN_HOST=worker2-wapdf.example.invalid
@@ -117,7 +121,7 @@ case "$*" in
   *" ps --all -q beszel-socket-proxy"*) printf 'beszel-socket-proxy\n'; exit 0;;
   *" ps --all -q health-probe"*)
     case "$*" in
-      *"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*)
+      *"-p app-aichor "*|*"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*)
         printf 'health-probe\n'
         exit 0
         ;;
@@ -145,6 +149,7 @@ case "$*" in
   *app-newapi*) printf 'newapi\n';;
   *app-cpapi*) printf 'cpapi\nhealth-probe\n';;
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
+  *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
   *app-wapdf*) printf 'wapdf\nhealth-probe\n';;

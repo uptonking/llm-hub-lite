@@ -58,6 +58,7 @@ grep -Fxq 'NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker3-chat-admin-origin.example.te
 grep -Fxq 'NODE_CURSORAPI_ORIGIN_HOST=worker3-cursorapi-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NODE_WABASE_ORIGIN_HOST=worker3-wabase-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NODE_WAPDF_ORIGIN_HOST=worker3-wapdf-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
+grep -Fxq 'NODE_AICHOR_ORIGIN_HOST=worker3-aichor-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'WOODPECKER_AGENT_LABELS=node=worker-3,deployment=true,target=production,repo=uptonking/llm-hub-lite' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NEW_API_NODE_TYPE=slave' "$fixture/config/cluster/nodes/worker-3.env"
 # Joining nodes receive only the bootstrap/control-sync workflow. Foundation

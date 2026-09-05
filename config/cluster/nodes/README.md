@@ -5,7 +5,7 @@ this directory.
 Each node must define `NODE_ID` and the origin host keys declared by the active
 app manifests. The Leader uses those origin fields from every Follower
 descriptor to render Caddy routes. LibreChat and legacy New API use
-active-active health-checked upstreams. Aichorouter, CPAPI, Cursor API Proxy,
+active-active health-checked upstreams. Aichor, Aichorouter, CPAPI, Cursor API Proxy,
 and Wapdf are enabled singleton services: each target is stored in its app policy,
 and only that Follower is deployed. Pigeon retains a `worker-2` target but is disabled by
 policy, so it has no runtime placement or workflow. Flowy (Activepieces) is an

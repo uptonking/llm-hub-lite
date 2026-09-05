@@ -141,6 +141,23 @@ bind-mounted SQLite database at `data/prod/aichorouter/aichorouter.db` , and
 no Redis, PostgreSQL, or other local dependency. `SESSION_SECRET` and `CRYPTO_SECRET` are stored in `/etc/llm-hub-lite/aichorouter.env` on the selected follower. The image is memory-capped and has no host-published port; all public traffic enters through the Leader's Caddy route. When a user enables **Record IP Address**, New API stores the address only on subsequent usage and error rows; open a row's **Details** dialog to view it. Caddy accepts `CF-Connecting-IP` only from the Cloudflare ranges declared in `config/Caddyfile`; Followers also trust the host-local `LEADER_PUBLIC_IP`. At each hop, the reusable `forward_verified_client_ip` snippet replaces `CF-Connecting-IP`, `X-Forwarded-For`, and `X-Real-IP` with Caddy's verified address. This makes the trust boundary explicit and prevents a direct origin caller from forwarding a spoofed address into New API. Keep Cloudflare's ranges synchronized with its published IP list. Existing rows are not rewritten when recording is enabled or proxy configuration changes. SQLite is intentionally local and is not replicated, so a target move is intentionally a fresh local deployment. Previous local state is retained in an archive directory until manually removed.
 For the first login, open  https://aichorouter.aichorage.de/setup/.
 
+Aichor is the official Paseo daemon and web UI at `aichor.aichorage.de`,
+enabled on `worker-2` by default. The Leader proxies to the selected
+follower's DNS-only `worker2-aichor-origin.aichorage.de` origin, while the
+follower proxies to the private `aichor:6767` alias. Paseo requires
+`PASEO_PASSWORD`; the generated `AICHOR_PASSWORD` is stored only in the
+selected follower's `/etc/llm-hub-lite/aichor.env`. `PASEO_HOSTNAMES` allows
+the public and origin names and `/api/health` remains unauthenticated for
+health gates. The official image is a single non-root container with no
+bundled Codex/Claude/OpenCode CLI, host repository, Docker socket, database,
+or published port. `/home/paseo` state and `/workspace` are persisted below
+`data/prod/aichor`; initial limits are 512 MiB, 0.50 CPU, and 128 processes.
+Move it by changing `NODES` in `config/cluster/apps/aichor.policy` and pushing
+the commit. The singleton workflow creates a fresh target and archives the old
+data; sessions, credentials, and workspace contents are never migrated
+automatically. Verify the UI, authenticated API, `/ws`, and streaming output
+after the move.
+
 Flowy is the Activepieces singleton at `flowy.aichorage.de` , enabled on the
 active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/flowy.policy` to move it to another active follower, then regenerate the reviewed workflows. Flowy uses one `WORKER_AND_APP` process with PGlite under `data/prod/flowy/config/pglite` , in-memory Redis, one worker, sandbox code-only execution, no automatic piece-catalog synchronization, and bounded memory/CPU. The default `FLOWY_FILE_STORAGE_LOCATION=S3` stores execution files in Cloudflare R2 while keeping metadata in PGlite. Warning-level logging avoids noisy periodic snapshots on a small VPS. The container is capped at 1.5 GB with a 768 MB Node heap, leaving headroom for the worker, PGlite, and native allocations; sandbox reuse is disabled so piece modules do not accumulate in a long-lived execution process. Provision `FLOWY_S3_ENDPOINT`, `FLOWY_S3_BUCKET`, `FLOWY_S3_ACCESS_KEY_ID`, and `FLOWY_S3_SECRET_ACCESS_KEY` with the generated `consumer-secrets-flowy-worker-3` workflow. These credentials are delivered only to the selected singleton follower; no Leader secret workflow is emitted. `FLOWY_ENCRYPTION_KEY` and
 `FLOWY_JWT_SECRET` are node-local. Existing DB-backed files remain readable after switching to S3; no automatic blob migration is performed. Singleton moves are fresh deployments and archive the prior local PGlite directory; backups stop the running Flowy container before copying its PGlite state. Backup staging is kept under
