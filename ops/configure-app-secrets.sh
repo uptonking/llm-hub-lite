@@ -99,6 +99,17 @@ set_key() {
 	chmod 600 "$tmp"
 	mv -f -- "$tmp" "$file"
 }
+random_hex() {
+	local bytes="$1" value=''
+	if command -v openssl >/dev/null 2>&1; then
+		openssl rand -hex "$bytes"
+		return
+	fi
+	command -v od >/dev/null 2>&1 || die 'openssl or od is required to generate secrets'
+	value="$(od -An -N "$bytes" -tx1 /dev/urandom | tr -d '[:space:]')"
+	[[ "${#value}" -eq $((bytes * 2)) ]] || die 'random secret generation returned an unexpected length'
+	printf '%s\n' "$value"
+}
 
 [[ -n "$app_id" ]] || {
 	usage
@@ -291,7 +302,7 @@ resolve_secret() {
 	if placeholder_value "$value" && csv_has "$generated_keys" "$key" && ((non_interactive == 0 || ensure_generated == 1)); then
 		bytes="$(secret_bytes "$key")"
 		[[ "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry for $key"
-		value="$(openssl rand -hex "$bytes")"
+		value="$(random_hex "$bytes")"
 	fi
 	while ! validate_secret "$key" "$value" "$min_length"; do
 		((non_interactive == 0)) || die "$key must be supplied by a protected Woodpecker secret"

@@ -51,6 +51,9 @@ grep -Fq 'target descriptor NODE_ID mismatch' "$repo_root/ops/configure-app-secr
 grep -Fq 'target node is not active' "$repo_root/ops/configure-app-secrets.sh"
 grep -Fq 'cluster policy was not changed' "$repo_root/ops/configure-app-secrets.sh"
 grep -Fq -- '--ensure-generated' "$repo_root/ops/configure-app-secrets.sh"
+grep -Fq 'random_hex()' "$repo_root/ops/configure-app-secrets.sh"
+# shellcheck disable=SC2016 # Assert the literal fallback command.
+grep -Fq 'od -An -N "$bytes" -tx1 /dev/urandom' "$repo_root/ops/configure-app-secrets.sh"
 grep -Fq 'Automatic deployment may create only explicitly node-local keys' "$repo_root/ops/configure-app-secrets.sh"
 # shellcheck disable=SC2016 # Assert the literal command in the implementation.
 grep -Fq 'node_keys="$(generated_subset "$node_keys")"' "$repo_root/ops/configure-app-secrets.sh"
