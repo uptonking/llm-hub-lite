@@ -2624,7 +2624,7 @@ singleton_prepare() {
 	printf 'archived previous singleton data at %s and created fresh path %s\n' "$archive" "$root"
 }
 singleton_origin_smoke() {
-	local d="$1" target origin_key origin health expected response journal release
+	local d="$1" target origin_key origin health expected response journal release curl_args=()
 	[[ "$(node_role)" == follower ]] || die 'singleton origin smoke must run on a follower'
 	d="$(singleton_descriptor "$d")"
 	target="$(app_target_node "$d")"
@@ -2636,7 +2636,13 @@ EOF
 	health="$(descriptor_value "$d" HEALTH_URL)"
 	expected="$(descriptor_value "$d" HEALTH_EXPECT)"
 	[[ -n "$origin" && -n "$health" ]] || die "singleton origin smoke is missing origin or health path: $(basename "$d")"
-	response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
+	# The follower firewall intentionally permits published HTTPS only from the
+	# Leader. Probe the local Caddy listener with the origin hostname as SNI and
+	# Host so this smoke validates the complete route without public hairpinning.
+	if [[ "$(node_role)" == follower ]]; then
+		curl_args=(--resolve "$origin:443:127.0.0.1")
+	fi
+	response="$(curl "${curl_args[@]}" -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
 	[[ -z "$expected" || "$response" == *"$expected"* ]] || die "singleton origin response did not match HEALTH_EXPECT: $(basename "$d")"
 	journal="$(singleton_transition_file "$d")"
 	release="${SINGLETON_RELEASE_SHA:-$(basename "$(readlink "$CONTROL_ROOT/current" 2>/dev/null || true)")}"
