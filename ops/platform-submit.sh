@@ -118,6 +118,10 @@ status=0
 wait_result="$(docker wait "$job")" || status=$?
 stream_status=0
 if [[ -n "$log_pid" ]]; then
+	# Descendants of the runner can inherit Docker's log pipe, leaving
+	# `docker logs -f` open after PID 1 exits. The wait result is authoritative;
+	# stop the follower now so CI cannot hang until its step timeout.
+	kill "$log_pid" >/dev/null 2>&1 || true
 	wait "$log_pid" 2>/dev/null || stream_status=$?
 fi
 if [[ "$status" -eq 0 ]]; then
