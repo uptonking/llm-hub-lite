@@ -1062,7 +1062,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist
+	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -1077,6 +1077,10 @@ validate_descriptor() {
 	leader-proxy | direct | direct-and-proxy) ;;
 	*) die "unsupported INGRESS_MODE in $d/manifest.env" ;;
 	esac
+	if [[ "$(descriptor_value "$d" UPSTREAM_MODE)" == singleton && "$ingress" != direct ]]; then
+		health_port="$(descriptor_value "$d" HEALTH_PORT)"
+		[[ "$health_port" =~ ^[1-9][0-9]*$ && "$health_port" -le 65535 ]] || die "HEALTH_PORT must be a valid TCP port for singleton app: $d"
+	fi
 	if [[ "$ingress" == direct || "$ingress" == direct-and-proxy ]]; then
 		listeners="$(descriptor_value "$d" DIRECT_LISTENERS)"
 		[[ -n "$listeners" ]] || die "DIRECT_LISTENERS is required for direct app: $d"
@@ -2624,7 +2628,7 @@ singleton_prepare() {
 	printf 'archived previous singleton data at %s and created fresh path %s\n' "$archive" "$root"
 }
 singleton_origin_smoke() {
-	local d="$1" target origin_key origin health expected response journal release probe_image
+	local d="$1" target origin_key origin health expected response journal release probe_image alias port probe_url
 	[[ "$(node_role)" == follower ]] || die 'singleton origin smoke must run on a follower'
 	d="$(singleton_descriptor "$d")"
 	target="$(app_target_node "$d")"
@@ -2635,7 +2639,9 @@ EOF
 	origin="$(node_value "$origin_key")"
 	health="$(descriptor_value "$d" HEALTH_URL)"
 	expected="$(descriptor_value "$d" HEALTH_EXPECT)"
-	[[ -n "$origin" && -n "$health" ]] || die "singleton origin smoke is missing origin or health path: $(basename "$d")"
+	alias="$(descriptor_value "$d" NETWORK_ALIAS)"
+	port="$(descriptor_value "$d" HEALTH_PORT)"
+	[[ -n "$origin" && -n "$health" && -n "$alias" && "$port" =~ ^[0-9]+$ ]] || die "singleton origin smoke is missing origin, health, alias, or port: $(basename "$d")"
 	# The follower firewall intentionally permits published HTTPS only from the
 	# Leader. Probe Paseo through the shared edge network so this smoke avoids
 	# host-published ports, public Cloudflare hairpinning, and a dependency on
@@ -2645,7 +2651,8 @@ EOF
 	if [[ "$(node_role)" == follower ]]; then
 		probe_image="$(env_value HEALTH_PROBE_IMAGE "$APP_IMAGE_ENV")"
 		[[ -n "$probe_image" ]] || die 'singleton origin smoke probe image is missing'
-		response="$(docker run --rm --pull=never --network "$(edge_network)" "$probe_image" --noproxy '*' -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 -H "Host: $origin" "http://aichor:6767${health}")" || die "singleton origin is unhealthy: $origin"
+		probe_url="http://${alias}:${port}${health}"
+		response="$(docker run --rm --pull=never --network "$(edge_network)" "$probe_image" --noproxy '*' -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 -H "Host: $origin" "$probe_url")" || die "singleton origin is unhealthy: $origin"
 	else
 		response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}")" || die "singleton origin is unhealthy: $origin"
 	fi

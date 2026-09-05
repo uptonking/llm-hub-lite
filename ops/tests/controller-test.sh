@@ -91,6 +91,8 @@ grep -q '^GENERATED_SECRET_BYTES=AICHOR_PASSWORD:32$' "$repo_root/apps/aichor/ma
 grep -q '^SECRET_MIN_LENGTHS=AICHOR_PASSWORD:32$' "$repo_root/apps/aichor/manifest.env"
 grep -q '^AICHOR_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -Fq 'PASEO_PASSWORD: ${AICHOR_PASSWORD:?AICHOR_PASSWORD must be set}' "$repo_root/apps/aichor/compose.yml"
+grep -Fq 'mem_limit: ${AICHOR_MEMORY_LIMIT:-900m}' "$repo_root/apps/aichor/compose.yml"
+grep -Fq 'cpus: ${AICHOR_CPUS:-0.80}' "$repo_root/apps/aichor/compose.yml"
 grep -Fq '/aichor:/home/paseo' "$repo_root/apps/aichor/compose.yml"
 grep -Fq '/aichor/workspace:/workspace' "$repo_root/apps/aichor/compose.yml"
 grep -Fq 'reverse_proxy aichor:6767' "$repo_root/apps/aichor/route.follower.caddy"

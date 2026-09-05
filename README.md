@@ -106,7 +106,7 @@ always enters through the Leader and then crosses the selected follower Caddy.
 Paseo state and the managed `/workspace` directory live under
 `data/prod/aichor`. The official image runs without bundled agent CLIs, host
 repository mounts, Docker socket access, or published ports, and starts with a
-512 MiB / 0.50 CPU profile. Change `NODES` in
+900 MiB / 0.80 CPU profile. Change `NODES` in
 `config/cluster/apps/aichor.policy` to move it to another active follower; the
 move is fresh and does not copy sessions, credentials, or workspace contents.
 

@@ -151,7 +151,7 @@ the public and origin names and `/api/health` remains unauthenticated for
 health gates. The official image is a single non-root container with no
 bundled Codex/Claude/OpenCode CLI, host repository, Docker socket, database,
 or published port. `/home/paseo` state and `/workspace` are persisted below
-`data/prod/aichor`; initial limits are 512 MiB, 0.50 CPU, and 128 processes.
+`data/prod/aichor`; initial limits are 900 MiB, 0.80 CPU, and 128 processes.
 Move it by changing `NODES` in `config/cluster/apps/aichor.policy` and pushing
 the commit. The singleton workflow creates a fresh target and archives the old
 data; sessions, credentials, and workspace contents are never migrated

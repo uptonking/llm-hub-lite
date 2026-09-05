@@ -5,8 +5,8 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
-    mem_limit: ${AICHOR_MEMORY_LIMIT:-512m}
-    cpus: ${AICHOR_CPUS:-0.50}
+    mem_limit: ${AICHOR_MEMORY_LIMIT:-900m}
+    cpus: ${AICHOR_CPUS:-0.80}
     pids_limit: ${AICHOR_PIDS_LIMIT:-128}
     # The upstream entrypoint initializes its non-root user, but bind mounts
     # created on a fresh target start as root-owned. Fix mount ownership once,
