@@ -1,6 +1,12 @@
 {$AICHOR_SITE} {
   import common_proxy
   reverse_proxy {$AICHOR_UPSTREAM} {
+    # The follower origin is protected by the node firewall and uses Caddy's
+    # internal CA because public ACME validation cannot reach DNS-only origin
+    # records. Keep encryption on the hop while accepting that private cert.
+    transport http {
+      tls_insecure_skip_verify
+    }
     fail_duration 30s
     health_uri /api/health
     health_interval 10s

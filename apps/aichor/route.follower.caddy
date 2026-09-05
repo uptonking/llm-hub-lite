@@ -1,4 +1,9 @@
 {$NODE_AICHOR_ORIGIN_HOST} {
+  # Follower origin names are DNS-only and intentionally firewalled from the
+  # public internet, so ACME HTTP/TLS challenges cannot reach this listener.
+  # Caddy's persisted internal CA provides stable encryption for the
+  # Leader-to-follower hop; the Leader route explicitly uses this private hop.
+  tls internal
   import common_proxy
   reverse_proxy aichor:6767 {
     # Paseo's terminal and agent output use long-lived streaming responses.

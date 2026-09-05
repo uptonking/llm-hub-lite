@@ -144,7 +144,10 @@ For the first login, open  https://aichorouter.aichorage.de/setup/.
 Aichor is the official Paseo daemon and web UI at `aichor.aichorage.de`,
 enabled on `worker-2` by default. The Leader proxies to the selected
 follower's DNS-only `worker2-aichor-origin.aichorage.de` origin, while the
-follower proxies to the private `aichor:6767` alias. Paseo requires
+follower proxies to the private `aichor:6767` alias. The follower origin uses
+Caddy's persisted internal CA because its DNS-only record is firewalled from
+public ACME validators; the Leader keeps the hop encrypted and accepts that
+private certificate only across the firewall boundary. Paseo requires
 `PASEO_PASSWORD`; the generated `AICHOR_PASSWORD` is stored only in the
 selected follower's `/etc/llm-hub-lite/aichor.env`. `PASEO_HOSTNAMES` allows
 the public and origin names and `/api/health` remains unauthenticated for
