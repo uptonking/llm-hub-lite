@@ -65,7 +65,7 @@ set -e
 
 [[ "$status" -ne 0 ]]
 grep -Fq "refusing to overwrite existing Cursorapi release tag: $CURSORAPI_IMAGE_REPOSITORY:$CURSORAPI_IMAGE_TAG" <<<"$output"
-grep -Fq "choose a new CURSORAPI_IMAGE_TAG in $repo_root/images/cursorapi/release.env" <<<"$output"
+grep -Fq "choose a new image tag in $repo_root/images/cursorapi/release.env" <<<"$output"
 grep -Fxq "buildx imagetools inspect $CURSORAPI_IMAGE_REPOSITORY:$CURSORAPI_IMAGE_TAG" "$docker_log"
 if grep -Fq 'buildx build' "$docker_log"; then
 	printf 'Cursorapi publisher continued to an image build after detecting an existing tag\n' >&2

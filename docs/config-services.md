@@ -155,6 +155,13 @@ health gates. The official image is a single non-root container with no
 bundled Codex/Claude/OpenCode CLI, host repository, Docker socket, database,
 or published port. `/home/paseo` state and `/workspace` are persisted below
 `data/prod/aichor`; initial limits are 900 MiB, 0.80 CPU, and 128 processes.
+Production uses the repository-owned `ghcr.io/uptonking/paseo-aichor` child
+image. It is based on the digest-pinned Paseo release and includes Codex,
+Claude Code, OpenCode, and Pi. Publish a reviewed image manually with
+`ops/publish-aichor-image.sh`; commit the resulting immutable digest in
+`ops/images.apps.prod.env` and let Woodpecker deploy it. The publisher resolves
+omitted agent versions from npm `latest` and records those versions in
+`images/aichor/release.env` before building.
 Move it by changing `NODES` in `config/cluster/apps/aichor.policy` and pushing
 the commit. The singleton workflow creates a fresh target and archives the old
 data; sessions, credentials, and workspace contents are never migrated

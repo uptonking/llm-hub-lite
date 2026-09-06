@@ -90,6 +90,14 @@ grep -q '^NODE_SECRET_KEYS=AICHOR_PASSWORD$' "$repo_root/apps/aichor/manifest.en
 grep -q '^GENERATED_SECRET_BYTES=AICHOR_PASSWORD:32$' "$repo_root/apps/aichor/manifest.env"
 grep -q '^SECRET_MIN_LENGTHS=AICHOR_PASSWORD:32$' "$repo_root/apps/aichor/manifest.env"
 grep -q '^AICHOR_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
+grep -q '^AICHOR_BASE_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/images/aichor/release.env"
+grep -q '^AICHOR_IMAGE_REPOSITORY=ghcr.io/uptonking/paseo-aichor$' "$repo_root/images/aichor/release.env"
+grep -q '^AICHOR_IMAGE_TAG=' "$repo_root/images/aichor/release.env"
+grep -Fq '@openai/codex' "$repo_root/images/aichor/Dockerfile"
+grep -Fq '@anthropic-ai/claude-code' "$repo_root/images/aichor/Dockerfile"
+grep -Fq 'opencode-ai' "$repo_root/images/aichor/Dockerfile"
+grep -Fq '@earendil-works/pi-coding-agent' "$repo_root/images/aichor/Dockerfile"
+[[ -x "$repo_root/ops/publish-aichor-image.sh" ]]
 grep -Fq 'PASEO_PASSWORD: ${AICHOR_PASSWORD:?AICHOR_PASSWORD must be set}' "$repo_root/apps/aichor/compose.yml"
 grep -Fq 'mem_limit: ${AICHOR_MEMORY_LIMIT:-900m}' "$repo_root/apps/aichor/compose.yml"
 grep -Fq 'cpus: ${AICHOR_CPUS:-0.80}' "$repo_root/apps/aichor/compose.yml"
@@ -233,7 +241,7 @@ if grep -Fq -- '--passWithNoTests' "$repo_root/images/cursorapi/Dockerfile"; the
 fi
 grep -Fq 'git -C "$source_dir" archive "$CURSORAPI_SOURCE_COMMIT"' "$repo_root/ops/publish-cursorapi-image.sh"
 grep -Fq 'rm -f "$build_context/.dockerignore"' "$repo_root/ops/publish-cursorapi-image.sh"
-grep -Fq 'GHCR package manifest is not anonymously readable' "$repo_root/ops/publish-cursorapi-image.sh"
+grep -Fq 'GHCR package manifest is not anonymously readable' "$repo_root/ops/lib/publish-image-common.sh"
 if grep -Fq 'api.github.com/user/packages' "$repo_root/ops/publish-cursorapi-image.sh"; then
 	printf 'Cursorapi publisher must not mutate GHCR package visibility\n' >&2
 	exit 1
