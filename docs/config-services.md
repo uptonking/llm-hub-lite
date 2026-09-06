@@ -162,6 +162,8 @@ Claude Code, OpenCode, and Pi. Publish a reviewed image manually with
 `ops/images.apps.prod.env` and let Woodpecker deploy it. The publisher resolves
 omitted agent versions from npm `latest` and records those versions in
 `images/aichor/release.env` before building.
+The GHCR package must be public so follower nodes can pull it without registry
+credentials; the publisher verifies anonymous pull access after every release.
 Move it by changing `NODES` in `config/cluster/apps/aichor.policy` and pushing
 the commit. The singleton workflow creates a fresh target and archives the old
 data; sessions, credentials, and workspace contents are never migrated
