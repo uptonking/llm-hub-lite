@@ -155,6 +155,11 @@ health gates. The official image is a single non-root container with no
 bundled Codex/Claude/OpenCode CLI, host repository, Docker socket, database,
 or published port. `/home/paseo` state and `/workspace` are persisted below
 `data/prod/aichor`; initial limits are 900 MiB, 0.80 CPU, and 128 processes.
+The same bind-mounted home is reused after container or VPS restart, preserving
+conversation history, workspace files, daemon identity, and agent credentials.
+Recovery requires non-empty `.paseo/server-id`, `.paseo/daemon-keypair.json`,
+and `.paseo/config.json` files and fails closed instead of starting a blank
+home. `.paseo/runtime` is disposable cache.
 Production uses the repository-owned `ghcr.io/uptonking/paseo-aichor` child
 image. It is based on the digest-pinned Paseo release and includes Codex,
 Claude Code, OpenCode, and Pi. Publish a reviewed image manually with

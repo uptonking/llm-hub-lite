@@ -14,7 +14,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        mkdir -p /home/paseo /workspace; chown 1000:1000 /home/paseo /workspace; exec /usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint
+        mkdir -p /home/paseo /workspace; if [ ! -e /home/paseo/.aichor-ownership-v1 ]; then chown -R 1000:1000 /home/paseo; touch /home/paseo/.aichor-ownership-v1; chown 1000:1000 /home/paseo/.aichor-ownership-v1; else chown 1000:1000 /home/paseo /workspace; fi; exec /usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       PASEO_HOME: /home/paseo/.paseo

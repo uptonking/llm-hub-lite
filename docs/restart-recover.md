@@ -5,7 +5,10 @@ mutable images. Docker restart policies start individual containers; systemd
 then recreates the shared network, applies the firewall, and runs
 `platformctl recover`. Foundation projects are started and health-checked
 before consumers. A failed consumer leaves the last valid Caddy routes in
-place and is retried by the recovery timer. Direct/orphan consumers are part
+place and is retried by the recovery timer. Stateful consumers declare durable
+recovery paths; recovery fails closed when those paths are missing or empty,
+so a reboot can never turn a previously configured app into a blank instance.
+Direct/orphan consumers are part
 of the same ordered consumer recovery, so their bind-mounted runtime files and
 persistent data are available before the service is started.
 Recovery also derives Caddy's UDP bind from the live node role before starting
@@ -103,6 +106,23 @@ Correct the root cause, then retry the same Woodpecker build or run
 Observer durable data is under `/opt/platform/observer/data`; collector
 buffers are transient and bounded. Restic snapshots include durable state and
 runtime configuration.
+
+### Aichor state after restart
+
+Aichor stores its Paseo identity, conversation/workspace metadata, agent
+credentials, and workspace files under
+`/opt/apps/llm-hub-lite/shared/data/prod/aichor`. The generated
+`AICHOR_PASSWORD` remains in `/etc/llm-hub-lite/aichor.env`. Docker restarts the
+same digest-pinned container with those mounts after a crash or reboot; the
+recovery controller does not archive or recreate this directory. On recovery,
+`.paseo/server-id`, `.paseo/daemon-keypair.json`, and `.paseo/config.json` must
+exist and be non-empty. `.paseo/runtime` is disposable runtime cache and is
+excluded from backups and fresh singleton moves.
+
+After a worker restart, reconnect to `https://aichor.<domain>`, confirm the
+conversation list is unchanged, open a prior conversation and verify its
+messages, then confirm the expected workspace files are present. A hard crash
+can interrupt an in-flight request, but it must not erase completed history.
 
 ## Controller outage or replacement
 

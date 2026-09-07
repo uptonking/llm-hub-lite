@@ -104,11 +104,15 @@ Aichor is the Paseo singleton at `aichor.aichorage.de`, targeting worker-2 by
 default. Its DNS-only origin is `worker2-aichor-origin.<domain>`; public traffic
 always enters through the Leader and then crosses the selected follower Caddy.
 Paseo state and the managed `/workspace` directory live under
-`data/prod/aichor`. The official image runs without bundled agent CLIs, host
-repository mounts, Docker socket access, or published ports, and starts with a
-900 MiB / 0.80 CPU profile. Change `NODES` in
+`data/prod/aichor`. The production child image adds the bundled agent CLIs;
+there are no host repository mounts, Docker socket access, or published ports,
+and it starts with a 900 MiB / 0.80 CPU profile. Change `NODES` in
 `config/cluster/apps/aichor.policy` to move it to another active follower; the
 move is fresh and does not copy sessions, credentials, or workspace contents.
+The bind-mounted home and generated password are reused after an unexpected
+container or VPS restart, preserving the webapp conversation list and content.
+Recovery refuses to start if the durable Paseo identity/config files are
+missing; only `.paseo/runtime` is disposable cache.
 
 Remote Restic/R2 backup is optional. Local Restic repositories are initialized
 automatically on each VPS. If off-host recovery is required, initialize a

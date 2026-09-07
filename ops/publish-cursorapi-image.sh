@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-release_file="$root/images/cursorapi/release.env"
+release_file="${CURSORAPI_RELEASE_FILE:-$root/images/cursorapi/release.env}"
 source_dir="${1:-${CURSORAPI_SOURCE_DIR:-}}"
 [[ -r "$release_file" ]] || {
 	printf 'missing release metadata: %s\n' "$release_file" >&2

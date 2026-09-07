@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-release_file="$root/images/aichor/release.env"
+release_file="${AICHOR_RELEASE_FILE:-$root/images/aichor/release.env}"
 # shellcheck disable=SC1090,SC1091
 source "$release_file"
 # shellcheck disable=SC1091
@@ -43,14 +43,11 @@ for package_rule in "${packages[@]}"; do
 	version="${!variable_name:-}"
 	if [[ -z "$version" ]]; then
 		version="$(npm view "$package_name" version --json | tr -d '\r\n\"')"
-		[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || {
-			printf 'npm returned an invalid version for %s: %s\n' "$package_name" "$version" >&2
-			exit 1
-		}
-		sed "s#^${variable_name}=.*#${variable_name}=${version}#" "$metadata_tmp" >"$metadata_tmp.next"
-		mv "$metadata_tmp.next" "$metadata_tmp"
-		eval "$variable_name=\$version"
+		publisher_validate_version "$version" "$package_name"
+		publisher_set_release_var "$metadata_tmp" "$variable_name" "$version"
 	fi
+	publisher_validate_version "$version" "$package_name"
+	eval "$variable_name=\$version"
 done
 mv "$metadata_tmp" "$release_file"
 trap - EXIT

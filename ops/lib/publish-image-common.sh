@@ -10,6 +10,34 @@ publisher_require_commands() {
 	done
 }
 
+publisher_validate_version() {
+	local version="$1" package_name="$2"
+	[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || {
+		printf 'invalid npm version for %s: %s\n' "$package_name" "$version" >&2
+		return 1
+	}
+}
+
+publisher_set_release_var() {
+	local file="$1" key="$2" value="$3" tmp
+	[[ -f "$file" ]] || {
+		printf 'release metadata file is missing: %s\n' "$file" >&2
+		return 1
+	}
+	tmp="$(mktemp "${file}.tmp.XXXXXX")"
+	if ! awk -v key="$key" -v value="$value" '
+		BEGIN { prefix = key "="; replaced = 0 }
+		index($0, prefix) == 1 { print prefix value; replaced = 1; next }
+		{ print }
+		END { if (!replaced) print prefix value }
+	' "$file" >"$tmp"; then
+		rm -f -- "$tmp"
+		return 1
+	fi
+	chmod 600 "$tmp"
+	mv -f -- "$tmp" "$file"
+}
+
 publisher_assert_tag_unused() {
 	local image_ref="$1" display_name="$2" release_file="$3" inspect_error
 	if inspect_error="$(docker buildx imagetools inspect "$image_ref" 2>&1)"; then

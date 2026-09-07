@@ -240,7 +240,7 @@ valid_mongo_uri() {
 }
 safe_relative() {
 	local value="$1"
-	[[ "$value" != /* && "$value" != *..* && "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+	[[ "$value" != /* && "$value" != *..* && "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" =~ ^[A-Za-z0-9._/-]+$ ]]
 }
 compose_bin=(docker compose)
 if [[ -n "${PLATFORM_COMPOSE_BIN:-}" ]]; then compose_bin=("$PLATFORM_COMPOSE_BIN"); elif [[ -x /usr/local/bin/platform-compose ]]; then compose_bin=(/usr/local/bin/platform-compose); fi
@@ -374,6 +374,46 @@ app_target_node() {
 	nodes="$(app_nodes "$d")"
 	[[ "$(app_upstream_mode "$d")" == singleton && -n "$nodes" && "$nodes" != *,* ]] || return 1
 	printf '%s\n' "$nodes"
+}
+recovery_state_check_descriptor() {
+	local d="$1" paths rel root entry path
+	paths="$(descriptor_value "$d" RECOVERY_REQUIRED_PATHS)"
+	[[ -n "$paths" ]] || return 0
+	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
+	safe_relative "$rel" || die "unsafe DATA_ROOT_REL in $(basename "$d")/manifest.env"
+	root="$(data_root)/$rel"
+	[[ -d "$root" ]] || die "recovery data directory is missing for $(basename "$d"): $root"
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] || continue
+		safe_relative "$entry" || die "unsafe RECOVERY_REQUIRED_PATHS entry in $(basename "$d")/manifest.env: $entry"
+		path="$root/$entry"
+		[[ -e "$path" && ! -L "$path" ]] || die "required recovery state is missing for $(basename "$d"): $entry"
+		if [[ -f "$path" ]]; then
+			[[ -s "$path" ]] || die "required recovery state is empty for $(basename "$d"): $entry"
+		fi
+	done <<<"$(printf '%s\n' "$paths" | tr ',' '\n')"
+}
+validate_recovery_state() {
+	local d
+	[[ "${PLATFORM_RECOVERY_MODE:-0}" == 1 ]] || return 0
+	while IFS= read -r d; do
+		[[ -n "$d" ]] || continue
+		recovery_state_check_descriptor "$d"
+	done <<<"$(projects_apps)"
+}
+report_recovery_state_descriptor() {
+	local d="$1" paths rel root entry path state
+	paths="$(descriptor_value "$d" RECOVERY_REQUIRED_PATHS)"
+	[[ -n "$paths" ]] || return 0
+	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
+	root="$(data_root)/$rel"
+	printf '[recovery-state]\nroot=%s\nrequired=%s\n' "$root" "$paths"
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] || continue
+		path="$root/$entry"
+		if [[ -f "$path" && -s "$path" ]]; then state=present; elif [[ -e "$path" ]]; then state=empty; else state=missing; fi
+		printf 'path=%s state=%s\n' "$entry" "$state"
+	done <<<"$(printf '%s\n' "$paths" | tr ',' '\n')"
 }
 app_value() {
 	local d="$1" key="$2" value file
@@ -1062,7 +1102,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port
+	local d="$1" k v rel ephemeral_rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port recovery_path
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -1111,6 +1151,14 @@ validate_descriptor() {
 	elif [[ "$mode" != ephemeral ]]; then
 		die "DATA_ROOT_REL is required for non-ephemeral app: $d/manifest.env"
 	fi
+	ephemeral_rel="$(descriptor_value "$d" EPHEMERAL_DATA_REL)"
+	if [[ -n "$ephemeral_rel" ]]; then
+		[[ -n "$rel" ]] || die "EPHEMERAL_DATA_REL requires DATA_ROOT_REL in $d/manifest.env"
+		safe_relative "$ephemeral_rel" || die "unsafe EPHEMERAL_DATA_REL in $d/manifest.env"
+	fi
+	while IFS= read -r recovery_path; do
+		[[ -z "$recovery_path" ]] || safe_relative "$recovery_path" || die "unsafe RECOVERY_REQUIRED_PATHS entry in $d/manifest.env: $recovery_path"
+	done <<<"$(printf '%s\n' "$(descriptor_value "$d" RECOVERY_REQUIRED_PATHS)" | tr ',' '\n')"
 	enabled="$(app_policy_value "$d" ENABLED)"
 	case "$enabled" in true | false) ;; *) die "app policy ENABLED must be true or false: $d" ;; esac
 	nodes="$(app_nodes "$d")"
@@ -2006,6 +2054,8 @@ recover() {
 		retire_node
 		return 0
 	fi
+	PLATFORM_RECOVERY_MODE=1
+	export PLATFORM_RECOVERY_MODE
 	reconcile_caddy_udp_policy
 	if ((recover_full == 1)); then
 		VALIDATE_STAGE_ONLY=1 validate
@@ -2021,6 +2071,7 @@ recover() {
 		# explicitly requests it, but do not rebuild an unused candidate each time.
 		render_routes
 	fi
+	validate_recovery_state
 	local p failed=0
 	while IFS= read -r p; do
 		[[ -n "$p" ]] || continue
@@ -2185,6 +2236,9 @@ diagnose() {
 			[[ -n "$id" ]] || continue
 			inspect_container_state "$id" 2>&1 | sed -n '1,24p' || true
 		done <<<"$("${compose_command[@]}" ps --all -q 2>/dev/null || true)"
+		if [[ "$p" == app:* ]]; then
+			report_recovery_state_descriptor "${p#app:}"
+		fi
 	done <<<"$(diagnose_projects "$scope")"
 	if [[ "$scope" == foundation || "$scope" == all ]]; then
 		local observer_env observer_root observer_data observer_buffer observer_bytes buffer_bytes buffer_max durable_warn buffer_warn_percent utilization observer_shipper_id observer_controller_id observer_recent observer_controller_recent

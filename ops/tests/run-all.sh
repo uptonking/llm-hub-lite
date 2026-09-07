@@ -18,13 +18,13 @@ fast)
 		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
 		observer-ingest-test observer-log-proxy-test observer-vector-test
 		platform-submit-test restore-test secret-validation-test stack-test
-		cursorapi-release-test woodpecker-agent-repair-test woodpecker-webhook-repair-test woodpecker-plan-test workflow-generator-test bootstrap-policy-test
+		aichor-release-test cursorapi-release-test woodpecker-agent-repair-test woodpecker-webhook-repair-test woodpecker-plan-test workflow-generator-test bootstrap-policy-test
 	)
 	;;
 full)
 	tests=(
 		app-identity-migration-test backup-test bootstrap-policy-test change-vps-test clean-vps-test configure-app-placement-test configure-cluster-node-test
-		controller-test cursorapi-release-test deployment-rollback-test
+		controller-test aichor-release-test cursorapi-release-test deployment-rollback-test
 		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
 		observer-ingest-test observer-log-proxy-test observer-vector-test
 		platform-submit-test platformctl-test restore-test secret-validation-test woodpecker-agent-repair-test woodpecker-webhook-repair-test
