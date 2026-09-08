@@ -13,7 +13,16 @@
     health_timeout 5s
     health_fails 3
     health_passes 1
+
+    # Preserve headers for proper WebSocket and origin detection
     header_up Host {http.reverse_proxy.upstream.hostport}
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-For {remote_host}
+
+    # WebSocket support - critical for Paseo UI connection
+    header_up Upgrade {http.request.header.Upgrade}
+    header_up Connection {http.request.header.Connection}
+
     import forward_verified_client_ip
   }
   handle_errors {
