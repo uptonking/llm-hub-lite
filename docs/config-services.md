@@ -179,6 +179,41 @@ credentials; the publisher verifies anonymous pull access after every release.
 Pi stores logins, model configuration, and sessions below
 `/home/paseo/.pi/agent`; the Aichor launcher repairs ownership of both `.pi`
 and `.paseo` on every container start. Persisted Pi credentials take priority.
+Because the complete Aichor home is bind-mounted from
+`/opt/apps/llm-hub-lite/shared/data/prod/aichor`, the host files
+`aichor/.pi/agent/settings.json` and `aichor/.pi/agent/models.json` are the
+same files Pi reads inside the container. Changes made through Pi or copied to
+the VPS therefore work in both directions; no second synchronization daemon is
+needed. Use `ops/sync-aichor-pi-config.sh` for an atomic, backed-up import or
+export of those two files:
+
+```bash
+# On the Mac, copy the files (never auth.json) to a temporary VPS path.
+worker_2_address='<set-worker-2-ssh-address>'
+ssh "root@$worker_2_address" 'install -d -m 700 /root/aichor-pi-config'
+scp /Users/yaoo/.pi/agent/settings.json /Users/yaoo/.pi/agent/models.json \
+  "root@$worker_2_address:/root/aichor-pi-config/"
+
+# On worker-2, install into the persistent bind mount.
+sudo /opt/platform/control/current/ops/sync-aichor-pi-config.sh \
+  install /root/aichor-pi-config
+
+# Check that disk and the running container see identical files.
+sudo /opt/platform/control/current/ops/sync-aichor-pi-config.sh check
+```
+
+The helper validates JSON, keeps timestamped backups, sets mode `0600`, and
+never copies `auth.json`, sessions, or workspace data. Use `install ...
+--restart` only when an active Pi process must be restarted; normally refreshing
+Providers in the Aichor UI is sufficient. `export <directory>` copies the
+current VPS versions back out. Do not place literal provider keys in Git; the
+helper warns when `models.json` contains one, because Pi also supports an
+environment reference such as `"apiKey": "$MY_PROVIDER_KEY"`. For a custom
+provider, the safer alternative is to omit `apiKey` from `models.json`, run Pi
+interactively in the Aichor container, and use `/login <provider-id>`; Pi then
+keeps the key in the separately persisted `auth.json`. Paths in `settings.json`
+are container-relative: referenced skills, extensions, prompts, or themes must
+also exist below `/home/paseo/.pi/agent` or be removed from the VPS settings.
 Optional environment fallbacks are available for OpenAI, Anthropic, and
 OpenRouter. Enable exactly the required `AICHOR_PI_<PROVIDER>_ENABLED` setting
 in the selected node's committed override, add the matching
