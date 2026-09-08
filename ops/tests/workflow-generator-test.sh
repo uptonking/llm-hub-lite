@@ -73,6 +73,10 @@ for file in \
 done
 grep -Fq '/usr/local/bin/configure-app-secrets aichor --target-node worker-2 --ensure-generated' "$base/workflows/consumer-stage-aichor-worker-2.yml"
 grep -Fq 'from_secret: aichor_password' "$base/workflows/consumer-secrets-aichor-worker-2.yml"
+if grep -Fq 'AICHOR_PI_' "$base/workflows/consumer-stage-aichor-worker-2.yml"; then
+	printf 'disabled Aichor Pi fallbacks unexpectedly requested provider secrets\n' >&2
+	exit 1
+fi
 grep -Fq 'consumer-stage-aichor-worker-2' "$base/workflows/consumer-publish-aichor.yml"
 grep -Fq 'consumer-stop-aichor-worker-1' "$base/workflows/consumer-finalize-aichor-worker-2.yml"
 grep -Fq 'consumer-stop-aichor-worker-3' "$base/workflows/consumer-finalize-aichor-worker-2.yml"
@@ -82,6 +86,19 @@ for node in worker-1 worker-3 worker-4; do
 		printf 'Aichor generated a secret workflow for an unselected node: %s\n' "$node" >&2
 		exit 1
 	}
+done
+
+pi_fallback="$(make_fixture pi-fallback)"
+sed 's/^AICHOR_PI_OPENAI_ENABLED=.*/AICHOR_PI_OPENAI_ENABLED=true/' "$pi_fallback/apps/aichor/config.env" >"$pi_fallback/aichor.config.env"
+mv "$pi_fallback/aichor.config.env" "$pi_fallback/apps/aichor/config.env"
+generate_fixture "$pi_fallback"
+for workflow in consumer-stage-aichor-worker-2.yml consumer-secrets-aichor-worker-2.yml; do
+	grep -Fq 'AICHOR_PI_OPENAI_API_KEY:' "$pi_fallback/workflows/$workflow"
+	grep -Fq 'from_secret: AICHOR_PI_OPENAI_API_KEY' "$pi_fallback/workflows/$workflow"
+	if grep -Eq 'AICHOR_PI_(ANTHROPIC|OPENROUTER)_API_KEY' "$pi_fallback/workflows/$workflow"; then
+		printf 'single-provider Aichor fallback requested an unrelated secret: %s\n' "$workflow" >&2
+		exit 1
+	fi
 done
 grep -Fq 'event: push' "$base/workflows/push-audit.yml"
 grep -Fq 'node: leader' "$base/workflows/push-audit.yml"

@@ -149,9 +149,16 @@ Caddy's persisted internal CA because its DNS-only record is firewalled from
 public ACME validators; the Leader keeps the hop encrypted and accepts that
 private certificate only across the firewall boundary. Paseo requires
 `PASEO_PASSWORD`; the generated `AICHOR_PASSWORD` is stored only in the
-selected follower's `/etc/llm-hub-lite/aichor.env`. `PASEO_HOSTNAMES` allows
-the public and origin names and `/api/health` remains unauthenticated for
-health gates. The official image is a single non-root container with no
+selected follower's `/etc/llm-hub-lite/aichor.env`. The two Caddy hops retain
+the private follower authority for route selection, then present
+`aichor.aichorage.de:443` to Paseo so the bundled UI receives a valid public
+TLS connection hint. `PASEO_CORS_ORIGINS` defaults to the generated public
+site, while `PASEO_HOSTNAMES` allows the public and origin names and
+`/api/health` remains unauthenticated for health gates. On a new browser, add
+the direct connection with host `aichor.aichorage.de`, port `443`, SSL enabled,
+and the Aichor password. Do not include `wss://` or `/ws` in the host field.
+Paseo stores that connection in the browser and reconnects automatically on
+later visits. The official image is a single non-root container with no
 bundled Codex/Claude/OpenCode CLI, host repository, Docker socket, database,
 or published port. `/home/paseo` state and `/workspace` are persisted below
 `data/prod/aichor`; initial limits are 900 MiB, 0.80 CPU, and 128 processes.
@@ -169,6 +176,16 @@ omitted agent versions from npm `latest` and records those versions in
 `images/aichor/release.env` before building.
 The GHCR package must be public so follower nodes can pull it without registry
 credentials; the publisher verifies anonymous pull access after every release.
+Pi stores logins, model configuration, and sessions below
+`/home/paseo/.pi/agent`; the Aichor launcher repairs ownership of both `.pi`
+and `.paseo` on every container start. Persisted Pi credentials take priority.
+Optional environment fallbacks are available for OpenAI, Anthropic, and
+OpenRouter. Enable exactly the required `AICHOR_PI_<PROVIDER>_ENABLED` setting
+in the selected node's committed override, add the matching
+`AICHOR_PI_<PROVIDER>_API_KEY` Woodpecker repository secret, regenerate the
+workflows, and push both changes. All three fallbacks default to disabled, so
+an unconfigured Pi installation remains visible in Paseo but reports no usable
+models until an operator logs in or enables a fallback.
 Move it by changing `NODES` in `config/cluster/apps/aichor.policy` and pushing
 the commit. The singleton workflow creates a fresh target and archives the old
 data; sessions, credentials, and workspace contents are never migrated

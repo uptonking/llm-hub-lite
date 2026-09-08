@@ -9,14 +9,13 @@
     # Paseo's terminal and agent output use long-lived streaming responses.
     flush_interval -1
 
-    # Preserve headers for proper WebSocket and origin detection
-    header_up Host {$NODE_AICHOR_ORIGIN_HOST}
-    header_up X-Forwarded-Proto {scheme}
+    # Paseo derives the bundled Web UI connection from Host and validates the
+    # browser Origin against it. Include the public TLS port because the client
+    # connection parser requires host:port.
+    header_up Host {$AICHOR_SITE_HOST}:443
+    header_up X-Forwarded-Host {$AICHOR_SITE_HOST}
+    header_up X-Forwarded-Proto https
     header_up X-Forwarded-For {remote_host}
-
-    # WebSocket support - critical for Paseo UI connection
-    header_up Upgrade {http.request.header.Upgrade}
-    header_up Connection {http.request.header.Connection}
 
     import forward_verified_client_ip
   }
