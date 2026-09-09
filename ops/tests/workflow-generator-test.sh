@@ -59,7 +59,7 @@ for file in \
 	consumer-stop-aichor-worker-3.yml consumer-stop-aichor-worker-4.yml \
 	consumer-finalize-aichor-worker-2.yml \
 	consumer-publish-aichor3.yml consumer-stop-aichor3-worker-1.yml \
-	consumer-stop-aichor3-worker-2.yml consumer-stop-aichor3-worker-3.yml \
+	consumer-stop-aichor3-worker-2.yml \
 	consumer-stop-aichor3-worker-4.yml \
 	consumer-stage-aichorouter-worker-1.yml consumer-publish-aichorouter.yml consumer-stop-aichorouter-worker-2.yml \
 	consumer-finalize-aichorouter-worker-1.yml \
