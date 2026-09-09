@@ -18,7 +18,7 @@ chmod 700 "$tmp/bin/chown" "$tmp/bin/base-entrypoint"
 run_host() {
 	local app="$1" prefix="$2" home="$3" marker="$4"
 	PATH="$tmp/bin:$PATH" \
-		PASEO_HOME="$home" PASEO_WORKSPACE="$tmp/$app-workspace" \
+		PASEO_HOME="$home/.paseo" PASEO_WORKSPACE="$tmp/$app-workspace" \
 		PASEO_COMMON_ENTRYPOINT="$repo_root/apps/paseo/entrypoint-common.sh" \
 		PASEO_BASE_ENTRYPOINT="$tmp/bin/base-entrypoint" \
 		PASEO_APP_PREFIX="$prefix" PASEO_OWNERSHIP_MARKER="$marker" \
