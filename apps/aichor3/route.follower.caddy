@@ -1,0 +1,12 @@
+{$NODE_AICHOR3_ORIGIN_HOST} {
+  tls internal
+  import common_proxy
+  reverse_proxy aichor3:6767 {
+    flush_interval -1
+    header_up Host {$AICHOR3_SITE_HOST}:443
+    header_up X-Forwarded-Host {$AICHOR3_SITE_HOST}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+}

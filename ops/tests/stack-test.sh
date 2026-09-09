@@ -10,6 +10,8 @@ for node_file in "$repo_root"/config/cluster/nodes/*.env; do
 	grep -Fxq 'AICHOROUTER_SITE=http://aichorouter.localhost' "$tmp/$node/app-env/aichorouter.env"
 	grep -Fxq 'AICHOR_SITE=http://aichor.localhost' "$tmp/$node/app-env/aichor.env"
 	grep -Fxq 'AICHOR_SITE_HOST=aichor.localhost' "$tmp/$node/app-env/aichor.env"
+	grep -Fxq 'AICHOR3_SITE=http://aichor3.localhost' "$tmp/$node/app-env/aichor3.env"
+	grep -Fxq 'AICHOR3_SITE_HOST=aichor3.localhost' "$tmp/$node/app-env/aichor3.env"
 	grep -Fxq 'LIBRECHAT_SITE=http://chat.localhost' "$tmp/$node/app-env/librechat.env"
 	grep -Fxq 'LIBRECHAT_ADMIN_SITE=http://chat-admin.localhost' "$tmp/$node/app-env/librechat.env"
 	grep -Fxq 'WABASE_SITE=http://wabase.localhost' "$tmp/$node/app-env/wabase.env"

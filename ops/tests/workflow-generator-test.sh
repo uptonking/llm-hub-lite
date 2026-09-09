@@ -58,6 +58,9 @@ for file in \
 	consumer-secrets-aichor-worker-2.yml consumer-stop-aichor-worker-1.yml \
 	consumer-stop-aichor-worker-3.yml consumer-stop-aichor-worker-4.yml \
 	consumer-finalize-aichor-worker-2.yml \
+	consumer-publish-aichor3.yml consumer-stop-aichor3-worker-1.yml \
+	consumer-stop-aichor3-worker-2.yml consumer-stop-aichor3-worker-3.yml \
+	consumer-stop-aichor3-worker-4.yml \
 	consumer-stage-aichorouter-worker-1.yml consumer-publish-aichorouter.yml consumer-stop-aichorouter-worker-2.yml \
 	consumer-finalize-aichorouter-worker-1.yml \
 	consumer-stage-librechat-worker-1.yml consumer-stage-librechat-worker-2.yml consumer-publish-librechat.yml \
@@ -71,6 +74,12 @@ for file in \
 		exit 1
 	}
 done
+aichor3_enabled="$(make_fixture aichor3-enabled)"
+sed 's/^ENABLED=.*/ENABLED=true/' "$aichor3_enabled/config/cluster/apps/aichor3.policy" >"$aichor3_enabled/aichor3.policy"
+mv "$aichor3_enabled/aichor3.policy" "$aichor3_enabled/config/cluster/apps/aichor3.policy"
+generate_fixture "$aichor3_enabled"
+grep -Fq 'configure-app-secrets aichor3 --target-node worker-3 --ensure-generated' "$aichor3_enabled/workflows/consumer-stage-aichor3-worker-3.yml"
+grep -Fq 'consumer-stage-aichor3-worker-3' "$aichor3_enabled/workflows/consumer-publish-aichor3.yml"
 grep -Fq '/usr/local/bin/configure-app-secrets aichor --target-node worker-2 --ensure-generated' "$base/workflows/consumer-stage-aichor-worker-2.yml"
 grep -Fq 'from_secret: aichor_password' "$base/workflows/consumer-secrets-aichor-worker-2.yml"
 if grep -Fq 'AICHOR_PI_' "$base/workflows/consumer-stage-aichor-worker-2.yml"; then

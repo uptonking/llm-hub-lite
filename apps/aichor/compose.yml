@@ -30,6 +30,7 @@ services:
       AICHOR_PI_OPENROUTER_API_KEY: ${AICHOR_PI_OPENROUTER_API_KEY:-}
     volumes:
       - ./entrypoint.sh:/aichor-entrypoint.sh:ro
+      - ../paseo/entrypoint-common.sh:/paseo-entrypoint-common.sh:ro
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/aichor:/home/paseo
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/aichor/workspace:/workspace
     networks: [aichor_private, platform_edge]

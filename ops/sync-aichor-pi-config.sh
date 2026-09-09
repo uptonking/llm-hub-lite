@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Safely import/export Pi's non-secret configuration for the persistent Aichor
-# home.  The Aichor Compose project bind-mounts the complete app data directory
+# Safely import/export Pi's non-secret configuration for a persistent Paseo
+# host. AICHOR remains the compatibility default; the generic
+# sync-paseo-pi-config.sh wrapper sets PASEO_PI_APP_ID/PASEO_PI_PREFIX for
+# another independent host such as Aichor3. The Compose project bind-mounts
+# the complete app data directory
 # at /home/paseo, so files managed here are immediately visible both on the VPS
 # and inside the container.  auth.json is deliberately never copied.
 set -Eeuo pipefail
@@ -20,16 +23,20 @@ EOF
 }
 
 die() {
-	printf 'aichor Pi config: %s\n' "$*" >&2
+	printf '%s Pi config: %s\n' "$app_id" "$*" >&2
 	exit 1
 }
 
-data_root="${AICHOR_PI_DATA_ROOT:-}"
+app_id="${PASEO_PI_APP_ID:-aichor}"
+prefix="${PASEO_PI_PREFIX:-AICHOR}"
+[[ "$app_id" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid Paseo app id: $app_id"
+[[ "$prefix" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid Paseo prefix: $prefix"
+data_root="${PASEO_PI_DATA_ROOT:-${AICHOR_PI_DATA_ROOT:-}}"
 if [[ -z "$data_root" && -f /opt/apps/llm-hub-lite/shared/.env.prod ]]; then
 	data_root="$(sed -n 's/^DATA_ROOT=//p' /opt/apps/llm-hub-lite/shared/.env.prod | tail -n 1)"
 fi
 data_root="${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}"
-agent_dir="$data_root/aichor/.pi/agent"
+agent_dir="$data_root/$app_id/.pi/agent"
 
 hash_file() {
 	if command -v sha256sum >/dev/null 2>&1; then
@@ -52,7 +59,7 @@ validate_json() {
 
 container_name() {
 	command -v docker >/dev/null 2>&1 || return 0
-	docker ps --filter label=com.aichorage.application=aichor --format '{{.Names}}' | head -n 1
+	docker ps --filter label=com.aichorage.application="$app_id" --format '{{.Names}}' | head -n 1
 }
 
 install_one() {
@@ -60,7 +67,7 @@ install_one() {
 	[[ -f "$source" ]] || die "missing source file: $source"
 	validate_json "$source" || die "invalid JSON: $source"
 	mkdir -p "$agent_dir"
-	staged="$(mktemp "$agent_dir/.aichor-pi-config.XXXXXX")"
+	staged="$(mktemp "$agent_dir/.$app_id-pi-config.XXXXXX")"
 	trap 'rm -f -- "${staged:-}"' RETURN
 	cp "$source" "$staged"
 	chmod 600 "$staged"
@@ -143,7 +150,7 @@ check_config() {
 		host_hash="$(hash_file "$agent_dir/$name")"
 		[[ "$host_hash" == "$inside_hash" ]] || die "$name differs between disk and container"
 	done
-	printf 'disk/container Pi configuration is synchronized (container %s)\n' "$container"
+	printf 'disk/container Pi configuration is synchronized for %s (container %s)\n' "$app_id" "$container"
 }
 
 [[ $# -ge 1 ]] || usage

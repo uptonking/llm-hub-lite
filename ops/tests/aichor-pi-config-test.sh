@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="$repo_root/ops/sync-aichor-pi-config.sh"
+generic="$repo_root/ops/sync-paseo-pi-config.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 
@@ -30,3 +31,11 @@ cmp "$tmp/data/aichor/.pi/agent/settings.json" "$tmp/export/settings.json"
 cmp "$tmp/data/aichor/.pi/agent/models.json" "$tmp/export/models.json"
 
 printf 'Aichor Pi config sync tests passed\n'
+
+# The generic wrapper must keep Aichor3 state completely separate.
+mkdir -p "$tmp/data3"
+PASEO_PI_DATA_ROOT="$tmp/data3" bash "$generic" aichor3 install "$tmp/source"
+cmp "$tmp/source/settings.json" "$tmp/data3/aichor3/.pi/agent/settings.json"
+cmp "$tmp/source/models.json" "$tmp/data3/aichor3/.pi/agent/models.json"
+[[ ! -e "$tmp/data3/aichor/.pi/agent/settings.json" ]]
+printf 'generic Paseo Pi config sync tests passed\n'

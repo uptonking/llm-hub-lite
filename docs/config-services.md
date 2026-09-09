@@ -227,6 +227,19 @@ data; sessions, credentials, and workspace contents are never migrated
 automatically. Verify the UI, authenticated API, `/ws`, and streaming output
 after the move.
 
+Aichor3 uses the same Paseo runtime and bundled-agent image as Aichor but is a
+separate single-node service. Its public endpoint is
+`aichor3.aichorage.de`; the default selected follower is worker-3 and its
+DNS-only origin is `worker3-aichor3-origin.<domain>`. Keep
+`AICHOR3_PASSWORD`, `AICHOR3_PI_*` provider settings, the `aichor3` data root,
+and the `app-aichor3` Compose project separate from Aichor. The service is
+resource-capped at 900 MiB, 0.80 CPU, and 128 processes. Configure a move by
+changing `NODES` in `config/cluster/apps/aichor3.policy` or running
+`ops/configure-app-placement.sh aichor3 <follower>`; the normal singleton
+fresh-target workflow applies and never replicates state with Aichor. Pi's
+non-secret settings can be synchronized with
+`ops/sync-paseo-pi-config.sh aichor3 ...`.
+
 Flowy is the Activepieces singleton at `flowy.aichorage.de` , enabled on the
 active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/flowy.policy` to move it to another active follower, then regenerate the reviewed workflows. Flowy uses one `WORKER_AND_APP` process with PGlite under `data/prod/flowy/config/pglite` , in-memory Redis, one worker, sandbox code-only execution, no automatic piece-catalog synchronization, and bounded memory/CPU. The default `FLOWY_FILE_STORAGE_LOCATION=S3` stores execution files in Cloudflare R2 while keeping metadata in PGlite. Warning-level logging avoids noisy periodic snapshots on a small VPS. The container is capped at 1.5 GB with a 768 MB Node heap, leaving headroom for the worker, PGlite, and native allocations; sandbox reuse is disabled so piece modules do not accumulate in a long-lived execution process. Provision `FLOWY_S3_ENDPOINT`, `FLOWY_S3_BUCKET`, `FLOWY_S3_ACCESS_KEY_ID`, and `FLOWY_S3_SECRET_ACCESS_KEY` with the generated `consumer-secrets-flowy-worker-3` workflow. These credentials are delivered only to the selected singleton follower; no Leader secret workflow is emitted. `FLOWY_ENCRYPTION_KEY` and
 `FLOWY_JWT_SECRET` are node-local. Existing DB-backed files remain readable after switching to S3; no automatic blob migration is performed. Singleton moves are fresh deployments and archive the prior local PGlite directory; backups stop the running Flowy container before copying its PGlite state. Backup staging is kept under
