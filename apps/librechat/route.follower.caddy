@@ -1,10 +1,14 @@
 {$NODE_LIBRECHAT_ORIGIN_HOST} {
+  # Follower origins are private Leader-to-follower hops. Use Caddy's local
+  # CA instead of attempting public ACME issuance on firewalled DNS-only names.
+  tls internal
   import common_proxy
   reverse_proxy librechat-client:80 {
     flush_interval -1
   }
 }
 {$NODE_LIBRECHAT_ADMIN_ORIGIN_HOST} {
+  tls internal
   import common_proxy
   reverse_proxy librechat-admin-panel:3000 {
     flush_interval -1

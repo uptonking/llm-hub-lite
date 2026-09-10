@@ -1,4 +1,7 @@
 {$NODE_WAPDF_ORIGIN_HOST} {
+  # This listener is reachable only from the Leader; public ACME challenges
+  # cannot reach it, so use Caddy's persisted internal CA.
+  tls internal
   import common_proxy
   reverse_proxy wapdf:8080 {
     flush_interval -1

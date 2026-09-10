@@ -16,6 +16,12 @@ APPS_ROOT="${APPS_ROOT:-$APP_ROOT/current/apps}"
 FOUNDATION_ROOT="${FOUNDATION_ROOT:-$PLATFORM_ROOT/foundation}"
 FOUNDATION_MANIFEST_ROOT="${FOUNDATION_MANIFEST_ROOT:-$CONTROL_ROOT/current/compose/foundation/manifests}"
 APP_ENV="${APP_ENV:-$APP_ROOT/shared/.env.prod}"
+# Docker Compose treats dollar signs in values loaded from an env-file as
+# interpolation markers.  Bcrypt credentials (for example SearX's hash) contain
+# several dollar signs, so Compose would both warn and silently truncate them
+# while inspecting projects.  Keep the canonical env file unchanged and pass a
+# short-lived escaped copy only to Compose.
+COMPOSE_APP_ENV_FILE=''
 APP_IMAGE_ENV="${APP_IMAGE_ENV:-/etc/llm-hub-lite/images.apps.env}"
 FOUNDATION_IMAGE_ENV="${FOUNDATION_IMAGE_ENV:-/etc/llm-hub-lite/images.foundation.env}"
 FOUNDATION_ENV_ROOT="${FOUNDATION_ENV_ROOT:-$FOUNDATION_ROOT/env}"
@@ -106,6 +112,19 @@ cleanup_candidate() {
 		rm -rf -- "$candidate"
 	fi
 	rm -rf -- "$DESCRIPTOR_CACHE_DIR"
+	if [[ -n "$COMPOSE_APP_ENV_FILE" && "$COMPOSE_APP_ENV_FILE" == "${TMPDIR:-/tmp}"/* ]]; then
+		rm -f -- "$COMPOSE_APP_ENV_FILE"
+	fi
+}
+compose_app_env_file() {
+	if [[ -z "$COMPOSE_APP_ENV_FILE" ]]; then
+		COMPOSE_APP_ENV_FILE="$(mktemp "${TMPDIR:-/tmp}/llm-hub-lite-compose-env.XXXXXX")"
+		# Escape only Compose interpolation markers; the resulting file is never
+		# used by application processes and is removed by the EXIT trap.
+		sed 's/\$/$$/g' "$APP_ENV" >"$COMPOSE_APP_ENV_FILE"
+		chmod 600 "$COMPOSE_APP_ENV_FILE"
+	fi
+	printf '%s\n' "$COMPOSE_APP_ENV_FILE"
 }
 cleanup_stale_candidates() {
 	local candidate
@@ -531,7 +550,7 @@ foundation_env() { printf '%s/%s\n' "$FOUNDATION_ENV_ROOT" "$(foundation_manifes
 # sidecar to be running and healthy prevents an Observer project from appearing
 # ready while its local API or Vector shipper is still unavailable.
 foundation_health_service() { foundation_manifest_value "$1" HEALTH_SERVICE; }
-foundation_compose() { compose_command=("${compose_bin[@]}" --env-file "$APP_ENV" --env-file "$(foundation_env "$1")" --env-file "$FOUNDATION_IMAGE_ENV" --env-file "$NODE_CONFIG_FILE" -f "$FOUNDATION_ROOT/$(foundation_file "$1")"); }
+foundation_compose() { compose_command=("${compose_bin[@]}" --env-file "$(compose_app_env_file)" --env-file "$(foundation_env "$1")" --env-file "$FOUNDATION_IMAGE_ENV" --env-file "$NODE_CONFIG_FILE" -f "$FOUNDATION_ROOT/$(foundation_file "$1")"); }
 descriptor_ids() {
 	if ((DESCRIPTOR_CACHE_LOADED == 0)); then
 		if [[ ! -f "$DESCRIPTOR_CACHE_FILE" ]]; then
@@ -671,7 +690,7 @@ app_compose() {
 	fi
 	config_file="$(app_config_file "$d")"
 	override_file="$(app_override_file "$d")"
-	compose_command=("${compose_bin[@]}" --env-file "$APP_ENV" --env-file "$NODE_CONFIG_FILE" --env-file "$APP_IMAGE_ENV" --env-file "$config_file")
+	compose_command=("${compose_bin[@]}" --env-file "$(compose_app_env_file)" --env-file "$NODE_CONFIG_FILE" --env-file "$APP_IMAGE_ENV" --env-file "$config_file")
 	[[ ! -f "$override_file" ]] || compose_command+=(--env-file "$override_file")
 	runtime_env="$(app_runtime_env_file "$d")"
 	[[ -z "$runtime_env" || ! -f "$runtime_env" ]] || compose_command+=(--env-file "$runtime_env")

@@ -1,6 +1,9 @@
 {$LIBRECHAT_SITE} {
   import common_proxy
   reverse_proxy {$LIBRECHAT_UPSTREAMS} {
+    transport http {
+      tls_insecure_skip_verify
+    }
     lb_policy random_choose 2
     lb_try_duration 5s
     lb_try_interval 250ms
@@ -14,6 +17,9 @@
 {$LIBRECHAT_ADMIN_SITE} {
   import common_proxy
   reverse_proxy {$LIBRECHAT_ADMIN_UPSTREAMS} {
+    transport http {
+      tls_insecure_skip_verify
+    }
     lb_policy random_choose 2
     lb_try_duration 5s
     lb_try_interval 250ms
