@@ -345,7 +345,10 @@ apply_control_sync() {
 }
 
 apply_control_verify() {
-	CONTROL_VERIFY_ONLY=1 apply_control_sync "$1"
+	# Export the marker so every nested platformctl invocation (including
+	# validation and route rendering) can defer deployment-scoped credentials
+	# until the consumer stage workflow injects them.
+	PLATFORM_CONTROL_VERIFY=1 CONTROL_VERIFY_ONLY=1 apply_control_sync "$1"
 }
 
 git_remote_url() {
