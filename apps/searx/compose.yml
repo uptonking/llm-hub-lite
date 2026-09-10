@@ -22,7 +22,6 @@ services:
       SEARXNG_PUBLIC_INSTANCE: ${SEARX_PUBLIC_INSTANCE:-false}
       SEARXNG_IMAGE_PROXY: ${SEARX_IMAGE_PROXY:-false}
       SEARXNG_METHOD: ${SEARX_METHOD:-GET}
-      SEARXNG_LOG_LEVEL: ${SEARX_LOG_LEVEL:-WARNING}
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/searx/config:/etc/searxng
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/searx/cache:/var/cache/searxng

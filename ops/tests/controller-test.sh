@@ -110,6 +110,10 @@ grep -q '^SEARX_CPUS=0.80$' "$repo_root/apps/searx/config.env"
 grep -q '^SEARX_PIDS_LIMIT=128$' "$repo_root/apps/searx/config.env"
 grep -q '^SEARX_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -Fq 'SEARXNG_SECRET: ${SEARX_SECRET:?SEARX_SECRET must be set}' "$repo_root/apps/searx/compose.yml"
+if grep -Fq 'SEARXNG_LOG_LEVEL' "$repo_root/apps/searx/compose.yml"; then
+	printf 'unsupported SearXNG log-level environment variable remains\n' >&2
+	exit 1
+fi
 grep -Fq 'mem_limit: ${SEARX_MEMORY_LIMIT:-900m}' "$repo_root/apps/searx/compose.yml"
 grep -Fq 'cpus: ${SEARX_CPUS:-0.80}' "$repo_root/apps/searx/compose.yml"
 grep -Fq 'reverse_proxy searx:8080' "$repo_root/apps/searx/route.follower.caddy"
