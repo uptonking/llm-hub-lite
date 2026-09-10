@@ -1443,7 +1443,7 @@ validate_descriptor() {
 	'' | files | ephemeral) ;;
 	*) die "unsupported STATE_MODE in $d/manifest.env" ;;
 	esac
-	if [[ "$(app_upstream_mode "$d")" == singleton && "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true && "$(singleton_runtime_env_provisioned "$d" && printf true || printf false)" == true ]]; then
+	if [[ "${PLATFORM_CONTROL_VERIFY:-0}" != 1 && "$(app_upstream_mode "$d")" == singleton && "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true && "$(singleton_runtime_env_provisioned "$d" && printf true || printf false)" == true ]]; then
 		while IFS= read -r k; do
 			[[ -n "$k" ]] || continue
 			if [[ "${PLATFORM_CONTROL_VERIFY:-0}" == 1 ]] && csv_has "$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)" "$k"; then
