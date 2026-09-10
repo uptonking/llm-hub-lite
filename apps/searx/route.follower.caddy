@@ -7,6 +7,10 @@
   basic_auth @searx_auth_required {
     {$SEARX_AUTH_USER} {$SEARX_AUTH_HASH}
   }
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy no-referrer
+  }
   reverse_proxy searx:8080 {
     flush_interval -1
     header_up Host {$SEARX_SITE_HOST}

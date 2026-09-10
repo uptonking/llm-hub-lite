@@ -6,6 +6,10 @@
   basic_auth @searx_auth_required {
     {$SEARX_AUTH_USER} {$SEARX_AUTH_HASH}
   }
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy no-referrer
+  }
   reverse_proxy {$SEARX_UPSTREAM} {
     transport http {
       tls_insecure_skip_verify
