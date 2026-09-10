@@ -849,7 +849,7 @@ render_routes() {
 		# deployment-scoped credentials. Keep the currently installed route (or
 		# omit a new route) until those credentials are provisioned; stage/publish
 		# perform the strict secret validation and render the authenticated route.
-		if [[ "${PLATFORM_CONTROL_VERIFY:-0}" == 1 ]] && ! deployment_secrets_ready "$d"; then
+		if [[ "${CONTROL_VERIFY_ONLY:-0}" == 1 ]] && ! deployment_secrets_ready "$d"; then
 			[[ -f "$current_route" ]] && cp "$current_route" "$s/routes.d/$a.caddy"
 			continue
 		fi
@@ -1443,10 +1443,10 @@ validate_descriptor() {
 	'' | files | ephemeral) ;;
 	*) die "unsupported STATE_MODE in $d/manifest.env" ;;
 	esac
-	if [[ "${PLATFORM_CONTROL_VERIFY:-0}" != 1 && "$(app_upstream_mode "$d")" == singleton && "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true && "$(singleton_runtime_env_provisioned "$d" && printf true || printf false)" == true ]]; then
+	if [[ "${CONTROL_VERIFY_ONLY:-0}" != 1 && "$(app_upstream_mode "$d")" == singleton && "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true && "$(singleton_runtime_env_provisioned "$d" && printf true || printf false)" == true ]]; then
 		while IFS= read -r k; do
 			[[ -n "$k" ]] || continue
-			if [[ "${PLATFORM_CONTROL_VERIFY:-0}" == 1 ]] && csv_has "$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)" "$k"; then
+			if [[ "${CONTROL_VERIFY_ONLY:-0}" == 1 ]] && csv_has "$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)" "$k"; then
 				continue
 			fi
 			value="$(app_value "$d" "$k")"
