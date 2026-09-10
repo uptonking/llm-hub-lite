@@ -1,0 +1,12 @@
+{$NODE_SEARX_ORIGIN_HOST} {
+  tls internal
+  import common_proxy
+  reverse_proxy searx:8080 {
+    flush_interval -1
+    header_up Host {$SEARX_SITE_HOST}
+    header_up X-Forwarded-Host {$SEARX_SITE_HOST}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+}

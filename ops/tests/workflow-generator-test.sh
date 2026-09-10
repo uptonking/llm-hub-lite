@@ -66,6 +66,8 @@ for file in \
 	consumer-stage-librechat-worker-1.yml consumer-stage-librechat-worker-2.yml consumer-publish-librechat.yml \
 	consumer-stage-wapdf-worker-2.yml consumer-publish-wapdf.yml consumer-stop-wapdf-worker-1.yml \
 	consumer-stop-wapdf-worker-3.yml consumer-stop-wapdf-worker-4.yml consumer-finalize-wapdf-worker-2.yml \
+	consumer-stage-searx-worker-2.yml consumer-publish-searx.yml consumer-stop-searx-worker-1.yml \
+	consumer-stop-searx-worker-3.yml consumer-stop-searx-worker-4.yml consumer-finalize-searx-worker-2.yml \
 	consumer-publish-newapi.yml consumer-stop-newapi-worker-1.yml consumer-stop-newapi-worker-2.yml \
 	foundation-upgrade-leader.yml foundation-upgrade-worker-1.yml foundation-upgrade-worker-2.yml \
 	runner-upgrade-leader.yml rollback-leader.yml; do
@@ -90,6 +92,8 @@ grep -Fq 'consumer-stage-aichor-worker-2' "$base/workflows/consumer-publish-aich
 grep -Fq 'consumer-stop-aichor-worker-1' "$base/workflows/consumer-finalize-aichor-worker-2.yml"
 grep -Fq 'consumer-stop-aichor-worker-3' "$base/workflows/consumer-finalize-aichor-worker-2.yml"
 grep -Fq 'consumer-stop-aichor-worker-4' "$base/workflows/consumer-finalize-aichor-worker-2.yml"
+grep -Fq 'consumer-stage-searx-worker-2' "$base/workflows/consumer-publish-searx.yml"
+grep -Fq 'from_secret: searx_secret' "$base/workflows/consumer-secrets-searx-worker-2.yml"
 for node in worker-1 worker-3 worker-4; do
 	[[ ! -e "$base/workflows/consumer-secrets-aichor-$node.yml" ]] || {
 		printf 'Aichor generated a secret workflow for an unselected node: %s\n' "$node" >&2
@@ -334,6 +338,8 @@ sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/wapdf.p
 mv "$draining_secrets/wapdf.policy" "$draining_secrets/config/cluster/apps/wapdf.policy"
 sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/aichor.policy" >"$draining_secrets/aichor.policy"
 mv "$draining_secrets/aichor.policy" "$draining_secrets/config/cluster/apps/aichor.policy"
+sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/searx.policy" >"$draining_secrets/searx.policy"
+mv "$draining_secrets/searx.policy" "$draining_secrets/config/cluster/apps/searx.policy"
 generate_fixture "$draining_secrets"
 [[ -f "$draining_secrets/workflows/consumer-stop-aichorouter-worker-2.yml" ]]
 if find "$draining_secrets/workflows" -name 'consumer-secrets-*-worker-2.yml' | grep -q .; then
@@ -359,6 +365,8 @@ for lifecycle_state in joining draining; do
 	mv "$evacuating/wapdf.policy" "$evacuating/config/cluster/apps/wapdf.policy"
 	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/aichor.policy" >"$evacuating/aichor.policy"
 	mv "$evacuating/aichor.policy" "$evacuating/config/cluster/apps/aichor.policy"
+	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/searx.policy" >"$evacuating/searx.policy"
+	mv "$evacuating/searx.policy" "$evacuating/config/cluster/apps/searx.policy"
 	generate_fixture "$evacuating"
 	[[ ! -e "$evacuating/workflows/foundation-upgrade-worker-2.yml" ]]
 	[[ ! -e "$evacuating/workflows/runner-upgrade-worker-2.yml" ]]

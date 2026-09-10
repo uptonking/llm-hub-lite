@@ -12,6 +12,8 @@ for node_file in "$repo_root"/config/cluster/nodes/*.env; do
 	grep -Fxq 'AICHOR_SITE_HOST=aichor.localhost' "$tmp/$node/app-env/aichor.env"
 	grep -Fxq 'AICHOR3_SITE=http://aichor3.localhost' "$tmp/$node/app-env/aichor3.env"
 	grep -Fxq 'AICHOR3_SITE_HOST=aichor3.localhost' "$tmp/$node/app-env/aichor3.env"
+	grep -Fxq 'SEARX_SITE=http://searx.localhost' "$tmp/$node/app-env/searx.env"
+	grep -Fxq 'SEARX_SITE_HOST=searx.localhost' "$tmp/$node/app-env/searx.env"
 	grep -Fxq 'LIBRECHAT_SITE=http://chat.localhost' "$tmp/$node/app-env/librechat.env"
 	grep -Fxq 'LIBRECHAT_ADMIN_SITE=http://chat-admin.localhost' "$tmp/$node/app-env/librechat.env"
 	grep -Fxq 'WABASE_SITE=http://wabase.localhost' "$tmp/$node/app-env/wabase.env"
@@ -30,6 +32,12 @@ STACK_ENV_FILE="$repo_root/.env.dev.example" STACK_NODE_CONFIG_FILE="$repo_root/
 	"$repo_root/stack.sh" dev validate >/dev/null
 grep -Fq 'reverse_proxy https://worker2-aichor-origin.aichorage.de' "$tmp/aichor-leader/config/routes.d/aichor.caddy"
 grep -Fq 'header_up X-Forwarded-Host aichor.localhost' "$tmp/aichor-leader/config/routes.d/aichor.caddy"
+STACK_ENV_FILE="$repo_root/.env.dev.example" STACK_NODE_CONFIG_FILE="$repo_root/config/cluster/nodes/worker-2.env" STACK_RUNTIME_ROOT="$tmp/searx-worker-2" \
+	"$repo_root/stack.sh" dev validate >/dev/null
+grep -Fq 'reverse_proxy searx:8080' "$tmp/searx-worker-2/config/routes.d/searx.caddy"
+STACK_ENV_FILE="$repo_root/.env.dev.example" STACK_NODE_CONFIG_FILE="$repo_root/config/cluster/nodes/leader.env" STACK_RUNTIME_ROOT="$tmp/searx-leader" \
+	"$repo_root/stack.sh" dev validate >/dev/null
+grep -Fq 'reverse_proxy https://worker2-searx-origin.aichorage.de' "$tmp/searx-leader/config/routes.d/searx.caddy"
 # A malformed policy must not silently enable a consumer in local mode. Keep
 # this check independent of Docker by validating the generated routes only.
 malformed_root="$tmp/malformed"

@@ -67,6 +67,7 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - LibreChat
     - Wapdf (BentoPDF) singleton
     - Aichor (Paseo) singleton
+    - SearXNG singleton
     - Pigeon package retained but disabled
 - Follower worker-3:
     - Flowy (Activepieces)
@@ -78,7 +79,7 @@ SSH is used only for this one-time host bootstrap. Before starting, prepare the
 five VPS hosts, Cloudflare DNS, and any enabled R2 Restic repositories. The Leader
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
 files are transferred to Followers before they start. Public domains `ci` ,
-`ci-grpc` , `status` , `chat` , `chat-admin` , `aichorouter` , `cpapi` , `cursorapi` , `wapdf` ,
+`ci-grpc` , `status` , `chat` , `chat-admin` , `aichorouter` , `cpapi` , `cursorapi` , `wapdf` , `searx` ,
 and `observer` point to the Leader. Add `observer-ingest` as a DNS-only record
 directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
 origins using the `worker1-` prefix point to Worker 1, while the stable-ID
@@ -99,6 +100,16 @@ Wapdf follows the same two-hop ingress pattern: the DNS-only
 `wapdf.<domain>` resolves to the Leader. It is a stateless BentoPDF singleton
 with no runtime secret, persistent payload, host port, database, or Redis
 dependency; its app container is capped at 900 MiB and 0.60 CPU.
+
+SearXNG is the `searx.aichorage.de` singleton, targeting worker-2 by default
+through the DNS-only `worker2-searx-origin.<domain>` origin. It stores its
+generated configuration and cache under `data/prod/searx`, has no host port,
+Valkey sidecar, Redis dependency, or Docker socket, and is capped at 900 MiB,
+0.80 CPU, and 128 processes. The minimal profile leaves SearXNG's
+Valkey-backed public-instance limiter disabled; Cloudflare and the follower
+firewall remain the request controls. Change `NODES` in
+`config/cluster/apps/searx.policy` or run `ops/configure-app-placement.sh searx
+<follower>` to move it as a fresh singleton deployment.
 
 Aichor is the Paseo singleton at `aichor.aichorage.de`, targeting worker-2 by
 default. Its DNS-only origin is `worker2-aichor-origin.<domain>`; public traffic

@@ -110,6 +110,12 @@ worker-1), the generated chains are:
   `/api/health` through `worker2-aichor-origin.aichorage.de` before the public
   route is changed.
 
+- SearXNG (singleton, `NODES=worker-2`):
+  `consumer-stage-searx-worker-2` -> `consumer-publish-searx` (Leader) ->
+  stale-node stops -> `consumer-finalize-searx-worker-2`. Publication checks
+  `/healthz` through `worker2-searx-origin.aichorage.de` before switching the
+  public route.
+
 Every step's command is a single line:
 
 ```

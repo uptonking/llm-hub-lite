@@ -22,6 +22,8 @@ make_fixture() {
 	# keep the committed worker-3 Flowy placement out of this reduced inventory.
 	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/flowy.policy" >"$fixture/config/cluster/apps/flowy.policy.tmp"
 	mv "$fixture/config/cluster/apps/flowy.policy.tmp" "$fixture/config/cluster/apps/flowy.policy"
+	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/aichor3.policy" >"$fixture/config/cluster/apps/aichor3.policy.tmp"
+	mv "$fixture/config/cluster/apps/aichor3.policy.tmp" "$fixture/config/cluster/apps/aichor3.policy"
 	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/wabase.policy" >"$fixture/config/cluster/apps/wabase.policy.tmp"
 	mv "$fixture/config/cluster/apps/wabase.policy.tmp" "$fixture/config/cluster/apps/wabase.policy"
 	printf '%s\n' "$fixture"
@@ -59,6 +61,7 @@ grep -Fxq 'NODE_CURSORAPI_ORIGIN_HOST=worker3-cursorapi-origin.example.test' "$f
 grep -Fxq 'NODE_WABASE_ORIGIN_HOST=worker3-wabase-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NODE_WAPDF_ORIGIN_HOST=worker3-wapdf-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NODE_AICHOR_ORIGIN_HOST=worker3-aichor-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
+grep -Fxq 'NODE_SEARX_ORIGIN_HOST=worker3-searx-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'WOODPECKER_AGENT_LABELS=node=worker-3,deployment=true,target=production,repo=uptonking/llm-hub-lite' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NEW_API_NODE_TYPE=slave' "$fixture/config/cluster/nodes/worker-3.env"
 # Joining nodes receive only the bootstrap/control-sync workflow. Foundation
