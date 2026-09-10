@@ -253,6 +253,28 @@ edge controls. Change `NODES` in `config/cluster/apps/searx.policy` or run
 `ops/configure-app-placement.sh searx <follower>`; singleton moves are fresh
 deployments and do not copy local cache or configuration.
 
+HTTP Basic Auth is enforced at both Caddy hops for every path except
+`/healthz`, which remains public for health checks. Store the account username
+and a Caddy bcrypt hash as the protected Woodpecker repository secrets
+`searx_auth_user` and `searx_auth_hash`; the plaintext password is never
+committed or sent through CI. Generate a hash with the pinned Caddy image:
+
+```bash
+docker run --rm caddy:2.10.0 caddy hash-password --plaintext '<password>'
+```
+
+The plaintext password exists only at the operator's prompt and in the
+browser/password manager; the server and Woodpecker store the username and
+bcrypt hash only.
+
+The username and hash are persisted in root-only runtime files on the Leader
+and selected follower, so they survive redeployments, container recreation,
+and VPS restarts. Rotate both repository secrets and rerun the generated
+`consumer-secrets-searx-leader` and `consumer-secrets-searx-worker-2`
+workflows (or push a SearX configuration change); browsers will receive `401`
+and prompt again. Basic Auth is access control, not rate limiting, so retain
+Cloudflare WAF/rate controls and the follower firewall.
+
 Flowy is the Activepieces singleton at `flowy.aichorage.de` , enabled on the
 active `worker-3` follower by default. Change `NODES` in `config/cluster/apps/flowy.policy` to move it to another active follower, then regenerate the reviewed workflows. Flowy uses one `WORKER_AND_APP` process with PGlite under `data/prod/flowy/config/pglite` , in-memory Redis, one worker, sandbox code-only execution, no automatic piece-catalog synchronization, and bounded memory/CPU. The default `FLOWY_FILE_STORAGE_LOCATION=S3` stores execution files in Cloudflare R2 while keeping metadata in PGlite. Warning-level logging avoids noisy periodic snapshots on a small VPS. The container is capped at 1.5 GB with a 768 MB Node heap, leaving headroom for the worker, PGlite, and native allocations; sandbox reuse is disabled so piece modules do not accumulate in a long-lived execution process. Provision `FLOWY_S3_ENDPOINT`, `FLOWY_S3_BUCKET`, `FLOWY_S3_ACCESS_KEY_ID`, and `FLOWY_S3_SECRET_ACCESS_KEY` with the generated `consumer-secrets-flowy-worker-3` workflow. These credentials are delivered only to the selected singleton follower; no Leader secret workflow is emitted. `FLOWY_ENCRYPTION_KEY` and
 `FLOWY_JWT_SECRET` are node-local. Existing DB-backed files remain readable after switching to S3; no automatic blob migration is performed. Singleton moves are fresh deployments and archive the prior local PGlite directory; backups stop the running Flowy container before copying its PGlite state. Backup staging is kept under

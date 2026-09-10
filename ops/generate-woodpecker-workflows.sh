@@ -458,6 +458,10 @@ conditional_secret_keys() {
 	done < <(printf '%s\n' "$(env_value CONDITIONAL_SECRET_KEYS "$manifest")" | tr ';' '\n')
 	printf '%s\n' "$result"
 }
+deployment_secret_keys() {
+	local manifest="$1"
+	printf '%s\n' "$(env_value DEPLOYMENT_SECRET_KEYS "$manifest")" | tr ',' '\n' | sed '/^$/d' | awk '!seen[$0]++' | paste -sd, -
+}
 
 render_consumer_stage() {
 	local app="$1" node="$2" dependency="$3" file manifest migration_from stage_secret_keys generated_keys key secret_name has_injected_secrets=0
@@ -471,9 +475,9 @@ render_consumer_stage() {
     pull: false
 EOF
 	write_volumes >>"$file"
-	stage_secret_keys=''
+	stage_secret_keys="$(deployment_secret_keys "$manifest")"
 	if [[ "$(env_value RUNTIME_ENV_PROVISION "$manifest")" == stage ]]; then
-		stage_secret_keys="$(env_value NODE_SECRET_KEYS "$manifest"),$(conditional_secret_keys "$manifest" "$node")"
+		stage_secret_keys="${stage_secret_keys}${stage_secret_keys:+,}$(env_value NODE_SECRET_KEYS "$manifest"),$(conditional_secret_keys "$manifest" "$node")"
 	fi
 	if [[ -n "$stage_secret_keys" ]]; then
 		generated_keys="$(env_value GENERATED_SECRET_KEYS "$manifest")"
@@ -518,8 +522,11 @@ EOF
 }
 
 render_consumer_publish() {
-	local app="$1" dependency="$2" file
+	local app="$1" dependency="$2" file manifest deployment_keys secret_keys key secret_name has_injected_secrets=0
 	file="$output/consumer-publish-$app.yml"
+	manifest="$root/apps/$app/manifest.env"
+	deployment_keys="$(deployment_secret_keys "$manifest")"
+	secret_keys="$(woodpecker_secret_keys "$app" "$deployment_keys")"
 	write_consumer_header "$file" "$app" "$leader_id" "$dependency"
 	cat >>"$file" <<EOF
   publish:
@@ -527,8 +534,22 @@ render_consumer_publish() {
     pull: false
 EOF
 	write_volumes >>"$file"
+	while IFS= read -r key; do
+		[[ -n "$key" ]] || continue
+		has_injected_secrets=1
+	done < <(printf '%s\n' "$secret_keys" | tr ',' '\n' | sed '/^$/d' | awk '!seen[$0]++')
+	if ((has_injected_secrets)); then
+		printf '    environment:\n' >>"$file"
+		while IFS= read -r key; do
+			[[ -n "$key" ]] || continue
+			secret_name="$(woodpecker_secret_name "$app" "$key")"
+			printf '      %s:\n        from_secret: %s\n' "$key" "$secret_name" >>"$file"
+		done < <(printf '%s\n' "$secret_keys" | tr ',' '\n' | sed '/^$/d' | awk '!seen[$0]++')
+		printf '    commands:\n      - /usr/local/bin/configure-app-secrets %s --non-interactive\n' "$app" >>"$file"
+	else
+		printf '    commands:\n' >>"$file"
+	fi
 	cat >>"$file" <<EOF
-    commands:
       - $ci_sha_guard DEPLOY_DEBUG_LEVEL=$deploy_debug_level CONSUMER_APP_ID=$app /usr/local/bin/platform-submit consumer-publish "\$CI_COMMIT_SHA"
 EOF
 }

@@ -3,6 +3,7 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
+dev_searx_hash="\$2a\$14\$v67tDOrc14wVF5bwuJ4SYe48FsnIx1kB4LUZA7TAmCepLmj7tYzQ."
 for node_file in "$repo_root"/config/cluster/nodes/*.env; do
 	node="$(basename "$node_file" .env)"
 	STACK_ENV_FILE="$repo_root/.env.dev.example" STACK_NODE_CONFIG_FILE="$node_file" STACK_RUNTIME_ROOT="$tmp/$node" \
@@ -38,6 +39,9 @@ grep -Fq 'reverse_proxy searx:8080' "$tmp/searx-worker-2/config/routes.d/searx.c
 STACK_ENV_FILE="$repo_root/.env.dev.example" STACK_NODE_CONFIG_FILE="$repo_root/config/cluster/nodes/leader.env" STACK_RUNTIME_ROOT="$tmp/searx-leader" \
 	"$repo_root/stack.sh" dev validate >/dev/null
 grep -Fq 'reverse_proxy https://worker2-searx-origin.aichorage.de' "$tmp/searx-leader/config/routes.d/searx.caddy"
+grep -Fq 'basic_auth @searx_auth_required' "$tmp/searx-leader/config/routes.d/searx.caddy"
+grep -Fq "searx-dev $dev_searx_hash" "$tmp/searx-leader/config/routes.d/searx.caddy"
+grep -Fq 'basic_auth @searx_auth_required' "$tmp/searx-worker-2/config/routes.d/searx.caddy"
 # A malformed policy must not silently enable a consumer in local mode. Keep
 # this check independent of Docker by validating the generated routes only.
 malformed_root="$tmp/malformed"

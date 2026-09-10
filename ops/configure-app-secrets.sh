@@ -189,6 +189,7 @@ fi
 
 cluster_keys="$(env_value CLUSTER_SECRET_KEYS "$manifest")"
 node_keys="$(env_value NODE_SECRET_KEYS "$manifest")"
+deployment_keys="$(env_value DEPLOYMENT_SECRET_KEYS "$manifest")"
 upstream_mode="$(env_value UPSTREAM_MODE "$manifest")"
 generated_keys="$(env_value GENERATED_SECRET_KEYS "$manifest")"
 generated_bytes="$(env_value GENERATED_SECRET_BYTES "$manifest")"
@@ -270,6 +271,10 @@ validate_secret() {
 		printf '%s must contain at least %s characters\n' "$key" "$min_length" >&2
 		return 1
 	fi
+	if [[ "$key" == SEARX_AUTH_USER && "${#value}" -gt 64 ]]; then
+		printf '%s must contain at most 64 characters\n' "$key" >&2
+		return 1
+	fi
 	regex="$(secret_regex "$key")"
 	if [[ -n "$regex" && ! "$value" =~ $regex ]]; then
 		printf '%s does not match the configured secret format\n' "$key" >&2
@@ -343,8 +348,15 @@ write_secrets() {
 
 validate_key_list "$cluster_keys"
 validate_key_list "$node_keys"
+validate_key_list "$deployment_keys"
 validate_key_list "$generated_keys"
 validate_key_list "$conditional_keys"
+while IFS= read -r deployment_key; do
+	[[ -n "$deployment_key" ]] || continue
+	csv_has "$cluster_keys" "$deployment_key" || die "deployment secret must be declared as a cluster secret: $deployment_key"
+	! csv_has "$node_keys" "$deployment_key" || die "deployment secret must not be node-local: $deployment_key"
+	! csv_has "$generated_keys" "$deployment_key" || die "deployment secret must not be generated: $deployment_key"
+done < <(printf '%s\n' "$deployment_keys" | tr ',' '\n')
 while IFS= read -r rule; do
 	[[ -n "$rule" ]] || continue
 	key="${rule%%:*}"

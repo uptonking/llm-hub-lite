@@ -94,6 +94,20 @@ grep -Fq 'consumer-stop-aichor-worker-3' "$base/workflows/consumer-finalize-aich
 grep -Fq 'consumer-stop-aichor-worker-4' "$base/workflows/consumer-finalize-aichor-worker-2.yml"
 grep -Fq 'consumer-stage-searx-worker-2' "$base/workflows/consumer-publish-searx.yml"
 grep -Fq 'from_secret: searx_secret' "$base/workflows/consumer-secrets-searx-worker-2.yml"
+grep -Fq 'from_secret: searx_auth_user' "$base/workflows/consumer-stage-searx-worker-2.yml"
+grep -Fq 'from_secret: searx_auth_hash' "$base/workflows/consumer-stage-searx-worker-2.yml"
+grep -Fq 'from_secret: searx_auth_user' "$base/workflows/consumer-publish-searx.yml"
+grep -Fq 'from_secret: searx_auth_hash' "$base/workflows/consumer-publish-searx.yml"
+grep -Fq 'configure-app-secrets searx --non-interactive' "$base/workflows/consumer-publish-searx.yml"
+while IFS= read -r workflow; do
+	case "$(basename "$workflow")" in
+	consumer-stage-searx-worker-2.yml | consumer-publish-searx.yml | consumer-secrets-searx-*.yml) ;;
+	*)
+		printf 'SearX auth secrets leaked into an unrelated workflow: %s\n' "$workflow" >&2
+		exit 1
+		;;
+	esac
+done < <(grep -R -l -E 'SEARX_AUTH_(USER|HASH)|searx_auth_(user|hash)' "$base/workflows")
 for node in worker-1 worker-3 worker-4; do
 	[[ ! -e "$base/workflows/consumer-secrets-aichor-$node.yml" ]] || {
 		printf 'Aichor generated a secret workflow for an unselected node: %s\n' "$node" >&2

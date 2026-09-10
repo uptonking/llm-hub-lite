@@ -45,6 +45,11 @@ steps:
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
       - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
+    environment:
+      SEARX_AUTH_USER:
+        from_secret: searx_auth_user
+      SEARX_AUTH_HASH:
+        from_secret: searx_auth_hash
     commands:
       - /usr/local/bin/configure-app-secrets searx --target-node worker-2 --ensure-generated
       - /usr/local/bin/configure-app-secrets searx --target-node worker-2 --non-interactive

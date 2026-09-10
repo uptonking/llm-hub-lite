@@ -51,6 +51,10 @@ env_value() {
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		[[ "$line" == "$key="* ]] && value="${line#*=}"
 	done <"$file"
+	# Docker Compose represents literal dollar signs as $$ in env files. Decode
+	# that escape for route rendering while leaving production runtime files
+	# (which are written directly by configure-app-secrets) untouched.
+	value="${value//\$\$/\$}"
 	printf '%s\n' "$value"
 }
 csv_has() {

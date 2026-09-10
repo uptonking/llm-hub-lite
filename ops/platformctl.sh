@@ -1102,7 +1102,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel ephemeral_rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port recovery_path
+	local d="$1" k v rel ephemeral_rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys deployment_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port recovery_path
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -1239,6 +1239,14 @@ validate_descriptor() {
 		node_default_keys="${node_default_keys:+$node_default_keys,}$default_key"
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" NODE_DEFAULTS)" | tr ';' '\n')"
 	all_secret_keys="$(descriptor_value "$d" CLUSTER_SECRET_KEYS),$(descriptor_value "$d" NODE_SECRET_KEYS)"
+	deployment_keys="$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)"
+	while IFS= read -r secret_key; do
+		[[ -n "$secret_key" ]] || continue
+		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid deployment secret key in $d/manifest.env: $secret_key"
+		csv_has "$(descriptor_value "$d" CLUSTER_SECRET_KEYS)" "$secret_key" || die "deployment secret must be declared as a cluster secret in $d/manifest.env: $secret_key"
+		! csv_has "$(descriptor_value "$d" NODE_SECRET_KEYS)" "$secret_key" || die "deployment secret must not be node-local in $d/manifest.env: $secret_key"
+		! csv_has "$(descriptor_value "$d" GENERATED_SECRET_KEYS)" "$secret_key" || die "deployment secret must not be generated in $d/manifest.env: $secret_key"
+	done <<<"$(printf '%s\n' "$deployment_keys" | tr ',' '\n')"
 	while IFS= read -r secret_key; do
 		[[ -n "$secret_key" ]] || continue
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid application secret key in $d/manifest.env: $secret_key"
@@ -1422,6 +1430,7 @@ validate_descriptor() {
 			[[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "active singleton requires a non-empty single-line secret: $k"
 			min_length="$(descriptor_secret_min_length "$d" "$k")"
 			((${#value} >= min_length)) || die "active singleton secret $k must contain at least $min_length characters"
+			[[ "$k" != SEARX_AUTH_USER || "${#value}" -le 64 ]] || die 'active singleton secret SEARX_AUTH_USER must contain at most 64 characters'
 			regex="$(descriptor_secret_regex "$d" "$k")"
 			[[ -z "$regex" || "$value" =~ $regex ]] || die "active singleton secret $k does not match its configured format"
 			! placeholder_value "$value" || die "active singleton secret placeholder is not allowed: $k"

@@ -420,6 +420,10 @@ valid_input_value() {
 		printf '%s must contain at least %s characters\n' "$key" "$min_length" >&2
 		return 1
 	fi
+	if [[ "$key" == SEARX_AUTH_USER && "${#value}" -gt 64 ]]; then
+		printf '%s must contain at most 64 characters\n' "$key" >&2
+		return 1
+	fi
 	if [[ -n "$regex" && ! "$value" =~ $regex ]]; then
 		printf '%s does not match the configured secret format\n' "$key" >&2
 		return 1
@@ -1041,11 +1045,20 @@ manifest_conditional_secret_keys() {
 	printf '%s\n' "$result"
 }
 prepare_application_secrets() {
-	local manifest app_id keys runtime_rel runtime_file key min_length conditional_keys regex bytes
+	local manifest app_id keys runtime_rel runtime_file key min_length conditional_keys regex bytes deployment_keys cluster_keys generated_keys deployment_key
 	while IFS= read -r manifest; do
 		[[ -f "$manifest" ]] || continue
 		[[ "$(sed -n 's/^MANIFEST_VERSION=//p' "$manifest" | tail -n1)" == 5 ]] || die "unsupported application manifest version: $manifest"
 		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
+		cluster_keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		deployment_keys="$(sed -n 's/^DEPLOYMENT_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		generated_keys="$(sed -n 's/^GENERATED_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		while IFS= read -r deployment_key; do
+			[[ -n "$deployment_key" ]] || continue
+			[[ "$deployment_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid deployment secret key in $manifest: $deployment_key"
+			csv_contains "$cluster_keys" "$deployment_key" || die "deployment secret must be declared as a cluster secret in $manifest: $deployment_key"
+			! csv_contains "$generated_keys" "$deployment_key" || die "deployment secret must not be generated in $manifest: $deployment_key"
+		done < <(printf '%s\n' "$deployment_keys" | tr ',' '\n')
 		app_enabled "$app_id" || continue
 		conditional_keys="$(manifest_conditional_secret_keys "$manifest")"
 		if [[ "$NODE_ROLE" == leader ]]; then
