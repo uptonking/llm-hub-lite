@@ -630,6 +630,18 @@ descriptor_secret_keys() {
 	keys="$(descriptor_value "$d" CLUSTER_SECRET_KEYS),$(descriptor_value "$d" NODE_SECRET_KEYS)"
 	printf '%s\n' "$keys" | tr ',' '\n' | sed '/^$/d' | awk '!seen[$0]++'
 }
+descriptor_deployment_secret_keys() {
+	local d="$1"
+	printf '%s\n' "$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)" | tr ',' '\n' | sed '/^$/d' | awk '!seen[$0]++'
+}
+deployment_secrets_ready() {
+	local d="$1" key value
+	while IFS= read -r key; do
+		[[ -n "$key" ]] || continue
+		value="$(app_value "$d" "$key")"
+		[[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
+	done <<<"$(descriptor_deployment_secret_keys "$d")"
+}
 app_declared() {
 	local d
 	# Use a here-string instead of a process substitution. These helpers are
@@ -830,6 +842,14 @@ render_routes() {
 			if [[ "${PLATFORM_RECONCILE_DISABLED_SINGLETONS:-0}" == 1 ]] && ! app_policy_enabled "$a"; then
 				continue
 			fi
+			[[ -f "$current_route" ]] && cp "$current_route" "$s/routes.d/$a.caddy"
+			continue
+		fi
+		# control-verify runs on every node before a consumer stage can inject
+		# deployment-scoped credentials. Keep the currently installed route (or
+		# omit a new route) until those credentials are provisioned; stage/publish
+		# perform the strict secret validation and render the authenticated route.
+		if [[ "${PLATFORM_CONTROL_VERIFY:-0}" == 1 ]] && ! deployment_secrets_ready "$d"; then
 			[[ -f "$current_route" ]] && cp "$current_route" "$s/routes.d/$a.caddy"
 			continue
 		fi
@@ -1426,6 +1446,9 @@ validate_descriptor() {
 	if [[ "$(app_upstream_mode "$d")" == singleton && "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true && "$(singleton_runtime_env_provisioned "$d" && printf true || printf false)" == true ]]; then
 		while IFS= read -r k; do
 			[[ -n "$k" ]] || continue
+			if [[ "${PLATFORM_CONTROL_VERIFY:-0}" == 1 ]] && csv_has "$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)" "$k"; then
+				continue
+			fi
 			value="$(app_value "$d" "$k")"
 			[[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "active singleton requires a non-empty single-line secret: $k"
 			min_length="$(descriptor_secret_min_length "$d" "$k")"

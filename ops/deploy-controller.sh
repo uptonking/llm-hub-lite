@@ -284,7 +284,7 @@ apply_control_sync() {
 			write_control_sync_state failed "$sha" "$old_sha" 'candidate contract verification failed'
 			die 'candidate control contract verification failed'
 		}
-		validate_release "$release" 1 || {
+		PLATFORM_CONTROL_VERIFY=1 validate_release "$release" 1 || {
 			write_control_sync_state failed "$sha" "$old_sha" 'node-local candidate validation failed'
 			die 'node-local candidate validation failed'
 		}
