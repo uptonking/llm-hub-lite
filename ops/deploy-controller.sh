@@ -349,7 +349,8 @@ apply_control_verify() {
 	# validation and route rendering) can defer deployment-scoped credentials
 	# until the consumer stage workflow injects them.
 	export PLATFORM_CONTROL_VERIFY=1
-	CONTROL_VERIFY_ONLY=1 apply_control_sync "$1"
+	export CONTROL_VERIFY_ONLY=1
+	apply_control_sync "$1"
 }
 
 git_remote_url() {
