@@ -105,6 +105,7 @@ NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
 NODE_AICHOR_ORIGIN_HOST=worker2-aichor.example.invalid
+NODE_SEARX_ORIGIN_HOST=worker2-searx.example.invalid
 NODE_CURSORAPI_ORIGIN_HOST=worker2-cursorapi.example.invalid
 NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
 NODE_WAPDF_ORIGIN_HOST=worker2-wapdf.example.invalid
@@ -121,7 +122,7 @@ case "$*" in
   *" ps --all -q beszel-socket-proxy"*) printf 'beszel-socket-proxy\n'; exit 0;;
   *" ps --all -q health-probe"*)
     case "$*" in
-      *"-p app-aichor "*|*"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*)
+      *"-p app-aichor "*|*"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*|*"-p app-searx "*)
         printf 'health-probe\n'
         exit 0
         ;;
@@ -153,6 +154,7 @@ case "$*" in
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
   *app-wapdf*) printf 'wapdf\nhealth-probe\n';;
+  *app-searx*) printf 'searx\n';;
   *app-verge*) printf 'verge\n';;
 esac
 exit 0
