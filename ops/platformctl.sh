@@ -861,8 +861,14 @@ render_routes() {
 			if [[ "${PLATFORM_RECONCILE_DISABLED_SINGLETONS:-0}" == 1 ]] && ! app_policy_enabled "$a"; then
 				continue
 			fi
-			[[ -f "$current_route" ]] && cp "$current_route" "$s/routes.d/$a.caddy"
-			continue
+			# Foundation/cluster reconciliation does not mutate singleton
+			# containers or Leader publication state. Preserve an installed
+			# singleton route, but repair a missing follower origin route so a
+			# fresh or previously drifted node can become reachable again.
+			if [[ -f "$current_route" ]]; then
+				cp "$current_route" "$s/routes.d/$a.caddy"
+				continue
+			fi
 		fi
 		# control-verify runs on every node before a consumer stage can inject
 		# deployment-scoped credentials. Keep the currently installed route (or
