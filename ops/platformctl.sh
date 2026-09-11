@@ -2761,6 +2761,10 @@ EOF
 	# and the external route before publication.
 	if [[ "$(node_role)" == follower ]]; then
 		probe_image="$(env_value HEALTH_PROBE_IMAGE "$APP_IMAGE_ENV")"
+		# Singleton image locks intentionally contain only the app image. Fall
+		# back to the canonical pinned probe image so staging a singleton on a
+		# fresh follower does not depend on another app having been deployed.
+		[[ -n "$probe_image" ]] || probe_image="$(env_value HEALTH_PROBE_IMAGE "$CONTROL_ROOT/current/ops/images.apps.prod.env")"
 		[[ -n "$probe_image" ]] || die 'singleton origin smoke probe image is missing'
 		probe_url="http://${alias}:${port}${health}"
 		response="$(docker run --rm --pull=never --network "$(edge_network)" "$probe_image" --noproxy '*' -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 -H "Host: $origin" "$probe_url")" || die "singleton origin is unhealthy: $origin"

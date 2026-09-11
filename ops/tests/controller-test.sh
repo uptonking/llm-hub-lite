@@ -186,6 +186,7 @@ grep -Fq 'tls internal' "$repo_root/apps/flowy/route.follower.caddy"
 grep -Fq 'tls internal' "$repo_root/apps/wabase/route.follower.caddy"
 grep -Fq 'tls_insecure_skip_verify' "$repo_root/apps/flowy/route.leader.caddy"
 grep -Fq 'tls_insecure_skip_verify' "$repo_root/apps/wabase/route.leader.caddy"
+grep -Fq 'CONTROL_ROOT/current/ops/images.apps.prod.env' "$repo_root/ops/platformctl.sh"
 grep -Fq 'import forward_verified_client_ip' "$repo_root/apps/aichor/route.leader.caddy"
 grep -Fq 'header_up X-Forwarded-Host {$AICHOR_SITE_HOST}' "$repo_root/apps/aichor/route.leader.caddy"
 if grep -Eq 'header_up (Upgrade|Connection)' "$repo_root/apps/aichor/route.leader.caddy" "$repo_root/apps/aichor/route.follower.caddy"; then
