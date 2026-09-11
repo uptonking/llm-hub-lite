@@ -20,6 +20,12 @@ rendered `RUNTIME_CONFIG_FILE`, data directory, process state, and every
 declared published listener before reporting success. It uses `--pull never`,
 so a reboot cannot replace a digest-pinned image with mutable registry state.
 
+The boot fallback timer runs once, 120 seconds after boot. It does not repeat
+on every timer activation while the platform is healthy. If recovery fails,
+`platform-recovery-retry.service` retries the failure after 60 seconds, with a
+maximum of five starts in 15 minutes; a successful retry becomes inactive.
+This prevents a healthy node from spending CPU on perpetual reconciliation.
+
 The bootstrap script uses the same ordering: it holds the platform lock while
 installing and reconciling files, completes the post-bootstrap snapshot, then
 releases the lock before queuing `platform.target`. This avoids a systemd
@@ -31,8 +37,12 @@ Recovery uses a root-only validation stamp at
 `/etc/llm-hub-lite/validation.stamp`. When the current release, committed
 policies, image locks, node configuration, runtime environment, and Compose
 tool identity still match the stamp, recovery performs structural validation
-and skips the expensive external Compose/Caddy validation. A changed or
-missing input automatically falls back to full validation. Use
+and skips the expensive external Compose/Caddy validation. If the stamp and
+runtime Caddyfile are current, all managed containers are healthy, durable
+recovery state is present, no singleton transition is pending, and no inactive
+containers require cleanup, recovery exits through a lightweight no-op path
+without starting Compose projects or reloading Caddy. A changed or missing
+input automatically falls back to full validation. Use
 `platformctl recover --full` when deliberately rechecking every Compose model
 after a Docker or Compose upgrade.
 
@@ -62,6 +72,10 @@ platformctl status
 platformctl health
 platformctl diagnose foundation
 ```
+
+Foundation diagnostics include recovery timer/service state, trigger timing,
+retry CPU time and restart count, retry journal activity from the last 24
+hours, and whether the installed host units match the current control release.
 
 On the Leader, also verify end-to-end ingestion:
 
