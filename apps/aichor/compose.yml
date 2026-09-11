@@ -16,6 +16,7 @@ services:
       PASEO_HOME: /home/paseo/.paseo
       PASEO_LISTEN: 0.0.0.0:6767
       PASEO_PASSWORD: ${AICHOR_PASSWORD:?AICHOR_PASSWORD must be set}
+      GH_TOKEN: ${GH_TOKEN:-}
       PASEO_HOSTNAMES: ${AICHOR_HOSTNAMES:-.aichorage.de}
       PASEO_WEB_UI_ENABLED: "true"
       PASEO_LOG_LEVEL: ${AICHOR_LOG_LEVEL:-warn}

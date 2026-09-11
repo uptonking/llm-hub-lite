@@ -81,9 +81,20 @@ sed 's/^ENABLED=.*/ENABLED=true/' "$aichor3_enabled/config/cluster/apps/aichor3.
 mv "$aichor3_enabled/aichor3.policy" "$aichor3_enabled/config/cluster/apps/aichor3.policy"
 generate_fixture "$aichor3_enabled"
 grep -Fq 'configure-app-secrets aichor3 --target-node worker-3 --ensure-generated' "$aichor3_enabled/workflows/consumer-stage-aichor3-worker-3.yml"
+grep -Fq 'GH_TOKEN:' "$aichor3_enabled/workflows/consumer-stage-aichor3-worker-3.yml"
+grep -Fq 'from_secret: GH_TOKEN' "$aichor3_enabled/workflows/consumer-stage-aichor3-worker-3.yml"
+grep -Fq 'GH_TOKEN:' "$aichor3_enabled/workflows/consumer-secrets-aichor3-worker-3.yml"
+grep -Fq 'from_secret: GH_TOKEN' "$aichor3_enabled/workflows/consumer-secrets-aichor3-worker-3.yml"
 grep -Fq 'consumer-stage-aichor3-worker-3' "$aichor3_enabled/workflows/consumer-publish-aichor3.yml"
 grep -Fq '/usr/local/bin/configure-app-secrets aichor --target-node worker-2 --ensure-generated' "$base/workflows/consumer-stage-aichor-worker-2.yml"
+grep -Fq 'GH_TOKEN:' "$base/workflows/consumer-stage-aichor-worker-2.yml"
+grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-stage-aichor-worker-2.yml"
 grep -Fq 'from_secret: aichor_password' "$base/workflows/consumer-secrets-aichor-worker-2.yml"
+grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-secrets-aichor-worker-2.yml"
+if grep -R -q 'from_secret: GH_TOKEN' "$base/workflows/consumer-publish-aichor.yml" "$base/workflows/consumer-publish-aichor3.yml" "$base/workflows/control-sync-leader.yml"; then
+	printf 'GH_TOKEN leaked into a Leader or publish workflow\n' >&2
+	exit 1
+fi
 if grep -Fq 'AICHOR_PI_' "$base/workflows/consumer-stage-aichor-worker-2.yml"; then
 	printf 'disabled Aichor Pi fallbacks unexpectedly requested provider secrets\n' >&2
 	exit 1

@@ -189,6 +189,7 @@ fi
 
 cluster_keys="$(env_value CLUSTER_SECRET_KEYS "$manifest")"
 node_keys="$(env_value NODE_SECRET_KEYS "$manifest")"
+optional_keys="$(env_value OPTIONAL_SECRET_KEYS "$manifest")"
 deployment_keys="$(env_value DEPLOYMENT_SECRET_KEYS "$manifest")"
 upstream_mode="$(env_value UPSTREAM_MODE "$manifest")"
 generated_keys="$(env_value GENERATED_SECRET_KEYS "$manifest")"
@@ -219,7 +220,18 @@ conditional_secret_keys() {
 	done < <(printf '%s\n' "$(env_value CONDITIONAL_SECRET_KEYS "$manifest")" | tr ';' '\n')
 	printf '%s\n' "$result"
 }
+conditional_declared_secret_keys() {
+	local rule expected keys result=''
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		expected="${rule#*=}"
+		keys="${expected#*|}"
+		result="${result:+$result,}$keys"
+	done < <(printf '%s\n' "$(env_value CONDITIONAL_SECRET_KEYS "$manifest")" | tr ';' '\n')
+	printf '%s\n' "$result"
+}
 conditional_keys="$(conditional_secret_keys)"
+conditional_declared_keys="$(conditional_declared_secret_keys)"
 
 secret_min_length() {
 	local wanted="$1" rule key length
@@ -299,6 +311,19 @@ existing_secret() {
 }
 resolve_secret() {
 	local key="$1" destination="$2" value min_length bytes
+	if csv_has "$optional_keys" "$key"; then
+		# Optional credentials are supplied by the protected Woodpecker
+		# environment when available.  An absent value deliberately clears the
+		# host-local copy so a revoked repository secret cannot leave stale
+		# credentials active in a container.
+		value="${!key:-}"
+		if [[ -n "$value" ]]; then
+			min_length="$(secret_min_length "$key")"
+			validate_secret "$key" "$value" "$min_length" || die "$key is invalid"
+		fi
+		printf '%s\n' "$value"
+		return 0
+	fi
 	min_length="$(secret_min_length "$key")"
 	value="${!key:-}"
 	if [[ -z "$value" ]]; then
@@ -351,6 +376,12 @@ validate_key_list "$node_keys"
 validate_key_list "$deployment_keys"
 validate_key_list "$generated_keys"
 validate_key_list "$conditional_keys"
+validate_key_list "$optional_keys"
+while IFS= read -r optional_key; do
+	[[ -n "$optional_key" ]] || continue
+	csv_has "$cluster_keys,$node_keys,$conditional_declared_keys" "$optional_key" || die "OPTIONAL_SECRET_KEYS references undeclared secret: $optional_key"
+	! csv_has "$generated_keys" "$optional_key" || die "optional secret must not be generated: $optional_key"
+done < <(printf '%s\n' "$optional_keys" | tr ',' '\n')
 while IFS= read -r deployment_key; do
 	[[ -n "$deployment_key" ]] || continue
 	csv_has "$cluster_keys" "$deployment_key" || die "deployment secret must be declared as a cluster secret: $deployment_key"

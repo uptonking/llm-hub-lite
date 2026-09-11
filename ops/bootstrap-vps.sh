@@ -1030,6 +1030,20 @@ manifest_has_generated_secret() {
 	generated="$(sed -n 's/^GENERATED_SECRET_KEYS=//p' "$manifest" | tail -n1)"
 	csv_contains "$generated" "$key"
 }
+manifest_optional_secret_keys() {
+	local manifest="$1"
+	sed -n 's/^OPTIONAL_SECRET_KEYS=//p' "$manifest" | tail -n1
+}
+manifest_conditional_declared_secret_keys() {
+	local manifest="$1" rule expected keys result=''
+	while IFS= read -r rule; do
+		[[ -n "$rule" ]] || continue
+		expected="${rule#*=}"
+		keys="${expected#*|}"
+		result="${result:+$result,}$keys"
+	done < <(sed -n 's/^CONDITIONAL_SECRET_KEYS=//p' "$manifest" | tail -n1 | tr ';' '\n')
+	printf '%s\n' "$result"
+}
 manifest_conditional_secret_keys() {
 	local manifest="$1" rule selector expected keys config_file result=''
 	config_file="$(dirname "$manifest")/$(sed -n 's/^CONFIG_FILE=//p' "$manifest" | tail -n1)"
@@ -1045,14 +1059,22 @@ manifest_conditional_secret_keys() {
 	printf '%s\n' "$result"
 }
 prepare_application_secrets() {
-	local manifest app_id keys runtime_rel runtime_file key min_length conditional_keys regex bytes deployment_keys cluster_keys generated_keys deployment_key
+	local manifest app_id keys runtime_rel runtime_file key min_length conditional_keys regex bytes deployment_keys cluster_keys generated_keys deployment_key optional_keys conditional_declared_keys optional_key node_keys
 	while IFS= read -r manifest; do
 		[[ -f "$manifest" ]] || continue
 		[[ "$(sed -n 's/^MANIFEST_VERSION=//p' "$manifest" | tail -n1)" == 5 ]] || die "unsupported application manifest version: $manifest"
 		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 		cluster_keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		optional_keys="$(manifest_optional_secret_keys "$manifest")"
 		deployment_keys="$(sed -n 's/^DEPLOYMENT_SECRET_KEYS=//p' "$manifest" | tail -n1)"
 		generated_keys="$(sed -n 's/^GENERATED_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		conditional_declared_keys="$(manifest_conditional_declared_secret_keys "$manifest")"
+		while IFS= read -r optional_key; do
+			[[ -n "$optional_key" ]] || continue
+			[[ "$optional_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid optional secret key in $manifest: $optional_key"
+			csv_contains "$cluster_keys,$(sed -n 's/^NODE_SECRET_KEYS=//p' "$manifest" | tail -n1),$conditional_declared_keys" "$optional_key" || die "OPTIONAL_SECRET_KEYS references undeclared secret in $manifest: $optional_key"
+			! csv_contains "$generated_keys" "$optional_key" || die "optional secret must not be generated in $manifest: $optional_key"
+		done < <(printf '%s\n' "$optional_keys" | tr ',' '\n')
 		while IFS= read -r deployment_key; do
 			[[ -n "$deployment_key" ]] || continue
 			[[ "$deployment_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid deployment secret key in $manifest: $deployment_key"
@@ -1093,13 +1115,24 @@ prepare_application_secrets() {
 			prompt_required "$key" "$app_id shared $key" 1 "$min_length" "$regex"
 		done < <(printf '%s\n' "$keys" | tr ',' '\n')
 		runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
-		keys="$(sed -n 's/^NODE_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		node_keys="$(sed -n 's/^NODE_SECRET_KEYS=//p' "$manifest" | tail -n1)"
+		keys="$node_keys"
 		[[ -z "$keys" || (-n "$runtime_rel" && "$runtime_rel" != /* && "$runtime_rel" != *..* && "$runtime_rel" =~ ^[A-Za-z0-9._/-]+$) ]] || die "invalid RUNTIME_ENV_FILE for $app_id"
 		runtime_file="$CONFIG_ROOT/$runtime_rel"
 		while IFS= read -r key; do
 			[[ -n "$key" ]] || continue
-			load_runtime_value "$key" "$runtime_file"
+			if ! csv_contains "$optional_keys" "$key"; then
+				load_runtime_value "$key" "$runtime_file"
+			fi
 			clear_placeholder "$key"
+			if csv_contains "$optional_keys" "$key"; then
+				if [[ -n "${!key:-}" ]]; then
+					min_length="$(manifest_secret_min_length "$manifest" "$key")"
+					regex="$(manifest_secret_regex "$manifest" "$key")"
+					valid_input_value "$key" "${!key}" "$min_length" "$regex" || die "$key is invalid; provide a clean replacement through the environment or shared secret bundle"
+				fi
+				continue
+			fi
 			if manifest_has_generated_secret "$manifest" "$key"; then
 				bytes="$(manifest_secret_bytes "$manifest" "$key")"
 				[[ "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry for $app_id/$key"
@@ -1200,11 +1233,12 @@ if [[ -n "$SHARED_SECRET_BUNDLE_FILE" && -s "$SHARED_SECRET_BUNDLE_FILE" && "$SH
 	SHARED_SECRET_BUNDLE_FILE="$CONFIG_ROOT/shared-secrets.env"
 fi
 persist_application_secrets() {
-	local manifest app_id keys runtime_rel runtime_file key value conditional_keys
+	local manifest app_id keys runtime_rel runtime_file key value conditional_keys optional_keys
 	while IFS= read -r manifest; do
 		[[ -f "$manifest" ]] || continue
 		app_id="$(sed -n 's/^APP_ID=//p' "$manifest" | tail -n1)"
 		app_enabled "$app_id" || continue
+		optional_keys="$(manifest_optional_secret_keys "$manifest")"
 		keys="$(sed -n 's/^CLUSTER_SECRET_KEYS=//p' "$manifest" | tail -n1)"
 		conditional_keys="$(manifest_conditional_secret_keys "$manifest")"
 		keys="${keys}${conditional_keys:+${keys:+,}$conditional_keys}"
@@ -1212,7 +1246,9 @@ persist_application_secrets() {
 			while IFS= read -r key; do
 				[[ -n "$key" ]] || continue
 				value="${!key:-}"
-				[[ -n "$value" ]] || die "application secret was not prepared: $app_id/$key"
+				if [[ -z "$value" ]] && ! csv_contains "$optional_keys" "$key"; then
+					die "application secret was not prepared: $app_id/$key"
+				fi
 				set_key_if_changed "$app_env" "$key" "$value"
 				[[ "$NODE_ROLE" != leader ]] || set_key_if_changed "$CONFIG_ROOT/shared-secrets.env" "$key" "$value"
 			done < <(printf '%s\n' "$keys" | tr ',' '\n')
@@ -1226,7 +1262,9 @@ persist_application_secrets() {
 		while IFS= read -r key; do
 			[[ -n "$key" ]] || continue
 			value="${!key:-}"
-			[[ -n "$value" ]] || die "node-local application secret was not prepared: $app_id/$key"
+			if [[ -z "$value" ]] && ! csv_contains "$optional_keys" "$key"; then
+				die "node-local application secret was not prepared: $app_id/$key"
+			fi
 			set_key_if_changed "$runtime_file" "$key" "$value"
 		done < <(printf '%s\n' "$keys" | tr ',' '\n')
 	done < <(find "$bootstrap_tree/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print | sort)

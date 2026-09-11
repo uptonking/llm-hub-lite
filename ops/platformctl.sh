@@ -511,11 +511,25 @@ singleton_runtime_env_provisioned() {
 	[[ -f "$(app_runtime_env_file "$1")" ]]
 }
 singleton_runtime_env_ready() {
-	local d="$1" key node_keys cluster_keys generated_keys
+	local d="$1" key node_keys cluster_keys generated_keys optional_keys conditional_keys rule
 	[[ "$(app_upstream_mode "$d")" == singleton ]] || return 0
 	if [[ -z "$(descriptor_value "$d" RUNTIME_ENV_FILE)" ]]; then
-		[[ -z "$(descriptor_value "$d" CLUSTER_SECRET_KEYS)" && -z "$(descriptor_value "$d" NODE_SECRET_KEYS)" && -z "$(descriptor_value "$d" CONDITIONAL_SECRET_KEYS)" ]]
-		return $?
+		cluster_keys="$(descriptor_value "$d" CLUSTER_SECRET_KEYS)"
+		node_keys="$(descriptor_value "$d" NODE_SECRET_KEYS)"
+		optional_keys="$(descriptor_value "$d" OPTIONAL_SECRET_KEYS)"
+		conditional_keys=''
+		while IFS= read -r rule; do
+			[[ -n "$rule" ]] || continue
+			rule="${rule#*|}"
+			conditional_keys="${conditional_keys}${conditional_keys:+,}$rule"
+		done <<<"$(printf '%s\n' "$(descriptor_value "$d" CONDITIONAL_SECRET_KEYS)" | tr ';' '\n')"
+		[[ -z "$cluster_keys" ]] || return 1
+		while IFS= read -r key; do
+			[[ -n "$key" ]] || continue
+			csv_has "$optional_keys" "$key" && continue
+			return 1
+		done <<<"$(printf '%s\n' "$node_keys,$conditional_keys" | tr ',' '\n')"
+		return 0
 	fi
 	singleton_runtime_env_provisioned "$d" && return 0
 	# A newly enabled singleton can be validated before its stage workflow
@@ -524,9 +538,11 @@ singleton_runtime_env_ready() {
 	node_keys="$(descriptor_value "$d" NODE_SECRET_KEYS)"
 	cluster_keys="$(descriptor_value "$d" CLUSTER_SECRET_KEYS)"
 	generated_keys="$(descriptor_value "$d" GENERATED_SECRET_KEYS)"
+	optional_keys="$(descriptor_value "$d" OPTIONAL_SECRET_KEYS)"
 	[[ -n "$node_keys" && -z "$cluster_keys" ]] || return 1
 	while IFS= read -r key; do
 		[[ -n "$key" ]] || continue
+		csv_has "$optional_keys" "$key" && continue
 		csv_has "$generated_keys" "$key" || return 1
 	done <<<"$(printf '%s\n' "$node_keys" | tr ',' '\n')"
 }
@@ -1147,7 +1163,7 @@ validate_cluster() {
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel ephemeral_rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys deployment_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port recovery_path
+	local d="$1" k v rel ephemeral_rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys deployment_keys optional_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port recovery_path
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE; do
 		v="$(descriptor_value "$d" "$k")"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
@@ -1284,6 +1300,7 @@ validate_descriptor() {
 		node_default_keys="${node_default_keys:+$node_default_keys,}$default_key"
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" NODE_DEFAULTS)" | tr ';' '\n')"
 	all_secret_keys="$(descriptor_value "$d" CLUSTER_SECRET_KEYS),$(descriptor_value "$d" NODE_SECRET_KEYS)"
+	optional_keys="$(descriptor_value "$d" OPTIONAL_SECRET_KEYS)"
 	deployment_keys="$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)"
 	while IFS= read -r secret_key; do
 		[[ -n "$secret_key" ]] || continue
@@ -1333,6 +1350,12 @@ validate_descriptor() {
 			all_secret_keys="${all_secret_keys}${all_secret_keys:+,}$conditional_key"
 		done < <(printf '%s\n' "$conditional_keys" | tr ',' '\n')
 	done <<<"$(printf '%s\n' "$(descriptor_value "$d" CONDITIONAL_SECRET_KEYS)" | tr ';' '\n')"
+	while IFS= read -r secret_key; do
+		[[ -n "$secret_key" ]] || continue
+		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid optional secret key in $d/manifest.env: $secret_key"
+		csv_has "$all_secret_keys" "$secret_key" || die "OPTIONAL_SECRET_KEYS references undeclared secret in $d/manifest.env: $secret_key"
+		! csv_has "$generated_keys" "$secret_key" || die "optional secret must not be generated in $d/manifest.env: $secret_key"
+	done <<<"$(printf '%s\n' "$optional_keys" | tr ',' '\n')"
 	while IFS= read -r rule; do
 		[[ -n "$rule" ]] || continue
 		secret_key="${rule%%:*}"
@@ -1471,6 +1494,7 @@ validate_descriptor() {
 	if [[ "${CONTROL_VERIFY_ONLY:-0}" != 1 && "$(app_upstream_mode "$d")" == singleton && "$(app_in_reconcile_scope "$d" && printf true || printf false)" == true && "$(singleton_runtime_env_provisioned "$d" && printf true || printf false)" == true ]]; then
 		while IFS= read -r k; do
 			[[ -n "$k" ]] || continue
+			csv_has "$optional_keys" "$k" && continue
 			if [[ "${CONTROL_VERIFY_ONLY:-0}" == 1 ]] && csv_has "$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)" "$k"; then
 				continue
 			fi

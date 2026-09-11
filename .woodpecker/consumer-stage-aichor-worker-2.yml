@@ -45,6 +45,9 @@ steps:
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
       - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
+    environment:
+      GH_TOKEN:
+        from_secret: GH_TOKEN
     commands:
       - /usr/local/bin/configure-app-secrets aichor --target-node worker-2 --ensure-generated
       - /usr/local/bin/configure-app-secrets aichor --target-node worker-2 --non-interactive
