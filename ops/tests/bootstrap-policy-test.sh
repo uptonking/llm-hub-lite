@@ -268,6 +268,19 @@ if sed -n '/^\[Service\]/,/^\[/p' "$recovery_unit" | grep -Fq 'OnFailure='; then
 	printf 'platform recovery OnFailure must be a Unit directive\n' >&2
 	exit 1
 fi
+recovery_timer="$repo_root/ops/systemd/platform-recovery.timer"
+grep -Fq 'OnBootSec=120s' "$recovery_timer"
+if grep -Fq 'OnUnitActiveSec=' "$recovery_timer"; then
+	printf 'platform recovery timer must not repeat on every unit activation\n' >&2
+	exit 1
+fi
+recovery_retry="$repo_root/ops/systemd/platform-recovery-retry.service"
+grep -Fq 'StartLimitIntervalSec=15min' "$recovery_retry"
+grep -Fq 'StartLimitBurst=5' "$recovery_retry"
+grep -Fq 'Type=exec' "$recovery_retry"
+grep -Fq 'RuntimeMaxSec=420' "$recovery_retry"
+grep -Fq 'Restart=on-failure' "$recovery_retry"
+grep -Fq 'RestartSec=60s' "$recovery_retry"
 grep -Fq 'BOOTSTRAP_ASSUME_YES' "$bootstrap"
 grep -Fq 'bootstrap confirmation was not received' "$bootstrap"
 grep -Fq "read -r -p 'Node role (leader or follower): ' requested_role" "$bootstrap"

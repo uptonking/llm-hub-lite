@@ -4,8 +4,12 @@ After=platform-network.service platform-firewall.service network-online.target
 Requires=platform-network.service platform-firewall.service docker.service
 Wants=network-online.target
 RequiresMountsFor=/opt/apps/llm-hub-lite /opt/platform /etc/llm-hub-lite
+StartLimitIntervalSec=15min
+StartLimitBurst=5
 
 [Service]
-Type=oneshot
-TimeoutStartSec=420
+Type=exec
+RuntimeMaxSec=420
+Restart=on-failure
+RestartSec=60s
 ExecStart=/usr/local/bin/platformctl recover --quiet

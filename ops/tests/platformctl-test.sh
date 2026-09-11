@@ -307,6 +307,28 @@ if ! validation_stamp_matches; then
 	exit 1
 fi
 : >"$tmp/compose.log"
+if ! recovery_output="$(bash "$repo_root/ops/platformctl.sh" recover 2>&1)"; then
+	printf 'healthy recovery unexpectedly failed: %s\n' "$recovery_output" >&2
+	exit 1
+fi
+grep -Fq 'recovery no-op' <<<"$recovery_output"
+if grep -Eq ' up -d| reload| config --quiet' "$tmp/compose.log"; then
+	printf 'healthy recovery performed expensive Compose/Caddy work\n' >&2
+	exit 1
+fi
+if ! full_output="$(bash "$repo_root/ops/platformctl.sh" recover --full 2>&1)"; then
+	printf 'full recovery unexpectedly failed: %s\n' "$full_output" >&2
+	exit 1
+fi
+if grep -Fq 'recovery no-op' <<<"$full_output"; then
+	printf 'recover --full incorrectly used the no-op path\n' >&2
+	exit 1
+fi
+if ! grep -Eq ' up -d| reload| config --quiet' "$tmp/compose.log"; then
+	printf 'recover --full did not perform reconciliation work\n' >&2
+	exit 1
+fi
+: >"$tmp/compose.log"
 PLATFORM_RECOVERY_STAMP_MATCH=1 VALIDATE_SKIP_EXTERNAL=1 VALIDATE_STAGE_ONLY=1 \
 	PLATFORM_TEST_SKIP_EXTERNAL_VALIDATION=1 validate
 if grep -Fq ' config --quiet' "$tmp/compose.log"; then

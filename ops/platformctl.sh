@@ -420,6 +420,55 @@ validate_recovery_state() {
 		recovery_state_check_descriptor "$d"
 	done <<<"$(projects_apps)"
 }
+recovery_transition_pending() {
+	local file phase
+	[[ -d "$SINGLETON_STATE_ROOT" ]] || return 1
+	for file in "$SINGLETON_STATE_ROOT"/*.previous-target; do
+		[[ -e "$file" ]] || continue
+		return 0
+	done
+	for file in "$SINGLETON_STATE_ROOT"/*.transition.env; do
+		[[ -e "$file" ]] || continue
+		phase="$(env_value PHASE "$file")"
+		case "$phase" in
+		completed) ;;
+		*) return 0 ;;
+		esac
+	done
+	return 1
+}
+recovery_inactive_projects_clear() {
+	local p project ids id ownership
+	while IFS= read -r p; do
+		[[ -n "$p" ]] || continue
+		project_enabled "$p" && continue
+		if [[ "$p" == app:* ]]; then
+			project="$(descriptor_value "${p#app:}" COMPOSE_PROJECT)"
+		else
+			[[ -f "$(foundation_manifest_file "$p")" ]] || continue
+			project="foundation-$p"
+		fi
+		ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project")" || return 1
+		[[ -z "$ids" ]] || return 1
+	done <<<"$(all_projects)"
+	ids="$(docker ps -aq --filter label=com.docker.compose.project=app-observer)" || return 1
+	while IFS= read -r id; do
+		[[ -n "$id" ]] || continue
+		ownership="$(docker inspect --format '{{ index .Config.Labels \"com.aichorage.platform\" }}' "$id" 2>/dev/null || true)"
+		[[ "$ownership" == llm-hub-lite ]] && return 1
+	done <<<"$ids"
+	return 0
+}
+recovery_fast_path_ready() {
+	[[ -f "$RUNTIME_ROOT/config/Caddyfile" ]] || return 1
+	validation_stamp_matches || return 1
+	recovery_transition_pending && return 1
+	(validate_recovery_state) >/dev/null 2>&1 || return 1
+	health_scope foundation >/dev/null 2>&1 || return 1
+	health_scope consumers >/dev/null 2>&1 || return 1
+	recovery_inactive_projects_clear || return 1
+	return 0
+}
 report_recovery_state_descriptor() {
 	local d="$1" paths rel root entry path state
 	paths="$(descriptor_value "$d" RECOVERY_REQUIRED_PATHS)"
@@ -2125,7 +2174,7 @@ reload_caddy() {
 	"${compose_command[@]}" exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 }
 recover() {
-	local recover_mode="${1:-}" recover_full=0
+	local recover_mode="${1:-}" recover_full=0 recovery_started recovery_elapsed
 	case "$recover_mode" in
 	'' | --quiet) ;;
 	--full) recover_full=1 ;;
@@ -2137,6 +2186,12 @@ recover() {
 	fi
 	PLATFORM_RECOVERY_MODE=1
 	export PLATFORM_RECOVERY_MODE
+	recovery_started="$(date +%s)"
+	if ((recover_full == 0)) && recovery_fast_path_ready; then
+		recovery_elapsed=$(($(date +%s) - recovery_started))
+		printf 'platformctl: recovery no-op; healthy state and routes are current (duration=%ss)\n' "$recovery_elapsed"
+		return 0
+	fi
 	reconcile_caddy_udp_policy
 	if ((recover_full == 1)); then
 		VALIDATE_STAGE_ONLY=1 validate
@@ -2287,6 +2342,42 @@ diagnose_projects() {
 		;;
 	esac
 }
+diagnose_recovery_scheduler() {
+	local unit installed source property value count
+	printf '\n[recovery-scheduler]\n'
+	if command -v systemctl >/dev/null 2>&1; then
+		for unit in platform-recovery.timer platform-recovery-retry.service; do
+			printf 'unit=%s\n' "$unit"
+			for property in ActiveState SubState NextElapseUSecRealtime LastTriggerUSec CPUUsageNSec NRestarts; do
+				value="$(systemctl show "$unit" -p "$property" --value 2>/dev/null || true)"
+				[[ -n "$value" ]] && printf '%s=%s\n' "$property" "$value"
+			done
+		done
+	else
+		printf 'systemctl=unavailable\n'
+	fi
+	if command -v journalctl >/dev/null 2>&1; then
+		count="$(journalctl --since '24 hours ago' -u platform-recovery-retry.service --no-pager -q 2>/dev/null | awk '/Starting|Started|Finished/ { n++ } END { print n + 0 }')"
+		printf 'invocations_24h=%s\n' "${count:-0}"
+	else
+		printf 'invocations_24h=unavailable\n'
+	fi
+	for unit in platform-recovery.timer platform-recovery-retry.service; do
+		source="$CONTROL_ROOT/current/ops/systemd/$unit"
+		installed="/etc/systemd/system/$unit"
+		if [[ -f "$source" && -f "$installed" ]]; then
+			if cmp -s "$source" "$installed"; then
+				printf 'unit_drift=%s:clean\n' "$unit"
+			else
+				printf 'unit_drift=%s:changed\n' "$unit"
+			fi
+		elif [[ -f "$source" ]]; then
+			printf 'unit_drift=%s:installed-missing\n' "$unit"
+		else
+			printf 'unit_drift=%s:source-missing\n' "$unit"
+		fi
+	done
+}
 diagnose() {
 	local scope="${1:-all}" p id
 	case "$scope" in
@@ -2322,6 +2413,7 @@ diagnose() {
 		fi
 	done <<<"$(diagnose_projects "$scope")"
 	if [[ "$scope" == foundation || "$scope" == all ]]; then
+		diagnose_recovery_scheduler
 		local observer_env observer_root observer_data observer_buffer observer_bytes buffer_bytes buffer_max durable_warn buffer_warn_percent utilization observer_shipper_id observer_controller_id observer_recent observer_controller_recent
 		observer_env="$(foundation_env observer-collector)"
 		if [[ -r "$observer_env" ]]; then
