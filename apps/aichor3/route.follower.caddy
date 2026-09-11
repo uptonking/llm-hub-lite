@@ -1,4 +1,5 @@
 {$NODE_AICHOR3_ORIGIN_HOST} {
+  # Private Leader-to-follower origin.
   tls internal
   import common_proxy
   reverse_proxy aichor3:6767 {
