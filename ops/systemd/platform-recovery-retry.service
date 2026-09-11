@@ -12,4 +12,8 @@ Type=exec
 RuntimeMaxSec=420
 Restart=on-failure
 RestartSec=60s
+# Recovery is maintenance work. Keep it below foreground application work on
+# shared or oversubscribed VPS hosts.
+Nice=10
+CPUWeight=20
 ExecStart=/usr/local/bin/platformctl recover --quiet

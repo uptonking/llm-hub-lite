@@ -2425,6 +2425,38 @@ diagnose_recovery_scheduler() {
 		fi
 	done
 }
+cpu_stat_snapshot() {
+	awk '/^cpu / { print $2, $3, $4, $5, $6, $7, $8, $9; exit }' /proc/stat 2>/dev/null
+}
+diagnose_cpu_pressure() {
+	local before after sample_seconds
+	local b_user b_nice b_system b_idle b_iowait b_irq b_softirq b_steal
+	local a_user a_nice a_system a_idle a_iowait a_irq a_softirq a_steal
+	local total_delta steal_delta steal_percent loadavg
+	before="$(cpu_stat_snapshot)"
+	[[ -n "$before" ]] || return 0
+	sample_seconds="${PLATFORM_CPU_DIAGNOSE_SAMPLE_SECONDS:-1}"
+	if [[ "$sample_seconds" != 0 ]]; then
+		sleep "$sample_seconds"
+	fi
+	after="$(cpu_stat_snapshot)"
+	[[ -n "$after" ]] || return 0
+	read -r b_user b_nice b_system b_idle b_iowait b_irq b_softirq b_steal <<-EOF
+		$before
+	EOF
+	read -r a_user a_nice a_system a_idle a_iowait a_irq a_softirq a_steal <<-EOF
+		$after
+	EOF
+	total_delta=$((a_user + a_nice + a_system + a_idle + a_iowait + a_irq + a_softirq + a_steal - b_user - b_nice - b_system - b_idle - b_iowait - b_irq - b_softirq - b_steal))
+	steal_delta=$((a_steal - b_steal))
+	steal_percent="$(awk -v n="$steal_delta" -v d="$total_delta" 'BEGIN { if (d > 0) printf "%.1f", (100 * n) / d; else print "0.0" }')"
+	loadavg="$(awk '{ print $1 " " $2 " " $3 }' /proc/loadavg 2>/dev/null || true)"
+	printf '\n[cpu-pressure]\nsteal_percent=%s sample_seconds=%s load_average=%s\n' \
+		"$steal_percent" "$sample_seconds" "${loadavg:-unavailable}"
+	if awk -v value="$steal_percent" 'BEGIN { exit !(value >= 20) }'; then
+		printf 'WARNING: CPU steal is %s%%; this is host-provider contention, not container CPU consumption.\n' "$steal_percent" >&2
+	fi
+}
 diagnose() {
 	local scope="${1:-all}" p id
 	case "$scope" in
@@ -2433,6 +2465,7 @@ diagnose() {
 	*) die 'diagnose scope must be foundation, consumers, all, or app:<id>' ;;
 	esac
 	printf 'platformctl diagnose: node=%s role=%s scope=%s\n' "$(node_id)" "$(node_role)" "$scope"
+	diagnose_cpu_pressure
 	printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\nmaintenance=%s\n' \
 		"$(readlink "$CONTROL_ROOT/current" 2>/dev/null || printf '<missing>')" \
 		"$(readlink "$CONTROL_ROOT/previous" 2>/dev/null || printf '<missing>')" \

@@ -25,6 +25,12 @@ on every timer activation while the platform is healthy. If recovery fails,
 `platform-recovery-retry.service` retries the failure after 60 seconds, with a
 maximum of five starts in 15 minutes; a successful retry becomes inactive.
 This prevents a healthy node from spending CPU on perpetual reconciliation.
+Recovery runs with a lower scheduler priority (`Nice=10`, `CPUWeight=20`) so
+maintenance work cannot compete with foreground applications on an
+oversubscribed VPS. `platformctl diagnose` reports a one-second CPU-steal
+sample and warns when the VPS host is withholding more than 20% of scheduled
+CPU time; CPU steal is provider contention and cannot be fixed by container
+configuration.
 
 The bootstrap script uses the same ordering: it holds the platform lock while
 installing and reconciling files, completes the post-bootstrap snapshot, then

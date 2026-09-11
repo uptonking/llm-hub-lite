@@ -226,6 +226,7 @@ if bash "$repo_root/ops/platformctl.sh" diagnose app:not-an-app >/dev/null 2>&1;
 	exit 1
 fi
 leader_diagnose="$(bash "$repo_root/ops/platformctl.sh" diagnose foundation 2>&1)"
+grep -Fq '[cpu-pressure]' <<<"$leader_diagnose"
 grep -Fq '[observer-storage]' <<<"$leader_diagnose"
 grep -Fq '[observer-buffer]' <<<"$leader_diagnose"
 grep -Fq '[observer-controller-recent]' <<<"$leader_diagnose"
@@ -518,6 +519,7 @@ cmp -s "$tmp/librechat-route.before-switch" "$tmp/app/shared/runtime/config/rout
 [[ ! -e "$tmp/config/singleton-state/cpapi.previous-target" ]]
 grep -qx 'PHASE=switched' "$tmp/config/singleton-state/cpapi.transition.env"
 
+# shellcheck disable=SC1091
 source "$repo_root/ops/tests/platformctl-singleton-cases.sh"
 
 # Publication completes the Leader's route transaction. The final generated job
