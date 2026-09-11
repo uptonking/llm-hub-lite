@@ -1,4 +1,5 @@
 {$NODE_LIBRECHAT_ORIGIN_HOST} {
+  # Private origin consumed by the Leader over the node firewall allowlist.
   # Follower origins are private Leader-to-follower hops. Use Caddy's local
   # CA instead of attempting public ACME issuance on firewalled DNS-only names.
   tls internal
