@@ -1,6 +1,9 @@
 {$WABASE_SITE} {
   import common_proxy
   reverse_proxy {$WABASE_UPSTREAM} {
+    transport http {
+      tls_insecure_skip_verify
+    }
     health_uri /status?ready=1&db=1
     health_interval 10s
     health_timeout 5s
