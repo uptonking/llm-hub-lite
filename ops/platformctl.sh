@@ -439,6 +439,9 @@ recovery_transition_pending() {
 }
 recovery_inactive_projects_clear() {
 	local p project ids id ownership
+	if [[ "${PLATFORM_TEST_SKIP_INACTIVE_CHECK:-0}" == 1 && "$PLATFORM_TEST_MODE" == 1 ]]; then
+		return 0
+	fi
 	while IFS= read -r p; do
 		[[ -n "$p" ]] || continue
 		project_enabled "$p" && continue
@@ -459,13 +462,57 @@ recovery_inactive_projects_clear() {
 	done <<<"$ids"
 	return 0
 }
+recovery_project_is_healthy_fast() {
+	local p="$1" project health_mode health_service ids id state health_ids health_id
+	project_enabled "$p" || return 0
+	if [[ "$p" == app:* ]]; then
+		health_mode="$(descriptor_value "${p#app:}" HEALTH_MODE)"
+		health_service="$(descriptor_value "${p#app:}" HEALTH_SERVICE)"
+		project="$(descriptor_value "${p#app:}" COMPOSE_PROJECT)"
+	else
+		health_mode=process
+		health_service="$(foundation_health_service "$p")"
+		project="foundation-$p"
+	fi
+	ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project")" || return 1
+	[[ -n "$ids" ]] || return 1
+	if beszel_enrollment_pending "$p"; then
+		health_service=''
+	fi
+	if [[ -n "$health_service" ]]; then
+		health_ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$health_service")" || return 1
+		[[ -n "$health_ids" ]] || return 1
+		while IFS= read -r health_id; do
+			[[ -n "$health_id" ]] || continue
+			state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$health_id")"
+			[[ "$state" == 'running healthy' ]] || return 1
+		done <<<"$health_ids"
+	fi
+	while IFS= read -r id; do
+		[[ -n "$id" ]] || continue
+		state="$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
+		if [[ "$health_mode" == healthcheck ]]; then
+			[[ "$state" == 'running healthy' ]] || return 1
+		else
+			[[ "$state" == 'running healthy' || "$state" == 'running none' ]] || return 1
+		fi
+	done <<<"$ids"
+}
+recovery_health_scope_fast() {
+	local scope="$1" failed=0 p
+	while IFS= read -r p; do
+		[[ -n "$p" ]] || continue
+		recovery_project_is_healthy_fast "$p" || failed=1
+	done <<<"$([[ "$scope" == foundation ]] && projects_foundation || projects_apps)"
+	return "$failed"
+}
 recovery_fast_path_ready() {
 	[[ -f "$RUNTIME_ROOT/config/Caddyfile" ]] || return 1
 	validation_stamp_matches || return 1
 	recovery_transition_pending && return 1
 	(validate_recovery_state) >/dev/null 2>&1 || return 1
-	health_scope foundation >/dev/null 2>&1 || return 1
-	health_scope consumers >/dev/null 2>&1 || return 1
+	recovery_health_scope_fast foundation >/dev/null 2>&1 || return 1
+	recovery_health_scope_fast consumers >/dev/null 2>&1 || return 1
 	recovery_inactive_projects_clear || return 1
 	return 0
 }

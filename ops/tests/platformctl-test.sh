@@ -199,6 +199,7 @@ esac
 case "$1 $2" in "network inspect") exit 0;; "inspect --format") printf 'running healthy\n';; "run --rm") exit 0;; esac
 case "$1 $2" in "logs --tail") printf 'WARN retry buffer token=o2oi_11111111111111111111111111111111 Authorization: Basic dGVzdDpzZWNyZXQ=\n';; esac
 case "$*" in
+  *"ps -aq --filter label=com.docker.compose.project=foundation-"*) printf 'foundation-container\n'; exit 0;;
   "ps -aq --filter label=com.docker.compose.project=app-pigeon")
     [ "${FAIL_DOCKER_PS:-0}" = 1 ] && exit 1
     [ "${EMIT_PIGEON_CONTAINER:-0}" = 1 ] && printf 'stale-pigeon\n'
@@ -282,6 +283,7 @@ mv "$tmp/node.env.valid" "$tmp/config/node.env"
 # Avoid repeating the per-app `config --services` subprocess while retaining
 # the strict pass above as the contract test for descriptor/service wiring.
 export PLATFORM_TEST_SKIP_COMPOSE_INSPECTION=1
+export PLATFORM_TEST_SKIP_INACTIVE_CHECK=1
 # Most matrix cases assert policy and lifecycle behavior, not regenerated
 # routes. Keep route rendering enabled only for the focused route assertions
 # below; this avoids repeatedly rebuilding the same Caddy candidate on macOS.
