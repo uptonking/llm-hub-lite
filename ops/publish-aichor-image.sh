@@ -9,12 +9,20 @@ source "$release_file"
 source "$root/ops/lib/publish-image-common.sh"
 
 publisher_require_commands curl docker jq npm
-for variable_name in AICHOR_BASE_IMAGE AICHOR_IMAGE_REPOSITORY AICHOR_IMAGE_TAG; do
+for variable_name in AICHOR_BASE_IMAGE AICHOR_IMAGE_REPOSITORY AICHOR_IMAGE_TAG AICHOR_GH_VERSION AICHOR_GH_SHA256; do
 	[[ -n "${!variable_name:-}" ]] || {
 		printf '%s must be set in %s\n' "$variable_name" "$release_file" >&2
 		exit 1
 	}
 done
+[[ "$AICHOR_GH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+	printf 'AICHOR_GH_VERSION is invalid\n' >&2
+	exit 1
+}
+[[ "$AICHOR_GH_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+	printf 'AICHOR_GH_SHA256 must be a lowercase SHA-256 digest\n' >&2
+	exit 1
+}
 [[ "$AICHOR_BASE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || {
 	printf 'AICHOR_BASE_IMAGE must be digest-pinned\n' >&2
 	exit 1
@@ -64,6 +72,8 @@ docker buildx build --platform linux/amd64 --file "$root/images/aichor/Dockerfil
 	--build-arg "AICHOR_CLAUDE_CODE_VERSION=$AICHOR_CLAUDE_CODE_VERSION" \
 	--build-arg "AICHOR_OPENCODE_VERSION=$AICHOR_OPENCODE_VERSION" \
 	--build-arg "AICHOR_PI_CODING_AGENT_VERSION=$AICHOR_PI_CODING_AGENT_VERSION" \
+	--build-arg "AICHOR_GH_VERSION=$AICHOR_GH_VERSION" \
+	--build-arg "AICHOR_GH_SHA256=$AICHOR_GH_SHA256" \
 	--provenance=mode=max --sbom=true --tag "$image_ref" --metadata-file "$metadata" --push "$root/images/aichor"
 digest="$(publisher_extract_digest "$metadata")"
 publisher_verify_digest "$image_ref" "$digest"

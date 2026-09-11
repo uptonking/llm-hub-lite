@@ -7,13 +7,28 @@ ARG AICHOR_CODEX_VERSION
 ARG AICHOR_CLAUDE_CODE_VERSION
 ARG AICHOR_OPENCODE_VERSION
 ARG AICHOR_PI_CODING_AGENT_VERSION
+ARG AICHOR_GH_VERSION
+ARG AICHOR_GH_SHA256
 
 LABEL org.opencontainers.image.title="aichor" \
       org.opencontainers.image.description="Paseo with bundled remote coding agents" \
       org.opencontainers.image.source="https://github.com/getpaseo/paseo" \
-      org.opencontainers.image.version="${AICHOR_CODEX_VERSION}-${AICHOR_CLAUDE_CODE_VERSION}-${AICHOR_OPENCODE_VERSION}-${AICHOR_PI_CODING_AGENT_VERSION}"
+      org.opencontainers.image.version="${AICHOR_CODEX_VERSION}-${AICHOR_CLAUDE_CODE_VERSION}-${AICHOR_OPENCODE_VERSION}-${AICHOR_PI_CODING_AGENT_VERSION}" \
+      org.opencontainers.image.gh.version="${AICHOR_GH_VERSION}"
 
 USER root
+RUN set -eux; \
+    test -n "$AICHOR_GH_VERSION"; \
+    test -n "$AICHOR_GH_SHA256"; \
+    gh_archive="gh_${AICHOR_GH_VERSION}_linux_amd64.tar.gz"; \
+    gh_url="https://github.com/cli/cli/releases/download/v${AICHOR_GH_VERSION}/${gh_archive}"; \
+    curl --fail --silent --show-error --location --retry 3 "$gh_url" --output "/tmp/$gh_archive"; \
+    printf '%s  %s\n' "$AICHOR_GH_SHA256" "/tmp/$gh_archive" | sha256sum --check --status; \
+    tar --extract --gzip --file "/tmp/$gh_archive" --strip-components=2 --directory /usr/local/bin "gh_${AICHOR_GH_VERSION}_linux_amd64/bin/gh"; \
+    command -v gh; \
+    gh --version | head -n 1; \
+    rm -f "/tmp/$gh_archive"
+
 RUN npm install --global \
       "@openai/codex@${AICHOR_CODEX_VERSION}" \
       "@anthropic-ai/claude-code@${AICHOR_CLAUDE_CODE_VERSION}" \
