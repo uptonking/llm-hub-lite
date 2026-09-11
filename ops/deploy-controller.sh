@@ -1007,7 +1007,11 @@ prefetch_images() {
 	local mode="$1" file key image should_pull
 	local -a files=()
 	case "$mode" in
-	app | app-upgrade | consumer-publish | direct-publish | consumer-stop) files=("$APP_IMAGE_ENV") ;;
+	app | app-upgrade | consumer-publish | direct-publish) files=("$APP_IMAGE_ENV") ;;
+	# A stop-only operation uses the already installed Compose project. Pulling
+	# every locally enabled application image adds no safety and couples an
+	# unrelated stop to the shared service release and image manifest.
+	consumer-stop) files=() ;;
 	consumer-stage) files=("$APP_RELEASE_ROOT/apps/${CONSUMER_APP_ID:?missing CONSUMER_APP_ID}/images.lock.env") ;;
 	foundation) files=("$FOUNDATION_IMAGE_ENV") ;;
 	cluster-reconcile | rollback) files=("$APP_IMAGE_ENV" "$FOUNDATION_IMAGE_ENV") ;;
@@ -1078,16 +1082,20 @@ smoke_apps() {
 }
 
 cleanup() {
-	local path stamp kept=0 current_target previous_target keep_file old_sha cache
+	local path stamp kept=0 current_target previous_target app_current_target app_previous_target keep_file old_sha cache
 	current_target="$(readlink "$CURRENT" 2>/dev/null || true)"
 	previous_target="$(readlink "$PREVIOUS" 2>/dev/null || true)"
+	app_current_target="$(readlink "$APP_CURRENT" 2>/dev/null || true)"
+	app_previous_target="$(readlink "$APP_PREVIOUS" 2>/dev/null || true)"
 	keep_file="${RETAIN_RELEASES_FILE:-$CONTROL_ROOT/retain-releases}"
 	# Keep newest releases by filesystem mtime (not by SHA lexical order), and
-	# honor explicit pins used by operators while an incident is investigated.
+	# honor every control/service pointer plus explicit operator pins. Control-only
+	# workflows may advance CURRENT repeatedly while APP_CURRENT intentionally
+	# stays on the last deployed service release.
 	while IFS= read -r path; do
 		stamp="${path%% *}"
 		path="${path#* }"
-		[[ -d "$path" && "$path" != "$current_target" && "$path" != "$previous_target" ]] || continue
+		[[ -d "$path" && "$path" != "$current_target" && "$path" != "$previous_target" && "$path" != "$app_current_target" && "$path" != "$app_previous_target" ]] || continue
 		if [[ -f "$keep_file" ]] && grep -Fxq "$(basename "$path")" "$keep_file"; then continue; fi
 		kept=$((kept + 1))
 		if ((kept > RETAIN_RELEASES)); then
@@ -1262,8 +1270,13 @@ apply() {
 	# Image keys are declarative. Remove entries from an older release (for
 	# example a key renamed during an app migration) before prefetching, while
 	# retaining all keys still declared by the candidate release.
-	prune_stale_image_keys "$APP_IMAGE_ENV"
-	prune_stale_image_keys "$FOUNDATION_IMAGE_ENV"
+	# Stop workflows run on every non-target follower and do not own the shared
+	# image manifests. Pruning here would let an unrelated stop erase healthy
+	# local applications when control and service releases intentionally differ.
+	if [[ "$mode" != consumer-stop ]]; then
+		prune_stale_image_keys "$APP_IMAGE_ENV"
+		prune_stale_image_keys "$FOUNDATION_IMAGE_ENV"
+	fi
 	sync_scope=apps
 	[[ "$mode" == foundation ]] && sync_scope=foundation
 	[[ "$mode" == cluster-reconcile || "$mode" == rollback ]] && sync_scope=all

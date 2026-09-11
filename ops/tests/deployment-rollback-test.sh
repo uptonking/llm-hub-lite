@@ -348,6 +348,28 @@ CONSUMER_APP_ID=cpapi bash "$repo_root/ops/deploy-controller.sh" consumer-stage 
 assert_equal "$platform_root/control/releases/$sha_template_app" "$(readlink "$platform_root/control/current")" 'consumer stage must keep control release while control sync is pending'
 assert_equal "$platform_root/control/releases/$sha_consumer_scope" "$(readlink "$app_root/current")" 'consumer stage must advance app release for scoped change'
 
+# Control-only and stop workflows may run several releases ahead of the last
+# deployed service release. Aggressive cleanup must retain every release still
+# referenced by a service pointer, and consumer-stop must leave both shared
+# image manifests byte-for-byte unchanged.
+printf '\ncontrol-only retention change\n' >>"$work/README.md"
+git -C "$work" add README.md
+git -C "$work" -c commit.gpgsign=false commit --quiet -m control-only-retention
+git -C "$work" push --quiet origin HEAD:main
+sha_control_only="$(git -C "$work" rev-parse HEAD)"
+bash "$repo_root/ops/deploy-controller.sh" control-sync "$sha_control_only" >/dev/null
+service_release_before_stop="$(readlink "$app_root/current")"
+cp "$config_root/images.apps.env" "$tmp/images.apps.before-consumer-stop"
+cp "$config_root/images.foundation.env" "$tmp/images.foundation.before-consumer-stop"
+CONSUMER_APP_ID=aichor RETAIN_RELEASES=0 bash "$repo_root/ops/deploy-controller.sh" consumer-stop "$sha_control_only" >"$tmp/deploy-consumer-stop-retention.log" 2>&1
+assert_equal "$service_release_before_stop" "$(readlink "$app_root/current")" 'consumer stop must not advance the service release'
+[[ -d "$service_release_before_stop" && -f "$service_release_before_stop/apps/aichorouter/manifest.env" ]] || {
+	printf 'release cleanup removed the active service release\n' >&2
+	exit 1
+}
+cmp -s "$tmp/images.apps.before-consumer-stop" "$config_root/images.apps.env"
+cmp -s "$tmp/images.foundation.before-consumer-stop" "$config_root/images.foundation.env"
+
 aichorouter_image="$(sed -n 's/^AICHOROUTER_IMAGE=//p' "$work/ops/images.apps.prod.env")"
 aichorouter_prefix="${aichorouter_image%@sha256:*}"
 aichorouter_digest="${aichorouter_image##*@sha256:}"
