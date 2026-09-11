@@ -2834,7 +2834,11 @@ EOF
 	if [[ "${SINGLETON_ORIGIN_PRECHECKED:-0}" == 1 || ("$journal_target" == "$target" && "$journal_release" == "$release" && "$journal_phase" == origin-healthy) ]]; then
 		printf 'reusing follower origin health attestation: %s\n' "$origin"
 	else
-		response="$(curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
+		# Follower origins use Caddy's node-local CA (`tls internal`). The
+		# Leader is already restricted to the configured origin host and the
+		# follower firewall only permits this hop, so verify reachability here
+		# while allowing that private certificate.
+		response="$(curl -kfsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "singleton origin is unhealthy: $origin"
 		[[ -z "$expected" || "$response" == *"$expected"* ]] || die "singleton origin response did not match HEALTH_EXPECT: $(basename "$d")"
 	fi
 	route="$RUNTIME_ROOT/config/routes.d/$(basename "$d").caddy"
@@ -3015,7 +3019,7 @@ EOF
 			fi
 			origin="$(env_value "$origin_key" "$(node_descriptor_file "$node")")"
 			[[ -n "$origin" ]] || die "consumer origin is missing for $id on $node"
-			response="$(curl -fsS --retry 4 --retry-delay 3 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "consumer origin is unhealthy: $id/$node ($origin)"
+			response="$(curl -kfsS --retry 4 --retry-delay 3 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "consumer origin is unhealthy: $id/$node ($origin)"
 			[[ -z "$expected" || "$response" == *"$expected"* ]] || die "consumer origin response did not match HEALTH_EXPECT: $id/$node"
 			checked=$((checked + 1))
 		done <<<"$(printf '%s\n' "$(app_nodes "$d")" | tr ',' '\n' | sed '/^$/d')"
@@ -3027,7 +3031,7 @@ EOF
 		csv_has "$(app_nodes "$d")" "$(node_id)" || die "consumer is not assigned to this node: $id/$(node_id)"
 		origin="$(node_value "$origin_key")"
 		[[ -n "$origin" ]] || die "consumer origin is missing for $id on $(node_id)"
-		response="$(curl -fsS --retry 4 --retry-delay 3 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "consumer origin is unhealthy: $id/$(node_id) ($origin)"
+		response="$(curl -kfsS --retry 4 --retry-delay 3 --retry-all-errors --max-time 20 "https://$origin${health}" 2>/dev/null)" || die "consumer origin is unhealthy: $id/$(node_id) ($origin)"
 		[[ -z "$expected" || "$response" == *"$expected"* ]] || die "consumer origin response did not match HEALTH_EXPECT: $id/$(node_id)"
 		checked=1
 	fi
