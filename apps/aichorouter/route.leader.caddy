@@ -1,6 +1,9 @@
 {$AICHOROUTER_SITE} {
   import common_proxy
   reverse_proxy {$AICHOROUTER_UPSTREAM} {
+    transport http {
+      tls_insecure_skip_verify
+    }
     fail_duration 30s
     health_uri /api/status
     health_interval 10s

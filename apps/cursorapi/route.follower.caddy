@@ -1,4 +1,5 @@
 {$NODE_CURSORAPI_ORIGIN_HOST} {
+  tls internal
   import common_proxy
   @cursorapi_origin path /v1/* /healthz
   handle @cursorapi_origin {

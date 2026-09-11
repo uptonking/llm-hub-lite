@@ -3,6 +3,9 @@
   @cursorapi_api path /v1/* /healthz
   handle @cursorapi_api {
     reverse_proxy {$CURSORAPI_UPSTREAM} {
+      transport http {
+        tls_insecure_skip_verify
+      }
       flush_interval -1
       fail_duration 30s
       health_uri /healthz
