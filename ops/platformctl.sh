@@ -2433,14 +2433,20 @@ diagnose_cpu_pressure() {
 	local b_user b_nice b_system b_idle b_iowait b_irq b_softirq b_steal
 	local a_user a_nice a_system a_idle a_iowait a_irq a_softirq a_steal
 	local total_delta steal_delta steal_percent loadavg
-	before="$(cpu_stat_snapshot)"
-	[[ -n "$before" ]] || return 0
+	before="$(cpu_stat_snapshot || true)"
+	if [[ -z "$before" ]]; then
+		printf '\n[cpu-pressure]\nstate=unavailable reason=procfs-missing\n'
+		return 0
+	fi
 	sample_seconds="${PLATFORM_CPU_DIAGNOSE_SAMPLE_SECONDS:-1}"
 	if [[ "$sample_seconds" != 0 ]]; then
 		sleep "$sample_seconds"
 	fi
-	after="$(cpu_stat_snapshot)"
-	[[ -n "$after" ]] || return 0
+	after="$(cpu_stat_snapshot || true)"
+	if [[ -z "$after" ]]; then
+		printf '\n[cpu-pressure]\nstate=unavailable reason=procfs-missing\n'
+		return 0
+	fi
 	read -r b_user b_nice b_system b_idle b_iowait b_irq b_softirq b_steal <<-EOF
 		$before
 	EOF
