@@ -20,7 +20,6 @@ grep -q '^RELAICHOR_ACCEPTORS=2$' "$app/config.env"
 grep -q '^RELAICHOR_CONNECTIONS_PER_ACCEPTOR=128$' "$app/config.env"
 grep -q '^RELAICHOR_INGRESS_BUDGET_BYTES=134217728$' "$app/config.env"
 grep -q '^RELAICHOR_MEMORY_WATERMARK_BYTES=400000000$' "$app/config.env"
-grep -q '^RELAICHOR_CLUSTER_QUERY=ignore$' "$app/config.env"
 
 grep -Fq 'read_only: true' "$app/compose.yml"
 grep -Fq 'cap_drop: [ALL]' "$app/compose.yml"
@@ -29,7 +28,10 @@ grep -Fq 'LANG: C.UTF-8' "$app/compose.yml"
 grep -Fq 'LC_ALL: C.UTF-8' "$app/compose.yml"
 grep -Fq 'ELIXIR_ERL_OPTIONS: +fnu' "$app/compose.yml"
 # shellcheck disable=SC2016
-grep -Fq 'PASEO_RELAY_CLUSTER_QUERY: ${RELAICHOR_CLUSTER_QUERY:-ignore}' "$app/compose.yml"
+if grep -Fq 'PASEO_RELAY_CLUSTER_QUERY' "$app/compose.yml" "$app/config.env" "$app/manifest.env"; then
+	printf 'Singleton Relaichor must not enable DNS cluster discovery\n' >&2
+	exit 1
+fi
 grep -Fq 'curl -fsS http://relaichor:4000/ready' "$app/compose.yml"
 if grep -Eq '^[[:space:]]+ports:' "$app/compose.yml"; then
 	printf 'Relaichor must not publish a host port\n' >&2
