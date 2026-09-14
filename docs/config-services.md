@@ -240,6 +240,26 @@ fresh-target workflow applies and never replicates state with Aichor. Pi's
 non-secret settings can be synchronized with
 `ops/sync-paseo-pi-config.sh aichor3 ...`.
 
+Relaichor is the repository-owned Paseo Relay singleton at
+`relaichor.aichorage.de`, enabled on worker-2 by default. Public traffic enters
+the Leader and crosses the DNS-only `worker2-relaichor-origin.<domain>` route;
+the follower proxies to the private `relaichor:4000` listener. The relay is
+stateless and ephemeral, has no host port or persistent volume, and is capped
+at 512 MiB, 0.35 CPU, and 128 processes. Its small-node profile uses two
+acceptors, 128 connections per acceptor, a bounded ingress budget, a 400 MB
+memory watermark, and disables BEAM cluster discovery. `/health` is liveness,
+`/ready` is the deployment gate, and `/metrics` is available only through the
+firewalled follower origin. Move it with
+`ops/configure-app-placement.sh relaichor <follower>`; singleton moves are
+fresh deployments and do not migrate sessions. The image is manually built
+from the pinned Paseo Relay source commit and published to public GHCR with an
+immutable digest before Woodpecker deployment.
+
+Aichor and Aichor3 retain their existing hosted relay defaults. Their optional
+`AICHOR[_3]_RELAY_*` settings are translated only when non-empty, so operators
+can later point either service at `relaichor.aichorage.de:443` with TLS without
+overriding persisted settings accidentally.
+
 SearXNG is an independent single-node consumer at `searx.aichorage.de`,
 enabled on worker-2 by default. The Leader proxies to the DNS-only
 `worker2-searx-origin.<domain>` record and the follower proxies to the private

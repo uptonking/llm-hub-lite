@@ -34,7 +34,7 @@ recover from an unexpected VPS restart without losing completed conversations.
   - orphan services like verge can handle requests directly without leader.
 
 - Most docker images this repo used are published by upstream/vendors. The
-  repository-owned images are cursorapi and Aichor; both are manually
+  repository-owned images are cursorapi, Aichor, and Relaichor; all are manually
   published, digest-pinned, and then deployed by Woodpecker.
 
 ## Operations

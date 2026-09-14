@@ -1,0 +1,18 @@
+{$NODE_RELAICHOR_ORIGIN_HOST} {
+  tls internal
+  import common_proxy
+  @relaichor_origin path /ws /health /ready /metrics
+  handle @relaichor_origin {
+    reverse_proxy relaichor:4000 {
+      flush_interval -1
+      header_up Host {$RELAICHOR_SITE_HOST}
+      header_up X-Forwarded-Host {$RELAICHOR_SITE_HOST}
+      header_up X-Forwarded-Proto https
+      header_up X-Forwarded-For {remote_host}
+      import forward_verified_client_ip
+    }
+  }
+  handle {
+    respond "not found" 404
+  }
+}

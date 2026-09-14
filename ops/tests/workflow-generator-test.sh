@@ -68,6 +68,8 @@ for file in \
 	consumer-stop-wapdf-worker-3.yml consumer-stop-wapdf-worker-4.yml consumer-finalize-wapdf-worker-2.yml \
 	consumer-stage-searx-worker-2.yml consumer-publish-searx.yml consumer-stop-searx-worker-1.yml \
 	consumer-stop-searx-worker-3.yml consumer-stop-searx-worker-4.yml consumer-finalize-searx-worker-2.yml \
+	consumer-stage-relaichor-worker-2.yml consumer-publish-relaichor.yml consumer-stop-relaichor-worker-1.yml \
+	consumer-stop-relaichor-worker-3.yml consumer-stop-relaichor-worker-4.yml consumer-finalize-relaichor-worker-2.yml \
 	consumer-publish-newapi.yml consumer-stop-newapi-worker-1.yml consumer-stop-newapi-worker-2.yml \
 	foundation-upgrade-leader.yml foundation-upgrade-worker-1.yml foundation-upgrade-worker-2.yml \
 	runner-upgrade-leader.yml rollback-leader.yml; do
@@ -365,6 +367,8 @@ sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/aichor.
 mv "$draining_secrets/aichor.policy" "$draining_secrets/config/cluster/apps/aichor.policy"
 sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/searx.policy" >"$draining_secrets/searx.policy"
 mv "$draining_secrets/searx.policy" "$draining_secrets/config/cluster/apps/searx.policy"
+sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/relaichor.policy" >"$draining_secrets/relaichor.policy"
+mv "$draining_secrets/relaichor.policy" "$draining_secrets/config/cluster/apps/relaichor.policy"
 generate_fixture "$draining_secrets"
 [[ -f "$draining_secrets/workflows/consumer-stop-aichorouter-worker-2.yml" ]]
 if find "$draining_secrets/workflows" -name 'consumer-secrets-*-worker-2.yml' | grep -q .; then
@@ -392,6 +396,8 @@ for lifecycle_state in joining draining; do
 	mv "$evacuating/aichor.policy" "$evacuating/config/cluster/apps/aichor.policy"
 	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/searx.policy" >"$evacuating/searx.policy"
 	mv "$evacuating/searx.policy" "$evacuating/config/cluster/apps/searx.policy"
+	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/relaichor.policy" >"$evacuating/relaichor.policy"
+	mv "$evacuating/relaichor.policy" "$evacuating/config/cluster/apps/relaichor.policy"
 	generate_fixture "$evacuating"
 	[[ ! -e "$evacuating/workflows/foundation-upgrade-worker-2.yml" ]]
 	[[ ! -e "$evacuating/workflows/runner-upgrade-worker-2.yml" ]]

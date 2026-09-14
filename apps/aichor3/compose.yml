@@ -27,6 +27,13 @@ services:
       AICHOR3_PI_ANTHROPIC_API_KEY: ${AICHOR3_PI_ANTHROPIC_API_KEY:-}
       AICHOR3_PI_OPENROUTER_ENABLED: ${AICHOR3_PI_OPENROUTER_ENABLED:-false}
       AICHOR3_PI_OPENROUTER_API_KEY: ${AICHOR3_PI_OPENROUTER_API_KEY:-}
+      # Optional relay overrides are translated by entrypoint-common.sh only
+      # when non-empty, preserving Paseo's persisted/default relay settings.
+      AICHOR3_RELAY_ENABLED: ${AICHOR3_RELAY_ENABLED:-}
+      AICHOR3_RELAY_ENDPOINT: ${AICHOR3_RELAY_ENDPOINT:-}
+      AICHOR3_RELAY_PUBLIC_ENDPOINT: ${AICHOR3_RELAY_PUBLIC_ENDPOINT:-}
+      AICHOR3_RELAY_USE_TLS: ${AICHOR3_RELAY_USE_TLS:-}
+      AICHOR3_RELAY_PUBLIC_USE_TLS: ${AICHOR3_RELAY_PUBLIC_USE_TLS:-}
     volumes:
       - ./entrypoint.sh:/aichor3-entrypoint.sh:ro
       - ../paseo/entrypoint-common.sh:/paseo-entrypoint-common.sh:ro

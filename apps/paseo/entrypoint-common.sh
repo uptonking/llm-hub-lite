@@ -80,4 +80,26 @@ provider_env OPENAI
 provider_env ANTHROPIC
 provider_env OPENROUTER
 
+# Paseo treats explicitly supplied environment values as overrides, including
+# empty strings. Translate the app-scoped optional relay settings only when a
+# value was actually configured, so an unset hook keeps the persisted/default
+# hosted relay intact.
+relay_env() {
+	app_prefix="$1"
+	key=''
+	value=''
+	export_key=''
+	for key in ENABLED ENDPOINT PUBLIC_ENDPOINT USE_TLS PUBLIC_USE_TLS; do
+		export_key="PASEO_RELAY_$key"
+		eval "value=\${${app_prefix}_RELAY_${key}:-}"
+		if [ -n "$value" ]; then
+			export "$export_key=$value"
+		else
+			unset "$export_key"
+		fi
+	done
+}
+
+relay_env "$prefix"
+
 exec "${PASEO_BASE_ENTRYPOINT:-/usr/local/bin/paseo-docker-entrypoint}" "$@"

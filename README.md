@@ -67,6 +67,7 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - LibreChat
     - Wapdf (BentoPDF) singleton
     - Aichor (Paseo) singleton
+    - Relaichor (Paseo Relay) singleton
     - SearXNG singleton
     - Pigeon package retained but disabled
 - Follower worker-3:
@@ -80,7 +81,7 @@ five VPS hosts, Cloudflare DNS, and any enabled R2 Restic repositories. The Lead
 creates `shared-secrets.env` and `beszel-enrollment.env` during bootstrap; those
 files are transferred to Followers before they start. Public domains `ci` ,
 `ci-grpc` , `status` , `chat` , `chat-admin` , `aichorouter` , `cpapi` , `cursorapi` , `wapdf` , `searx` ,
-and `observer` point to the Leader. Add `observer-ingest` as a DNS-only record
+and `observer` point to the Leader. Add `relaichor` and `observer-ingest` as DNS-only records
 directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
 origins using the `worker1-` prefix point to Worker 1, while the stable-ID
 `worker2-` origin records point to Worker 2. The
