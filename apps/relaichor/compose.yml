@@ -16,6 +16,9 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       HOME: /tmp
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      ELIXIR_ERL_OPTIONS: +fnu
       PASEO_RELAY_HOST: 0.0.0.0
       PASEO_RELAY_PORT: ${RELAICHOR_PORT:-4000}
       PASEO_RELAY_ACCEPTORS: ${RELAICHOR_ACCEPTORS:-2}
