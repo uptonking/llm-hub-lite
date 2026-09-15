@@ -110,6 +110,7 @@ NODE_CURSORAPI_ORIGIN_HOST=worker2-cursorapi.example.invalid
 NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
 NODE_WAPDF_ORIGIN_HOST=worker2-wapdf.example.invalid
 NODE_RELAICHOR_ORIGIN_HOST=worker2-relaichor.example.invalid
+NODE_RELAICHOR1_ORIGIN_HOST=worker2-relaichor1.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
@@ -123,7 +124,7 @@ case "$*" in
   *" ps --all -q beszel-socket-proxy"*) printf 'beszel-socket-proxy\n'; exit 0;;
   *" ps --all -q health-probe"*)
     case "$*" in
-      *"-p app-aichor "*|*"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*|*"-p app-searx "*|*"-p app-relaichor "*)
+  *"-p app-aichor "*|*"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*|*"-p app-searx "*|*"-p app-relaichor "*|*"-p app-relaichor1 "*)
         printf 'health-probe\n'
         exit 0
         ;;
@@ -157,6 +158,7 @@ case "$*" in
   *app-wapdf*) printf 'wapdf\nhealth-probe\n';;
   *app-searx*) printf 'searx\n';;
   *app-relaichor*) printf 'relaichor\nhealth-probe\n';;
+  *app-relaichor1*) printf 'relaichor1\nhealth-probe\n';;
   *app-verge*) printf 'verge\n';;
 esac
 exit 0

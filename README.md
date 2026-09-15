@@ -60,6 +60,7 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - Aichorouter (the default singleton target)
     - CPAPI (the default singleton target)
     - Cursorapi (the default singleton target)
+    - Relaichor1 (Paseo Relay Go) singleton
 - Follower worker-2:
     - Caddy
     - Woodpecker agent
@@ -140,6 +141,13 @@ use `ops/configure-app-placement.sh aichor3 <follower>`) to select another
 active follower. Both hosts use the shared Paseo runtime helper and the same
 digest-pinned bundled-agent image, so a future Paseo host only needs a new
 manifest/config/Compose/routes/policy set with a unique prefix and data root.
+
+Two standalone relay choices are available for mobile pairing:
+`relaichor.aichorage.de` (Elixir relay, worker-2) and
+`relaichor1.aichorage.de` (Go relay, worker-1). Enter either host and port
+(`relaichor.aichorage.de:443` or `relaichor1.aichorage.de:443`) in Aichor or
+Aichor3's relay settings with TLS enabled. The relay services are independent;
+changing the endpoint in a Paseo app does not move or restart either service.
 The bind-mounted home and generated password are reused after an unexpected
 container or VPS restart, preserving the webapp conversation list and content.
 Recovery refuses to start if the durable Paseo identity/config files are

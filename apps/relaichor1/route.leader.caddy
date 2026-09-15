@@ -1,0 +1,30 @@
+{$RELAICHOR1_SITE} {
+  import common_proxy
+  @relaichor1_public path /ws /health
+  handle @relaichor1_public {
+    reverse_proxy {$RELAICHOR1_UPSTREAM} {
+      transport http {
+        tls_insecure_skip_verify
+      }
+      flush_interval -1
+      fail_duration 30s
+      health_uri /health
+      health_interval 10s
+      health_timeout 5s
+      health_fails 3
+      health_passes 1
+      header_up Host {http.reverse_proxy.upstream.hostport}
+      header_up X-Forwarded-Host {$RELAICHOR1_SITE_HOST}
+      header_up X-Forwarded-Proto {scheme}
+      header_up X-Forwarded-For {remote_host}
+      import forward_verified_client_ip
+    }
+  }
+  handle {
+    respond "not found" 404
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "relaichor1 unavailable" 503
+  }
+}

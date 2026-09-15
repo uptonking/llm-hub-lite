@@ -260,6 +260,18 @@ Aichor and Aichor3 retain their existing hosted relay defaults. Their optional
 can later point either service at `relaichor.aichorage.de:443` with TLS without
 overriding persisted settings accidentally.
 
+Relaichor1 is a second, independent Paseo Relay service backed by the published
+Go relay image `ghcr.io/zenghongtu/paseo-relay`. It is enabled on worker-1 by
+default at `relaichor1.aichorage.de`, with DNS-only origin
+`worker1-relaichor1-origin.<domain>`. It is stateless, has no host port or
+persistent volume, and uses a 256 MiB / 0.20 CPU / 96-process profile with a
+64-frame pending buffer. Move it with
+`ops/configure-app-placement.sh relaichor1 <follower>`; this is an independent
+singleton and does not affect Relaichor. In Aichor or Aichor3, enter either
+`relaichor.aichorage.de:443` or `relaichor1.aichorage.de:443` as the relay
+endpoint (enable TLS) when pairing; no repository change is required for that
+choice.
+
 SearXNG is an independent single-node consumer at `searx.aichorage.de`,
 enabled on worker-2 by default. The Leader proxies to the DNS-only
 `worker2-searx-origin.<domain>` record and the follower proxies to the private
