@@ -393,7 +393,8 @@ if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha_image" >"$tmp/deploy-
 	printf 'application image manifest change was accepted by the normal deployment path\n' >&2
 	exit 1
 fi
-[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
+assert_equal "$platform_root/control/releases/$sha_control_only" "$(readlink "$platform_root/control/current")" 'rejected app deployment must preserve the newer control release'
+assert_equal "$service_release_before_stop" "$(readlink "$app_root/current")" 'rejected app deployment must preserve the service release'
 grep -Fq 'application image manifest changes require the reviewed consumer workflow' "$tmp/deploy-image-change.log"
 
 printf '\nfoundation change\n' >>"$work/compose/foundation/caddy.yml"
