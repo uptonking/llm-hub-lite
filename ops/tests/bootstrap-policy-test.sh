@@ -110,7 +110,9 @@ if grep -Fq 'ufw --force delete allow 443' "$bootstrap"; then
 	exit 1
 fi
 grep -Fq '/usr/local/bin/configure-firewall' "$bootstrap"
-grep -Fq 'docker run --rm --network "$edge_network" llm-hub-lite/deploy-runner:current' "$bootstrap"
+grep -Fq 'docker run --rm --network "$edge_network" "$runner_image"' "$bootstrap"
+grep -Fq 'pull_image "$runner_image"' "$bootstrap"
+grep -Fq 'PLATFORM_RUNNER_IMAGE=$runner_image' "$bootstrap"
 grep -Fq 'curl --http2' "$bootstrap"
 grep -Fq 'container HTTPS preflight failed' "$bootstrap"
 grep -Fq 'Older bootstraps nested Hub and agent state' "$bootstrap"

@@ -19,8 +19,10 @@ concurrency:
 
 steps:
   runner:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0@sha256:1038afc7446cdba70318586753adba3d4a2c78e1f5e878d8adfa68e06ac2af25
+    pull: true
+    environment:
+      PLATFORM_CONTROLLER_IMAGE: ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0@sha256:1038afc7446cdba70318586753adba3d4a2c78e1f5e878d8adfa68e06ac2af25
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite

@@ -34,6 +34,8 @@ die() {
 deploy_debug_level="${DEPLOY_DEBUG_LEVEL:-$(value DEPLOY_DEBUG_LEVEL)}"
 deploy_debug_level="${deploy_debug_level:-off}"
 case "$deploy_debug_level" in off | warn | debug) ;; *) die 'DEPLOY_DEBUG_LEVEL must be off, warn, or debug' ;; esac
+runner_image="${DEPLOY_RUNNER_IMAGE:-$(value DEPLOY_RUNNER_IMAGE)}"
+[[ "$runner_image" =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ ]] || die 'DEPLOY_RUNNER_IMAGE must be digest-pinned'
 ci_sha_guard='if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi;'
 csv_has() {
 	local csv=",${1//[[:space:]]/},"
@@ -119,6 +121,12 @@ write_volumes() {
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
       - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
+EOF
+}
+write_runner_environment() {
+	cat <<EOF
+    environment:
+      PLATFORM_CONTROLLER_IMAGE: $runner_image
 EOF
 }
 
@@ -214,9 +222,10 @@ concurrency:
 
 steps:
   control-sync:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
+	write_runner_environment >>"$file"
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
@@ -270,9 +279,10 @@ concurrency:
 
 steps:
   reconcile:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
+	write_runner_environment >>"$file"
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
@@ -319,9 +329,10 @@ concurrency:
 
 steps:
   foundation:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
+	write_runner_environment >>"$file"
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
@@ -351,9 +362,10 @@ concurrency:
 
 steps:
   audit:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
+	write_runner_environment >>"$file"
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
@@ -391,16 +403,16 @@ concurrency:
 
 steps:
   secrets:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
-	write_volumes >>"$file"
-	printf '    environment:\n' >>"$file"
+	write_runner_environment >>"$file"
 	while IFS= read -r key; do
 		[[ -n "$key" ]] || continue
 		secret_name="$(woodpecker_secret_name "$app" "$key")"
 		printf '      %s:\n        from_secret: %s\n' "$key" "$secret_name" >>"$file"
 	done < <(printf '%s\n' "$secret_keys" | tr ',' '\n')
+	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
       - /usr/local/bin/configure-app-secrets $app$target_arg --non-interactive
@@ -471,10 +483,10 @@ render_consumer_stage() {
 	write_consumer_header "$file" "$app" "$node" "$dependency"
 	cat >>"$file" <<EOF
   stage:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
-	write_volumes >>"$file"
+	write_runner_environment >>"$file"
 	stage_secret_keys="$(deployment_secret_keys "$manifest")"
 	if [[ "$(env_value RUNTIME_ENV_PROVISION "$manifest")" == stage ]]; then
 		stage_secret_keys="${stage_secret_keys}${stage_secret_keys:+,}$(env_value NODE_SECRET_KEYS "$manifest"),$(conditional_secret_keys "$manifest" "$node")"
@@ -487,7 +499,6 @@ EOF
 			has_injected_secrets=1
 		done < <(printf '%s\n' "$stage_secret_keys" | tr ',' '\n' | awk 'NF && !seen[$0]++')
 		if ((has_injected_secrets)); then
-			printf '    environment:\n' >>"$file"
 			while IFS= read -r key; do
 				[[ -n "$key" ]] || continue
 				csv_has "$generated_keys" "$key" && continue
@@ -496,6 +507,7 @@ EOF
 			done < <(printf '%s\n' "$stage_secret_keys" | tr ',' '\n' | awk 'NF && !seen[$0]++')
 		fi
 	fi
+	write_volumes >>"$file"
 	if [[ -n "$migration_from" ]]; then
 		cat >>"$file" <<EOF
     commands:
@@ -530,21 +542,23 @@ render_consumer_publish() {
 	write_consumer_header "$file" "$app" "$leader_id" "$dependency"
 	cat >>"$file" <<EOF
   publish:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
-	write_volumes >>"$file"
+	write_runner_environment >>"$file"
 	while IFS= read -r key; do
 		[[ -n "$key" ]] || continue
 		has_injected_secrets=1
 	done < <(printf '%s\n' "$secret_keys" | tr ',' '\n' | sed '/^$/d' | awk '!seen[$0]++')
 	if ((has_injected_secrets)); then
-		printf '    environment:\n' >>"$file"
 		while IFS= read -r key; do
 			[[ -n "$key" ]] || continue
 			secret_name="$(woodpecker_secret_name "$app" "$key")"
 			printf '      %s:\n        from_secret: %s\n' "$key" "$secret_name" >>"$file"
 		done < <(printf '%s\n' "$secret_keys" | tr ',' '\n' | sed '/^$/d' | awk '!seen[$0]++')
+	fi
+	write_volumes >>"$file"
+	if ((has_injected_secrets)); then
 		printf '    commands:\n      - /usr/local/bin/configure-app-secrets %s --non-interactive\n' "$app" >>"$file"
 	else
 		printf '    commands:\n' >>"$file"
@@ -560,9 +574,10 @@ render_direct_publish() {
 	write_consumer_header "$file" "$app" "$node" "$dependency"
 	cat >>"$file" <<EOF
   publish:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
+	write_runner_environment >>"$file"
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
@@ -576,9 +591,10 @@ render_consumer_stop() {
 	write_consumer_header "$file" "$app" "$node" "$dependency"
 	cat >>"$file" <<EOF
   stop:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
+	write_runner_environment >>"$file"
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
@@ -594,9 +610,10 @@ render_consumer_finalize() {
 	write_consumer_header "$file" "$app" "$node" "$dependency"
 	cat >>"$file" <<EOF
   finalize:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
+	write_runner_environment >>"$file"
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
     commands:
@@ -790,9 +807,10 @@ concurrency:
 
 steps:
   $kind:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: $runner_image
+    pull: true
 EOF
+	write_runner_environment >>"$file"
 	write_volumes >>"$file"
 	cat >>"$file" <<EOF
       - /usr/local/bin/deploy-controller:/usr/local/bin/deploy-controller:ro

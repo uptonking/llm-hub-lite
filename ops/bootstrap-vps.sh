@@ -874,6 +874,8 @@ fi
 policy_file="$bootstrap_tree/config/cluster/policy.env"
 [[ -f "$policy_file" ]] || die "missing cluster policy: $policy_file"
 [[ "$(sed -n 's/^CLUSTER_CONFIG_VERSION=//p' "$policy_file" | tail -n1)" == 3 ]] || die 'unsupported cluster policy version'
+runner_image="$(sed -n 's/^DEPLOY_RUNNER_IMAGE=//p' "$policy_file" | tail -n1)"
+[[ "$runner_image" =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ ]] || die 'cluster policy DEPLOY_RUNNER_IMAGE must be digest-pinned'
 if [[ -z "$NODE_ID" && "$BOOTSTRAP_MODE" == repair && -r "$CONFIG_ROOT/node.env" ]]; then
 	NODE_ID="$(sed -n 's/^NODE_ID=//p' "$CONFIG_ROOT/node.env" | tail -n1)"
 fi
@@ -1609,7 +1611,7 @@ for pair in \
 	"CONTROL_SYNC_STATE_FILE=$CONFIG_ROOT/control-sync.state" \
 	"CONTROL_ATTESTATION_FILE=$CONTROL_ROOT/attestation.env" \
 	"RUNTIME_ROOT=$APP_ROOT/shared/runtime" "PLATFORM_EDGE_NETWORK=$edge_network" "NODE_ID=$NODE_ID" "NODE_CONFIG_FILE=$CONFIG_ROOT/node.env" "CLUSTER_POLICY_FILE=$CONTROL_ROOT/current/config/cluster/policy.env" \
-	"PLATFORM_LOCK_FILE=/run/lock/llm-hub-lite/platform.lock" "GITHUB_TOKEN_FILE=${GITHUB_TOKEN_FILE:-$CONFIG_ROOT/github-token}" "PLATFORM_RUNNER_IMAGE=llm-hub-lite/deploy-runner:current"; do
+	"PLATFORM_LOCK_FILE=/run/lock/llm-hub-lite/platform.lock" "GITHUB_TOKEN_FILE=${GITHUB_TOKEN_FILE:-$CONFIG_ROOT/github-token}" "PLATFORM_RUNNER_IMAGE=$runner_image"; do
 	set_key "$platform_env" "${pair%%=*}" "${pair#*=}"
 done
 
@@ -1623,21 +1625,16 @@ while IFS='=' read -r image_key image_ref; do
 	}
 	pull_image "$image_ref"
 done < <(cat "$CONFIG_ROOT/images.foundation.env" "$CONFIG_ROOT/images.apps.env")
-runner_base_image="$(sed -n 's/^FROM \([^ ]*\).*$/\1/p' "$bootstrap_tree/ops/deploy-runner/Dockerfile" | head -n1)"
-[[ -n "$runner_base_image" ]] || die 'unable to determine deployment runner base image'
-pull_image "$runner_base_image"
-docker build --pull=false --build-arg COMPOSE_ARCH="$compose_arch" --build-arg COMPOSE_SHA256="$compose_sha256" \
-	--build-arg APK_LOCK_SHA256_AMD64="$(sha256sum "$bootstrap_tree/ops/deploy-runner/apk-packages.lock.amd64" | awk '{print $1}')" \
-	--build-arg APK_LOCK_SHA256_ARM64="$(sha256sum "$bootstrap_tree/ops/deploy-runner/apk-packages.lock.arm64" | awk '{print $1}')" \
-	-t llm-hub-lite/deploy-runner:current "$bootstrap_tree/ops/deploy-runner"
-runner_image_id="$(docker image inspect --format '{{.Id}}' llm-hub-lite/deploy-runner:current)"
+pull_image "$runner_image"
+docker tag "$runner_image" llm-hub-lite/deploy-runner:current
+runner_image_id="$(docker image inspect --format '{{.Id}}' "$runner_image")"
 [[ -n "$runner_image_id" ]] || die 'deployment runner image was not created'
 set_key "$platform_env" PLATFORM_RUNNER_IMAGE_ID "$runner_image_id"
 PLATFORM_ALLOW_OBSERVER_BOOTSTRAP=1 PLATFORM_COMPOSE_BIN="$COMPOSE_BIN" /usr/local/bin/platformctl validate
 # Apply follower Docker ingress filtering before any public container starts.
 /usr/local/bin/configure-firewall
 if [[ "$NODE_ROLE" == follower ]]; then
-	docker run --rm --network "$edge_network" llm-hub-lite/deploy-runner:current \
+	docker run --rm --network "$edge_network" "$runner_image" \
 		curl --http2 -sS --connect-timeout 10 --max-time 20 -o /dev/null "https://ci-grpc.$DOMAIN_NAME/" ||
 		die 'container HTTPS preflight failed; check follower firewall, DNS, and TLS connectivity to the Leader'
 fi

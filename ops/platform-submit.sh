@@ -48,8 +48,27 @@ fi
 
 platform_env_file="${PLATFORM_ENV_FILE:-/etc/llm-hub-lite/platform.env}"
 configured_image="$(sed -n 's/^PLATFORM_RUNNER_IMAGE=//p' "$platform_env_file" 2>/dev/null | tail -n1 || true)"
-image="${PLATFORM_CONTROLLER_IMAGE:-${configured_image:-llm-hub-lite/deploy-runner:current}}"
-expected_image_id="$(sed -n 's/^PLATFORM_RUNNER_IMAGE_ID=//p' "$platform_env_file" 2>/dev/null | tail -n1 || true)"
+explicit_image="${PLATFORM_CONTROLLER_IMAGE:-}"
+if [[ -n "$explicit_image" ]]; then
+	[[ "$explicit_image" =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ ]] || {
+		printf 'PLATFORM_CONTROLLER_IMAGE must be digest-pinned: %s\n' "$explicit_image" >&2
+		exit 1
+	}
+	image="$explicit_image"
+	# The Woodpecker step pulls this image before invoking us. Do not compare
+	# it with a stale host-local PLATFORM_RUNNER_IMAGE_ID from an older release.
+	expected_image_id=''
+else
+	image="${configured_image:-llm-hub-lite/deploy-runner:current}"
+	expected_image_id="$(sed -n 's/^PLATFORM_RUNNER_IMAGE_ID=//p' "$platform_env_file" 2>/dev/null | tail -n1 || true)"
+fi
+if [[ -n "$explicit_image" ]]; then
+	actual_image_id="$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)"
+	[[ -n "$actual_image_id" ]] || {
+		printf 'deployment runner image is unavailable locally: %s\n' "$image" >&2
+		exit 1
+	}
+fi
 if [[ -n "$expected_image_id" ]]; then
 	actual_image_id="$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)"
 	[[ "$actual_image_id" == "$expected_image_id" ]] || {

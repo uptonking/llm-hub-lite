@@ -91,4 +91,21 @@ if grep -Fq 'run -d --name llm-hub-lite-platform-apply' "$tmp/docker.log"; then
 	printf 'invalid retirement delay started a deployment runner\n' >&2
 	exit 1
 fi
+
+# A registry-backed workflow must work even when the legacy host-local runner
+# tag and its recorded image ID are absent.
+cat >"$tmp/platform.env" <<'EOF'
+PLATFORM_RUNNER_IMAGE=llm-hub-lite/deploy-runner:current
+PLATFORM_RUNNER_IMAGE_ID=sha256:stale-local-id
+EOF
+: >"$tmp/docker.log"
+PLATFORM_CONTROLLER_IMAGE='ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0@sha256:1038afc7446cdba70318586753adba3d4a2c78e1f5e878d8adfa68e06ac2af25' \
+	bash "$repo_root/ops/platform-submit.sh" deploy "0123456789abcdef0123456789abcdef01234567"
+grep -Fq -- 'ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0@sha256:1038afc7446cdba70318586753adba3d4a2c78e1f5e878d8adfa68e06ac2af25' "$tmp/docker.log"
+
+if output="$(PLATFORM_CONTROLLER_IMAGE='ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0' bash "$repo_root/ops/platform-submit.sh" deploy "0123456789abcdef0123456789abcdef01234567" 2>&1)"; then
+	printf 'platform-submit accepted an unpinned explicit runner image\n' >&2
+	exit 1
+fi
+grep -Fq 'PLATFORM_CONTROLLER_IMAGE must be digest-pinned' <<<"$output"
 printf 'platform-submit tests passed\n'

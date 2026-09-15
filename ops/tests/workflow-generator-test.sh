@@ -30,6 +30,18 @@ expect_invalid() {
 
 base="$(make_fixture base)"
 generate_fixture "$base"
+runner_image="$(sed -n 's/^DEPLOY_RUNNER_IMAGE=//p' "$base/config/cluster/policy.env" | tail -n1)"
+[[ "$runner_image" =~ @sha256:[0-9a-f]{64}$ ]]
+if grep -R -Fq 'image: llm-hub-lite/deploy-runner:current' "$base/workflows"; then
+	printf 'generated workflows still reference the host-local runner image\n' >&2
+	exit 1
+fi
+if grep -R -Fq 'pull: false' "$base/workflows"; then
+	printf 'generated workflows must pull the canonical runner image\n' >&2
+	exit 1
+fi
+grep -R -Fq "image: $runner_image" "$base/workflows"
+grep -R -Fq "PLATFORM_CONTROLLER_IMAGE: $runner_image" "$base/workflows"
 
 # Disabled direct applications are reconciled from the Leader only so stale
 # follower listeners can be stopped; they must never emit a direct-publish job.

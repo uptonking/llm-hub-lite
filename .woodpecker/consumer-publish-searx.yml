@@ -32,8 +32,14 @@ concurrency:
 
 steps:
   publish:
-    image: llm-hub-lite/deploy-runner:current
-    pull: false
+    image: ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0@sha256:1038afc7446cdba70318586753adba3d4a2c78e1f5e878d8adfa68e06ac2af25
+    pull: true
+    environment:
+      PLATFORM_CONTROLLER_IMAGE: ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0@sha256:1038afc7446cdba70318586753adba3d4a2c78e1f5e878d8adfa68e06ac2af25
+      SEARX_AUTH_USER:
+        from_secret: searx_auth_user
+      SEARX_AUTH_HASH:
+        from_secret: searx_auth_hash
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/apps/llm-hub-lite:/opt/apps/llm-hub-lite
@@ -46,11 +52,6 @@ steps:
       - /usr/local/bin/configure-app-secrets:/usr/local/bin/configure-app-secrets:ro
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
       - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
-    environment:
-      SEARX_AUTH_USER:
-        from_secret: searx_auth_user
-      SEARX_AUTH_HASH:
-        from_secret: searx_auth_hash
     commands:
       - /usr/local/bin/configure-app-secrets searx --non-interactive
       - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=searx /usr/local/bin/platform-submit consumer-publish "$CI_COMMIT_SHA"
