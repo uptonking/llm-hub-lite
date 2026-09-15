@@ -310,7 +310,7 @@ if ! FAIL_SYNC=0 bash "$repo_root/ops/deploy-controller.sh" deploy "$sha_templat
 	printf 'template-plus-application change was rejected by the normal deployment path\n' >&2
 	exit 1
 fi
-[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
+assert_equal "$platform_root/control/releases/$sha_control_only" "$(readlink "$platform_root/control/current")" 'foundation-scoped app deployment must preserve the control release'
 
 # A delayed Woodpecker build must not roll a node back implicitly. Explicit
 # rollback is the only path allowed to target an older retained release.
@@ -318,7 +318,7 @@ if bash "$repo_root/ops/deploy-controller.sh" deploy "$sha3" >"$tmp/deploy-stale
 	printf 'stale normal deployment was accepted\n' >&2
 	exit 1
 fi
-[[ "$(readlink "$platform_root/control/current")" == "$platform_root/control/releases/$sha_template_app" ]]
+assert_equal "$platform_root/control/releases/$sha_control_only" "$(readlink "$platform_root/control/current")" 'cluster-scoped app deployment must preserve the control release'
 grep -Fq 'target commit is older than the installed release' "$tmp/deploy-stale.log"
 
 # Documentation and test-only changes are safe to ship with an application
