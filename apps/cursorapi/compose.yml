@@ -41,7 +41,7 @@ services:
     networks: [cursorapi_private, platform_edge]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8765/healthz').then(async r=>{if(!r.ok||await r.text()!=='ok\\n')process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 30s
+      interval: 60s
       timeout: 10s
       retries: 5
       start_period: 30s

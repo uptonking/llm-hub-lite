@@ -54,6 +54,23 @@ false | FALSE | 0)
 	;;
 esac
 
+RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-$(env_value RESTIC_SCHEDULE_INTERVAL)}"
+RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-3600}"
+RESTIC_SCHEDULE_MARKER="${RESTIC_SCHEDULE_MARKER:-/run/llm-hub-lite/restic-scheduled.timestamp}"
+scheduled_snapshot_recent() {
+	local last now
+	[[ "$operation" == snapshot && "$reason" == scheduled ]] || return 1
+	[[ -r "$RESTIC_SCHEDULE_MARKER" ]] || return 1
+	last="$(cat "$RESTIC_SCHEDULE_MARKER" 2>/dev/null || true)"
+	[[ "$last" =~ ^[0-9]+$ ]] || return 1
+	now="$(date +%s)"
+	((now >= last && now - last < RESTIC_SCHEDULE_INTERVAL))
+}
+if scheduled_snapshot_recent; then
+	printf 'scheduled backup skipped: last snapshot is less than %s seconds old\n' "$RESTIC_SCHEDULE_INTERVAL"
+	exit 0
+fi
+
 command -v flock >/dev/null 2>&1 || {
 	printf 'flock is required\n' >&2
 	exit 1
@@ -150,9 +167,6 @@ RESTIC_IONICE_CLASS="${RESTIC_IONICE_CLASS:-$(env_value RESTIC_IONICE_CLASS)}"
 RESTIC_IONICE_CLASS="${RESTIC_IONICE_CLASS:-2}"
 RESTIC_IONICE_LEVEL="${RESTIC_IONICE_LEVEL:-$(env_value RESTIC_IONICE_LEVEL)}"
 RESTIC_IONICE_LEVEL="${RESTIC_IONICE_LEVEL:-7}"
-RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-$(env_value RESTIC_SCHEDULE_INTERVAL)}"
-RESTIC_SCHEDULE_INTERVAL="${RESTIC_SCHEDULE_INTERVAL:-3600}"
-RESTIC_SCHEDULE_MARKER="${RESTIC_SCHEDULE_MARKER:-/run/llm-hub-lite/restic-scheduled.timestamp}"
 NEW_API_SQL_DSN="${NEW_API_SQL_DSN:-$(env_value NEW_API_SQL_DSN)}"
 LIBRECHAT_MONGO_URI="${LIBRECHAT_MONGO_URI:-$(env_value LIBRECHAT_MONGO_URI)}"
 WOODPECKER_DATA_ROOT="${WOODPECKER_DATA_ROOT:-$PLATFORM_ROOT/woodpecker/data}"
@@ -298,19 +312,6 @@ restic_backup() {
 	((restic_skip_if_unchanged_supported)) && options+=(--skip-if-unchanged)
 	restic_run backup --compression "$RESTIC_COMPRESSION" "${options[@]}" "$@"
 }
-scheduled_snapshot_recent() {
-	local last now
-	[[ "$operation" == snapshot && "$reason" == scheduled ]] || return 1
-	[[ -r "$RESTIC_SCHEDULE_MARKER" ]] || return 1
-	last="$(cat "$RESTIC_SCHEDULE_MARKER" 2>/dev/null || true)"
-	[[ "$last" =~ ^[0-9]+$ ]] || return 1
-	now="$(date +%s)"
-	((now >= last && now - last < RESTIC_SCHEDULE_INTERVAL))
-}
-if scheduled_snapshot_recent; then
-	printf 'scheduled backup skipped: last snapshot is less than %s seconds old\n' "$RESTIC_SCHEDULE_INTERVAL"
-	exit 0
-fi
 if [[ ! -f "$REPO/config" ]]; then restic_run init >/dev/null; fi
 remote_restic() {
 	[[ -n "$RESTIC_REMOTE_REPOSITORY" ]] || {

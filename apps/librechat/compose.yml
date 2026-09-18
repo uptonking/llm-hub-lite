@@ -113,6 +113,12 @@ services:
       API_SERVER_URL: http://librechat-api:3080
       VITE_API_BASE_URL: ${LIBRECHAT_SITE:?LIBRECHAT_SITE must be set}
       SESSION_COOKIE_SECURE: ${LIBRECHAT_SESSION_COOKIE_SECURE:-true}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
     networks: [librechat_private, platform_edge]
   librechat-client:
     image: ${LIBRECHAT_CLIENT_IMAGE:?LIBRECHAT_CLIENT_IMAGE must be digest-pinned}

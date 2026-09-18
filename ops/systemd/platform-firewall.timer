@@ -3,7 +3,7 @@ Description=Reconcile llm-hub-lite Docker firewall policy
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
+OnUnitActiveSec=30min
 Unit=platform-firewall.service
 Persistent=true
 

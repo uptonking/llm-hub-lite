@@ -3,7 +3,7 @@ Description=Frequent llm-hub-lite platform backups
 
 [Timer]
 OnBootSec=10min
-OnUnitActiveSec=15min
+OnUnitActiveSec=30min
 RandomizedDelaySec=60s
 Persistent=true
 Unit=platform-backup.service

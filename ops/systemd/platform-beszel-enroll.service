@@ -2,7 +2,7 @@
 Description=Enroll the llm-hub-lite Beszel agent
 After=platform-recovery.service
 Requires=platform-recovery.service
-ConditionPathExists=/etc/llm-hub-lite/beszel-initial-credentials
+ConditionPathExists=!/opt/platform/beszel/secrets/token
 
 [Service]
 Type=oneshot

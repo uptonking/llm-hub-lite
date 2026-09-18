@@ -1,5 +1,6 @@
 [Unit]
 Description=Retry llm-hub-lite Beszel enrollment
+ConditionPathExists=!/opt/platform/beszel/secrets/token
 
 [Timer]
 OnBootSec=30s
