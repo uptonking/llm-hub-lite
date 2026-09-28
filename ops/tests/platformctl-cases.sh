@@ -683,10 +683,8 @@ newapi_policy_backup="$tmp/newapi-policy.original"
 cp "$tmp/control/current/config/cluster/apps/newapi.policy" "$newapi_policy_backup"
 sed -E '/^(NEW_API_MIGRATION_NODE_ID|NEW_API_BACKUP_NODE_ID)=/d' "$newapi_policy_backup" \
 	>"$tmp/control/current/config/cluster/apps/newapi.policy"
-sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
-mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
-sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/cpapi.policy" >"$tmp/policy.tmp"
-mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/cpapi.policy"
+sed -i.bak 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" "$tmp/control/current/config/cluster/apps/cpapi.policy"
+rm -f "$tmp/control/current/config/cluster/apps/newapi.policy.bak" "$tmp/control/current/config/cluster/apps/cpapi.policy.bak"
 if ! validation_output="$(platform_validate_library '' 0 1 0 1 2>&1)"; then
 	printf '%s\n' "$validation_output" >&2
 	exit 1

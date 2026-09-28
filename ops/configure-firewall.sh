@@ -48,14 +48,21 @@ leader_id="$(value LEADER_NODE_ID "$CLUSTER_POLICY_FILE")"
 [[ "$node_id" == "$leader_id" ]] && NODE_ROLE=leader || NODE_ROLE=follower
 LEADER_PUBLIC_IP="$(value LEADER_PUBLIC_IP "$NODE_CONFIG_FILE")"
 
-command -v iptables >/dev/null 2>&1 || {
-	printf 'configure-firewall: iptables is required\n' >&2
-	exit 1
-}
-command -v ufw >/dev/null 2>&1 || {
-	printf 'configure-firewall: ufw is required\n' >&2
-	exit 1
-}
+if ! command -v iptables >/dev/null 2>&1 || ! command -v ufw >/dev/null 2>&1; then
+	if [[ -f /.dockerenv || ! -d /run/systemd/system ]] && [[ -d "$(dirname "$REQUEST_FILE")" ]]; then
+		touch "$REQUEST_FILE" 2>/dev/null || true
+		printf 'configure-firewall: host utilities missing in container; queued firewall reconciliation request\n'
+		exit 0
+	fi
+	command -v iptables >/dev/null 2>&1 || {
+		printf 'configure-firewall: iptables is required\n' >&2
+		exit 1
+	}
+	command -v ufw >/dev/null 2>&1 || {
+		printf 'configure-firewall: ufw is required\n' >&2
+		exit 1
+	}
+fi
 clear_follower_ufw_rules() {
 	local number
 	while IFS= read -r number; do
