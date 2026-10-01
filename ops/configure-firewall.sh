@@ -70,6 +70,18 @@ clear_follower_ufw_rules() {
 		ufw --force delete "$number" >/dev/null || true
 	done < <(ufw status numbered 2>/dev/null | sed -n '/Leader to follower/{s/^\[[[:space:]]*\([0-9][0-9]*\)\].*/\1/p;}' | sort -rn)
 }
+# Direct port-hop REDIRECT rules live in nat PREROUTING. They are rebuilt on
+# every reconciliation so ranges removed from manifests do not linger, and the
+# idempotent re-add below keeps them present after a VPS reboot.
+clear_port_hop_rules() {
+	local rule
+	local -a rule_args
+	while IFS= read -r rule; do
+		[[ "$rule" == -* ]] || continue
+		read -r -a rule_args <<<"${rule/-A/-D}"
+		iptables -t nat "${rule_args[@]}" >/dev/null 2>&1 || true
+	done < <(iptables -t nat -S PREROUTING 2>/dev/null | grep -- '-m comment --comment llm-hub-lite-hop' || true)
+}
 chain=LLM_HUB_LITE_DOCKER
 clear_follower_ufw_rules
 ufw allow 443/tcp comment 'HTTPS' >/dev/null
@@ -78,6 +90,7 @@ if [[ "$NODE_ROLE" == leader ]]; then
 	while iptables -C DOCKER-USER -j "$chain" 2>/dev/null; do iptables -D DOCKER-USER -j "$chain"; done
 	iptables -F "$chain" 2>/dev/null || true
 	iptables -X "$chain" 2>/dev/null || true
+	clear_port_hop_rules
 	rm -f -- "$REQUEST_FILE"
 	exit 0
 fi
@@ -90,6 +103,7 @@ command -v ip >/dev/null 2>&1 || {
 	exit 1
 }
 PUBLIC_INTERFACE="$(public_interface)"
+clear_port_hop_rules
 
 # Docker evaluates DOCKER-USER for both ingress and container egress. Scope the
 # policy to the public ingress interface so outbound HTTPS remains available.
@@ -131,6 +145,41 @@ while IFS= read -r manifest; do
 		iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j RETURN
 		ufw allow "$port/$proto" comment "Direct $app" >/dev/null
 	done <<<"$(value DIRECT_LISTENERS "$manifest" | tr ',' '\n')"
+	# Port hopping for QUIC-based direct apps: a UDP port range is DNAT'd with
+	# REDIRECT onto the app's published listener port, so clients can hop ports
+	# to evade per-flow UDP QoS on congested routes.
+	while IFS= read -r range; do
+		[[ -n "$range" ]] || continue
+		IFS=':' read -r proto from to target <<<"$range"
+		[[ "$proto" == udp || "$proto" == tcp ]] || {
+			printf 'configure-firewall: malformed direct port range protocol: %s (%s)\n' "$range" "$app" >&2
+			exit 1
+		}
+		[[ "$from" =~ ^[1-9][0-9]*$ && "$to" =~ ^[1-9][0-9]*$ && "$target" =~ ^[1-9][0-9]*$ ]] || {
+			printf 'configure-firewall: malformed direct port range: %s (%s)\n' "$range" "$app" >&2
+			exit 1
+		}
+		((10#$from <= 10#$to && 10#$to <= 65535 && 10#$target <= 65535)) || {
+			printf 'configure-firewall: invalid direct port range bounds: %s (%s)\n' "$range" "$app" >&2
+			exit 1
+		}
+		[[ ",$direct_allowlist," == *",$proto/$from-$to,"* ]] || {
+			printf 'configure-firewall: direct port range is not allowlisted: %s/%s-%s (%s)\n' "$proto" "$from" "$to" "$app" >&2
+			exit 1
+		}
+		range_target_ok=0
+		while IFS= read -r listener; do
+			[[ -n "$listener" ]] || continue
+			[[ "${listener%%:*}" == "$proto" && "${listener#*:}" == "$target":* ]] && range_target_ok=1
+		done <<<"$(value DIRECT_LISTENERS "$manifest" | tr ',' '\n')"
+		[[ "$range_target_ok" == 1 ]] || {
+			printf 'configure-firewall: direct port range target is not a direct listener: %s (%s)\n' "$range" "$app" >&2
+			exit 1
+		}
+		ufw allow "$from:$to/$proto" comment "Direct hop $app" >/dev/null
+		hop_args=(-i "$PUBLIC_INTERFACE" -p "$proto" --dport "$from:$to" -j REDIRECT --to-ports "$target" -m comment --comment llm-hub-lite-hop)
+		iptables -t nat -C PREROUTING "${hop_args[@]}" 2>/dev/null || iptables -t nat -I PREROUTING 1 "${hop_args[@]}"
+	done <<<"$(value DIRECT_PORT_RANGES "$manifest" | tr ',' '\n')"
 done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
 # Default-deny Docker-published ingress on the public interface. Exceptions
 # above cover the Leader proxy and explicitly allowlisted direct listeners;

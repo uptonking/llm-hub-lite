@@ -1166,7 +1166,7 @@ write_validation_stamp() {
 	mv -f -- "$tmp" "$VALIDATION_STAMP_FILE"
 }
 validate_cluster() {
-	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor direct_seen='' listeners listener proto host_port container_port key caddy_udp_fallback leader_public_ip
+	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor direct_seen='' listeners listener proto host_port container_port key caddy_udp_fallback leader_public_ip ranges range from to target range_target_ok
 	need_file "$CLUSTER_POLICY_FILE"
 	need_file "$NODE_CONFIG_FILE"
 	[[ "$(policy_value CLUSTER_CONFIG_VERSION)" == 3 ]] || die 'unsupported cluster policy version'
@@ -1233,6 +1233,15 @@ validate_cluster() {
 					die "direct UDP listener conflicts with Caddy fallback: $key"
 				fi
 			done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
+			ranges="$(descriptor_value "$d" DIRECT_PORT_RANGES)"
+			while IFS= read -r range; do
+				[[ -n "$range" ]] || continue
+				IFS=':' read -r proto from to _ <<<"$range"
+				[[ "$from" =~ ^[1-9][0-9]*$ && "$to" =~ ^[1-9][0-9]*$ && "$from" -le "$to" && "$to" -le 65535 ]] || die "invalid direct port range: $range"
+				key="$node/$proto/$from-$to"
+				! csv_has "$direct_seen" "$key" || die "duplicate direct port range reservation: $key"
+				direct_seen="${direct_seen:+$direct_seen,}$key"
+			done <<<"$(printf '%s\n' "$ranges" | tr ',' '\n')"
 		done <<<"$(printf '%s\n' "$(app_nodes "$d")" | tr ',' '\n')"
 	done <<<"$(cluster_validation_descriptor_ids)"
 	app_policy_enabled newapi && newapi_enabled=1
@@ -1294,11 +1303,26 @@ validate_descriptor() {
 				grep -Eq "${host_port}:[[:space:]]*${container_port}/tcp|${host_port}:${container_port}/tcp" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "direct TCP listener is absent from Compose: $listener"
 			fi
 		done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
+		ranges="$(descriptor_value "$d" DIRECT_PORT_RANGES)"
+		while IFS= read -r range; do
+			[[ -n "$range" ]] || continue
+			IFS=':' read -r proto from to target <<<"$range"
+			[[ "$proto" == tcp || "$proto" == udp ]] || die "invalid direct port range protocol: $range"
+			[[ "$from" =~ ^[1-9][0-9]*$ && "$to" =~ ^[1-9][0-9]*$ && "$target" =~ ^[1-9][0-9]*$ && "$from" -le "$to" && "$to" -le 65535 && "$target" -le 65535 ]] || die "invalid direct port range: $range"
+			csv_has "$allowlist" "$proto/$from-$to" || die "direct port range is not allowlisted: $proto/$from-$to"
+			range_target_ok=0
+			while IFS= read -r listener; do
+				[[ -n "$listener" ]] || continue
+				[[ "${listener%%:*}" == "$proto" && "${listener#*:}" == "$target":* ]] && range_target_ok=1
+			done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
+			[[ "$range_target_ok" == 1 ]] || die "direct port range target is not a direct listener: $range -> $proto/$target"
+		done <<<"$(printf '%s\n' "$ranges" | tr ',' '\n')"
 		if [[ "$ingress" == direct ]]; then
 			[[ -z "$(descriptor_value "$d" ROUTE_GROUPS)" ]] || die "ROUTE_GROUPS is not valid for direct-only app: $d"
 		fi
 	else
 		[[ -z "$(descriptor_value "$d" DIRECT_LISTENERS)" ]] || die "DIRECT_LISTENERS is only valid for direct apps: $d"
+		[[ -z "$(descriptor_value "$d" DIRECT_PORT_RANGES)" ]] || die "DIRECT_PORT_RANGES is only valid for direct apps: $d"
 	fi
 	mode="$(descriptor_value "$d" STATE_MODE)"
 	[[ -n "$mode" ]] || mode=files
