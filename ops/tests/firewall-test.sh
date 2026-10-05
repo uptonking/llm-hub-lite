@@ -54,7 +54,13 @@ fi
 [ "${1:-}" = link ] && exit 0
 exit 1
 EOF
-chmod +x "$tmp/bin/ufw" "$tmp/bin/iptables" "$tmp/bin/ip"
+cat >"$tmp/bin/harden-ssh-stub.sh" <<'EOF'
+#!/bin/sh
+# Stand-in for ops/harden-ssh.sh: this test must not touch the real sshd.
+printf 'harden-ssh quiet=%s\n' "${PLATFORM_SSH_HARDENING_QUIET:-unset}" >>"${HARDEN_LOG:?}"
+exit 0
+EOF
+chmod +x "$tmp/bin/ufw" "$tmp/bin/iptables" "$tmp/bin/ip" "$tmp/bin/harden-ssh-stub.sh"
 
 run_firewall() {
 	LEADER_PUBLIC_IP=198.51.100.20 DEPLOY_CONFIG_FILE="$tmp/platform.env" \
@@ -63,8 +69,14 @@ run_firewall() {
 }
 
 export PATH="$tmp/bin:$PATH" FIREWALL_LOG="$tmp/firewall.log"
+# Every reconciliation must also refresh the SSH authentication policy. The
+# Leader returns early from the firewall body, so this stub also guards against
+# that early return skipping the role-independent hardening step.
+export HARDEN_SSH_SCRIPT="$tmp/bin/harden-ssh-stub.sh" HARDEN_LOG="$tmp/harden.log"
 : >"$FIREWALL_LOG"
+: >"$HARDEN_LOG"
 firewall_output="$(run_firewall)"
+grep -Fqx 'harden-ssh quiet=1' "$HARDEN_LOG"
 grep -Fqx 'ufw --force delete 1' "$FIREWALL_LOG"
 grep -Fqx 'ufw allow 443/tcp comment HTTPS' "$FIREWALL_LOG"
 grep -Fqx 'ufw allow 443/udp comment HTTP/3' "$FIREWALL_LOG"
@@ -125,10 +137,14 @@ done
 printf 'NODE_ID=leader\n' >"$tmp/config/node.leader"
 sed "s#NODE_CONFIG_FILE=.*#NODE_CONFIG_FILE=$tmp/config/node.leader#" "$tmp/platform.env" >"$tmp/platform.leader.env"
 : >"$FIREWALL_LOG"
+: >"$HARDEN_LOG"
 DEPLOY_CONFIG_FILE="$tmp/platform.leader.env" bash "$repo_root/ops/configure-firewall.sh" >/dev/null
 if grep -Fq 'llm-hub-lite-hop' "$FIREWALL_LOG"; then
 	printf 'leader firewall must not install port-hop REDIRECT rules\n' >&2
 	exit 1
 fi
+# The Leader returns early from the firewall body, so it is the case most
+# likely to silently lose the SSH hardening step.
+grep -Fqx 'harden-ssh quiet=1' "$HARDEN_LOG"
 
 printf 'firewall tests passed\n'
