@@ -3,7 +3,9 @@
 ## Purpose
 
 Self-hosted, reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, and LibreChat.
-LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI, and Cursorapi are enabled singleton consumers targeted to configured followers.
+LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI, Cursorapi, and CPAMP
+are enabled singleton consumers targeted to configured followers; CPAMP (CPA-Manager-Plus Full
+Mode) is the management/observability panel for CPAPI at `cpamp.aichorage.de` on worker-1.
 Flowy is enabled on worker-3. Wabase (Grist) is enabled as a SQLite-backed singleton on active worker-4; scheduled Restic work remains disabled there.
 Pigeon (OutlookEmail) is retained but disabled by committed policy. OpenObserve
 ( `observer` ) is a Leader-only foundation service; read-only socket-proxy and

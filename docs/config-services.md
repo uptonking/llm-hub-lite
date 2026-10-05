@@ -104,9 +104,17 @@ from the raw Restic tree, and restore from `sqlite/map.tsv` regardless of file
 extension. This supports Grist's `.sqlite3` catalog and `.grist` documents.
 
 Legacy New API remains as a dormant manifest and is disabled by the committed
-policy. CPAPI and Cursor API Proxy are enabled singleton consumers at
-`cpapi.aichorage.de` and `cursorapi.aichorage.de` ; both are unrelated to the
-legacy New API. Pigeon (OutlookEmail) remains packaged for a
+policy. CPAPI, Cursor API Proxy, and CPAMP are enabled singleton consumers at
+`cpapi.aichorage.de` , `cursorapi.aichorage.de` , and `cpamp.aichorage.de` ;
+the first two are unrelated to the legacy New API. CPAMP (CPA-Manager-Plus
+Full Mode) is an independent Manager Server container on the same follower as
+CPAPI that adds persistent request history, cost analytics, and account
+automation; it manages CPAPI server-side through the shared edge network
+(`http://cpapi:8317` entered at first-run setup) and never replaces the
+official Management Center still served by CPAPI itself. Its admin key is a
+platform-generated root-only secret (`CPAMP_ADMIN_KEY`), and its SQLite usage
+history and `data.key` live under the node-local cpamp data directory. Pigeon
+(OutlookEmail) remains packaged for a
 future opt-in but is disabled by committed policy and has no target stage,
 route, container, or secret prompt. Its generated publish/stop jobs are
 cleanup-only so an earlier deployment can be retired safely. OpenObserve

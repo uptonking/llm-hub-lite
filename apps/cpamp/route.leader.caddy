@@ -1,0 +1,20 @@
+{$CPAMP_SITE} {
+  import common_proxy
+  reverse_proxy {$CPAMP_UPSTREAM} {
+    transport http {
+      tls_insecure_skip_verify
+    }
+    fail_duration 30s
+    health_uri /health
+    health_interval 10s
+    health_timeout 3s
+    header_up Host {http.reverse_proxy.upstream.hostport}
+    # Replace caller-supplied forwarding headers with Caddy's verified
+    # Cloudflare client address (or the direct TCP peer).
+    import forward_verified_client_ip
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "cpamp unavailable" 503
+  }
+}

@@ -583,6 +583,17 @@ line includes the client IP verified and canonicalized by both Caddy hops; full
 request/response logging remains disabled so bodies and authorization headers
 are not written to these files.
 
+CPAMP is a separate singleton consumer at `cpamp.aichorage.de` , colocated
+with CPAPI on `worker-1` . It runs CPA-Manager-Plus in Full Mode as an
+independent Manager Server container (`:18317`) that adds persistent request
+history, cost analytics, and account automation for CPAPI. The panel is
+served at `/management.html` and performs all CPAPI management calls
+server-side, so the official Cli-Proxy-API-Management-Center at
+`cpapi.aichorage.de/management.html` remains enabled and unchanged. Its admin
+key is the platform-generated root-only `CPAMP_ADMIN_KEY` ; first-run setup
+stores the CPAPI URL and management key (encrypted) in its local SQLite
+database alongside `data.key` under the node-local cpamp data directory.
+
 Cursorapi is a separate ephemeral singleton at `cursorapi.aichorage.de` . Its
 target is stored in `config/cluster/apps/cursorapi.policy` and defaults to
 `worker-1` . The repository-built image bundles a checksum-pinned Cursor Agent;

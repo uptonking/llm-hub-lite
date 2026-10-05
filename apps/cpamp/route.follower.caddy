@@ -1,0 +1,11 @@
+{$NODE_CPAMP_ORIGIN_HOST} {
+  tls internal
+  import common_proxy
+  # This Caddy trusts client headers only from the configured Leader. Rewrite
+  # all downstream headers from the resulting verified address, so CPAMP's
+  # access log never accepts a caller-supplied client address.
+  reverse_proxy cpamp:18317 {
+    flush_interval -1
+    import forward_verified_client_ip
+  }
+}

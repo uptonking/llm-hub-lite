@@ -1,0 +1,71 @@
+name: app-cpamp
+services:
+  cpamp:
+    image: ${CPAMP_IMAGE:?CPAMP_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: ${CPAMP_MEMORY_LIMIT:-256m}
+    cpus: ${CPAMP_CPUS:-0.25}
+    pids_limit: ${CPAMP_PIDS_LIMIT:-128}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: cpamp
+      com.aichorage.component: app-cpamp
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      # CPAMP Manager Server (Full Mode): serves the panel at /management.html
+      # and performs all CPA management calls server-side through its proxy.
+      HTTP_ADDR: 0.0.0.0:18317
+      USAGE_DB_PATH: /data/usage.sqlite
+      CPA_MANAGER_DATA_KEY_PATH: /data/data.key
+      # Stable admin key provisioned by the platform's root-only secret file.
+      CPA_MANAGER_ADMIN_KEY: ${CPAMP_ADMIN_KEY:?CPAMP_ADMIN_KEY must be set}
+      USAGE_COLLECTOR_MODE: auto
+      USAGE_RESP_QUEUE: usage
+      USAGE_RESP_POP_SIDE: right
+      USAGE_BATCH_SIZE: "100"
+      USAGE_POLL_INTERVAL_MS: "500"
+      USAGE_QUERY_LIMIT: "50000"
+      USAGE_CORS_ORIGINS: ${CPAMP_USAGE_CORS_ORIGINS:-https://cpamp.aichorage.de}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/cpamp:/data
+    networks: [cpamp_private, platform_edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:18317/health | grep -Fq '\"ok\":true'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+  health-probe:
+    image: ${HEALTH_PROBE_IMAGE:?HEALTH_PROBE_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: 16m
+    cpus: 0.05
+    pids_limit: 32
+    read_only: true
+    security_opt: ['no-new-privileges:true']
+    entrypoint: ["/bin/sh"]
+    command: ["-eu", "-c", "while :; do sleep 3600; done"]
+    tmpfs: [/tmp]
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: cpamp
+      com.aichorage.component: app-cpamp
+      com.aichorage.observer.ignore-logs: "true"
+    depends_on:
+      cpamp:
+        condition: service_started
+    networks: [cpamp_private]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://cpamp:18317/health | grep -Fq '\"ok\":true'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+networks:
+  cpamp_private:
+    name: app-cpamp_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true
