@@ -7,7 +7,7 @@ services:
     stop_grace_period: 30s
     mem_limit: ${AICHOR_MEMORY_LIMIT:-900m}
     cpus: ${AICHOR_CPUS:-0.80}
-    pids_limit: ${AICHOR_PIDS_LIMIT:-128}
+    pids_limit: ${AICHOR_PIDS_LIMIT:-384}
     # Prepare persistent mounts and optional Pi credentials before the upstream
     # entrypoint drops the daemon and launched agents to uid/gid 1000.
     entrypoint: ["/aichor-entrypoint.sh"]

@@ -7,7 +7,7 @@ services:
     stop_grace_period: 30s
     mem_limit: ${AICHOR3_MEMORY_LIMIT:-900m}
     cpus: ${AICHOR3_CPUS:-0.80}
-    pids_limit: ${AICHOR3_PIDS_LIMIT:-128}
+    pids_limit: ${AICHOR3_PIDS_LIMIT:-384}
     entrypoint: ["/aichor3-entrypoint.sh"]
     environment:
       TZ: ${TZ:-Asia/Shanghai}

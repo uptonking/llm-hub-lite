@@ -191,3 +191,14 @@ iptables -I DOCKER-USER 1 -j "$chain"
 
 printf 'Docker published-port policy applied on public interface %s for the configured Leader address\n' "$PUBLIC_INTERFACE"
 rm -f -- "$REQUEST_FILE"
+
+# Node security baseline beyond the packet filter: refuse SSH password logins.
+# This script is the only root, timer-driven reconciliation hook that both new
+# and existing nodes already run from the current control release, so the SSH
+# policy rolls out with the firewall policy instead of requiring a one-off SSH
+# procedure on every VPS. harden-ssh.sh is idempotent and refuses to disable
+# passwords while no public key is installed, so it cannot lock an operator out.
+harden_ssh="${HARDEN_SSH_SCRIPT:-$(dirname -- "${BASH_SOURCE[0]}")/harden-ssh.sh}"
+if [[ -x "$harden_ssh" ]]; then
+	PLATFORM_SSH_HARDENING_QUIET=1 "$harden_ssh"
+fi

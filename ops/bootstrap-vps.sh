@@ -1196,6 +1196,10 @@ ufw allow 80/tcp comment 'HTTP ACME and redirect' >/dev/null
 ufw allow 443/tcp comment 'HTTPS' >/dev/null
 ufw allow 443/udp comment 'HTTP/3' >/dev/null
 ufw --force enable >/dev/null
+# Provider images enable SSH password authentication (01-dartnode.conf), which
+# is how worker-2 was brute-forced on 2026-09-29 and 2026-10-04. The helper is
+# idempotent and refuses to disable passwords when no public key is installed.
+"$bootstrap_tree/ops/harden-ssh.sh"
 
 previous_app_domain="$(sed -n 's/^DOMAIN_NAME=//p' "$app_env" 2>/dev/null | tail -n1)"
 set_key "$app_env" DOMAIN_NAME "$DOMAIN_NAME"
