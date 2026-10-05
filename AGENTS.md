@@ -19,7 +19,7 @@ recover from an unexpected VPS restart without losing completed conversations.
 
 - Foundation Compose projects: `compose/foundation/`.
 - Cluster inventory and policy: `config/cluster/`.
-- Declarative applications: `apps/<id>/manifest.env`,               `compose.yml`, and role
+- Declarative applications: `apps/<id>/manifest.env`,                   `compose.yml`, and role
   route templates.
 - Generated runtime Caddy configuration: `/opt/apps/llm-hub-lite/shared/runtime/config`.
 - Persistent app data: `/opt/apps/llm-hub-lite/shared/data/prod`.
@@ -44,7 +44,7 @@ recover from an unexpected VPS restart without losing completed conversations.
 `ops/bootstrap-vps.sh` is for first deployment only. Daily changes are GitHub push -> Woodpecker -> `deploy-controller` ; do not add SSH-based daily procedures. `platformctl recover` must remain safe after a VPS reboot and must never pull mutable images.
 
 Production images stay digest-pinned in `ops/images.foundation.prod.env` and
-`ops/images.apps.prod.env`. Caddy remains mandatory and exposes 80, 443/TCP,
+`ops/images.apps.prod.env` . Caddy remains mandatory and exposes 80, 443/TCP,
 and 443/UDP on the external `platform_edge` network.
 Role placement and intentional service disablement are committed in
 `config/cluster/policy.env` and `config/cluster/apps/*.policy` ; logical
@@ -54,7 +54,8 @@ consumer-eligible only after an explicit `active` policy change.
 
 - Most re-deployments of services should be handled by woodpecker ci after changes are pushed to github. Few re-deployments of foundational services might require manual work.
   - For changes related to foundational services like caddy/woodpecker, deploying changes with foundational services might require manual work. Multi-stage deployment might be used to avoid self-disruption if it helps.
-- you might use woodpecker-cli to inspect the ci progress/status, related token/config has been set.
+- use woodpecker-cli to inspect the ci progress/status, related auth/config has been set.
+  - just run woodpecker-cli commands like `woodpecker-cli pipeline ps uptonking/llm-hub-lite 216` to inspect ci status.
 
 ## Code Conventions
 

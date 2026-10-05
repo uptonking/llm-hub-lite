@@ -77,6 +77,9 @@ cat >"$tmp/config/cpapi.env" <<'EOF'
 CPAPI_API_KEY=test-api-key
 CPAPI_MANAGEMENT_KEY=test-management-key
 EOF
+cat >"$tmp/config/cpamp.env" <<'EOF'
+CPAMP_ADMIN_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+EOF
 cat >"$tmp/config/aichorouter.env" <<'EOF'
 AICHOROUTER_SESSION_SECRET=test-session-secret
 AICHOROUTER_CRYPTO_SECRET=test-crypto-secret
@@ -104,6 +107,7 @@ cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
 LEADER_PUBLIC_IP=192.0.2.10
 NODE_NEW_API_ORIGIN_HOST=worker2-newapi.example.invalid
+NODE_CPAMP_ORIGIN_HOST=worker2-cpamp.example.invalid
 NODE_CPAPI_ORIGIN_HOST=worker2-cpapi.example.invalid
 NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
@@ -128,7 +132,7 @@ case "$*" in
   *" ps --all -q beszel-socket-proxy"*) printf 'beszel-socket-proxy\n'; exit 0;;
   *" ps --all -q health-probe"*)
     case "$*" in
-  *"-p app-aichor "*|*"-p app-aichorouter "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*|*"-p app-searx "*|*"-p app-relaichor "*|*"-p app-relaichor1 "*)
+  *"-p app-aichor "*|*"-p app-aichorouter "*|*"-p app-cpamp "*|*"-p app-cpapi "*|*"-p app-cursorapi "*|*"-p app-pigeon "*|*"-p app-wapdf "*|*"-p app-searx "*|*"-p app-relaichor "*|*"-p app-relaichor1 "*)
         printf 'health-probe\n'
         exit 0
         ;;
@@ -154,6 +158,7 @@ esac
 case "$*" in
   *app-librechat*) printf 'librechat-api\nlibrechat-admin-panel\nlibrechat-client\n';;
   *app-newapi*) printf 'newapi\n';;
+  *app-cpamp*) printf 'cpamp\nhealth-probe\n';;
   *app-cpapi*) printf 'cpapi\nhealth-probe\n';;
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
   *app-aichor*) printf 'aichor\n';;

@@ -331,7 +331,7 @@ follower_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summa
 	print_bootstrap_summary
 ')"
 grep -Fq 'Foundation: beszel-worker, caddy, observer-collector, woodpecker-worker' <<<"$follower_summary"
-grep -Fq 'Consumers: Aichorouter, CPAPI, Cursor API Proxy, LibreChat' <<<"$follower_summary"
+grep -Fq 'Consumers: Aichorouter, CPAMP, CPAPI, Cursor API Proxy, LibreChat' <<<"$follower_summary"
 grep -Fq 'LibreChat origin: https://worker-chat-origin.example.test' <<<"$follower_summary"
 grep -Fq 'Daily deployments are workflow-driven' <<<"$follower_summary"
 wrapper_declaration="$(sed -n '/^for script in /p' "$bootstrap")"
