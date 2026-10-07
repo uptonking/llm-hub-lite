@@ -1,6 +1,10 @@
 {$NODE_AICHOROUTER_ORIGIN_HOST} {
   tls internal
   import common_proxy
+  # Match the leader route: serve the SPA's no-trailing-slash API paths
+  # directly so the backend never emits a cacheable trailing-slash 301.
+  @api_noslash path /api/log /api/channel
+  rewrite @api_noslash {http.request.uri.path}/
   # This Caddy trusts client headers only from the configured Leader. Rewrite
   # all downstream headers from the resulting verified address, so a direct
   # origin request cannot carry a caller-supplied address into New API.

@@ -1,4 +1,11 @@
 {$AICHOROUTER_SITE} {
+  # The SPA requests some collection APIs without the trailing slash the
+  # backend's canonical route expects. Serve those paths directly so the
+  # backend never emits a trailing-slash 301: Safari caches such redirects
+  # by path and replays them instantly against the cached target, which can
+  # permanently break the affected page for that browser.
+  @api_noslash path /api/log /api/channel
+  rewrite @api_noslash {http.request.uri.path}/
   import common_proxy
   reverse_proxy {$AICHOROUTER_UPSTREAM} {
     transport http {
