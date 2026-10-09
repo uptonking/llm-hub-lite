@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016,SC2029
+# shellcheck disable=SC1091,SC2016,SC2029
 # SC2016: ssh_source/ssh_target run remote shell snippets; single-quoted
 # strings intentionally keep '$...' literal so the *target* host expands it.
-# SC2029: the wrappers pass "$@" as the remote command by design; callers are
-# responsible for quoting (all remote calls below are single-quoted or have
-# interpolated values nested inside escaped quotes).
+# SC2029: wrappers pass "$@" as the remote command by design; callers are
+# responsible for quoting.
 
 set -Eeuo pipefail
 umask 077
@@ -12,6 +11,9 @@ umask 077
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 bootstrap_source="$repo_root/ops/bootstrap-vps.sh"
+
+# shellcheck source=ops/lib/migration-common.sh
+source "$script_dir/lib/migration-common.sh"
 
 usage() {
 	cat <<'EOF'
@@ -38,32 +40,14 @@ die() {
 	exit 1
 }
 log() { printf 'migration: %s\n' "$*"; }
-have() { command -v "$1" >/dev/null 2>&1; }
-sha256_file() { if have sha256sum; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
-valid_ipv4() {
-	local ip="$1" octet old_ifs
-	[[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
-	old_ifs="$IFS"
-	IFS=.
-	for octet in $ip; do
-		[[ "$octet" =~ ^[0-9]+$ && "$octet" -le 255 ]] || {
-			IFS="$old_ifs"
-			return 1
-		}
-	done
-	IFS="$old_ifs"
-}
-valid_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
-valid_sha256() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
-csv_has() {
-	local csv=",${1//[[:space:]]/},"
-	[[ "$csv" == *",$2,"* ]]
-}
+have() { migration_have "$1"; }
+sha256_file() { migration_sha256_file "$1"; }
+valid_ipv4() { migration_valid_ipv4 "$1"; }
+valid_sha() { migration_valid_sha "$1"; }
+valid_sha256() { migration_valid_sha256 "$1"; }
+csv_has() { migration_csv_has "$1" "$2"; }
 valid_phase() {
-	case "$1" in
-	preflight | source-stopped | archive-created | local-copy-verified | target-copy-verified | target-extracted | bootstrap-complete | verification-complete) return 0 ;;
-	*) return 1 ;;
-	esac
+	migration_valid_phase "$1" 'preflight source-stopped archive-created local-copy-verified target-copy-verified target-extracted bootstrap-complete verification-complete'
 }
 
 dry_run=0
@@ -165,25 +149,12 @@ transfer_known_hosts_local=''
 transfer_key_remote=''
 transfer_known_hosts_remote=''
 cleanup_transfer_credentials() {
-	local marker
 	[[ "$transfer_credentials_active" == 1 ]] || return 0
-	marker="$transfer_key_id"
-	if [[ -n "$marker" ]]; then
-		ssh_target "set -Eeuo pipefail; file=/root/.ssh/authorized_keys; if [ -f \"\$file\" ]; then tmp=\$(mktemp /root/.ssh/authorized_keys.XXXXXX); awk -v marker='$marker' 'index(\$0, \" \" marker) == 0' \"\$file\" >\"\$tmp\"; chmod 600 \"\$tmp\"; mv -f \"\$tmp\" \"\$file\"; fi" >/dev/null 2>&1 || true
-	fi
-	if [[ -n "$transfer_key_remote" && -n "$transfer_known_hosts_remote" ]]; then
-		ssh_source "rm -f '$transfer_key_remote' '$transfer_known_hosts_remote'" >/dev/null 2>&1 || true
-	fi
-	[[ -z "$transfer_key_local" ]] || rm -f -- "$transfer_key_local" "$transfer_key_local.pub"
-	[[ -z "$transfer_known_hosts_local" ]] || rm -f -- "$transfer_known_hosts_local"
+	purge_stale_transfer_credentials
 	transfer_credentials_active=0
 }
 purge_stale_transfer_credentials() {
-	local marker="$transfer_key_id"
-	[[ -n "$marker" ]] || return 0
-	ssh_target "set -Eeuo pipefail; file=/root/.ssh/authorized_keys; if [ -f \"\$file\" ]; then tmp=\$(mktemp /root/.ssh/authorized_keys.XXXXXX); trap 'rm -f \"\$tmp\"' EXIT HUP INT TERM; awk -v marker='$marker' 'index(\$0, \" \" marker) == 0' \"\$file\" >\"\$tmp\"; chmod 600 \"\$tmp\"; mv -f \"\$tmp\" \"\$file\"; trap - EXIT HUP INT TERM; fi"
-	ssh_source "rm -f '$transfer_key_remote' '$transfer_known_hosts_remote'" >/dev/null 2>&1 || true
-	rm -f -- "$transfer_key_local" "$transfer_key_local.pub" "$transfer_known_hosts_local"
+	migration_cleanup_direct_credentials "$target_ip" "$source_ip" "$ssh_port" "$known_hosts" "$transfer_key_id" "$transfer_key_remote" "$transfer_known_hosts_remote" "$transfer_key_local" "$transfer_known_hosts_local"
 }
 print_source_recovery() {
 	local recovery='platformctl maintenance end; for unit in /etc/systemd/system/platform-* /etc/systemd/system/platform.target; do [ -e "$unit" ] || continue; systemctl enable "${unit##*/}" >/dev/null 2>&1 || true; done; systemctl daemon-reload; systemctl enable --now platform.target'
@@ -224,19 +195,12 @@ set_phase() {
 	mv -f -- "$temporary" "$state_file"
 }
 phase_at_least() {
-	local wanted="$1" order='preflight source-stopped archive-created local-copy-verified target-copy-verified target-extracted bootstrap-complete verification-complete' p n=-1 w=-1 i=0
-	for p in $order; do
-		[[ "$p" == "$phase" ]] && n="$i"
-		[[ "$p" == "$wanted" ]] && w="$i"
-		i=$((i + 1))
-	done
-	[[ "$n" -ge "$w" ]]
+	migration_phase_at_least "$phase" "$1" 'preflight source-stopped archive-created local-copy-verified target-copy-verified target-extracted bootstrap-complete verification-complete'
 }
 load_resume() {
 	local candidate matches=0 version stored_disable_restic_backup=0 stored_transfer_mode=local requested_disable_restic_backup="$disable_restic_backup" requested_transfer_mode="$transfer_mode"
 	for candidate in "$backup_root"/*/migration.state; do
-		[[ -f "$candidate" ]] || continue
-		[[ ! -L "$candidate" ]] || continue
+		[[ -f "$candidate" && ! -L "$candidate" ]] || continue
 		if grep -Fqx "SOURCE_IP=$source_ip" "$candidate" && grep -Fqx "TARGET_IP=$target_ip" "$candidate"; then
 			state_file="$candidate"
 			matches=$((matches + 1))
@@ -272,8 +236,6 @@ load_resume() {
 		fi
 		transfer_mode="$stored_transfer_mode"
 	elif ((transfer_mode_explicit)); then
-		# Version 2/3 did not persist a transfer route. It is safe to choose direct
-		# only before either copy phase has completed.
 		[[ "$phase" == preflight || "$phase" == source-stopped || "$phase" == archive-created || "$requested_transfer_mode" == local ]] || die '--transfer-mode cannot be changed after archive transfer'
 		transfer_mode="$requested_transfer_mode"
 	fi
@@ -308,82 +270,12 @@ fi
 node_value() { ssh_source "sed -n 's/^$1=//p' /etc/llm-hub-lite/node.env 2>/dev/null | tail -n1"; }
 discover_source_origins() {
 	# A consumer manifest may expose one origin (singleton apps) or several
-	# origins (LibreChat's public and admin routes). Read route groups so every
-	# enabled origin on the node is checked before DNS cutover.
-	ssh_source "node_id='$node_id' domain='$domain' bash -s" <<'REMOTE_ORIGIN_DISCOVERY'
-set -Eeuo pipefail
-current=/opt/platform/control/current
-node_file=/etc/llm-hub-lite/node.env
-csv_has() { case ",${1//[[:space:]]/}," in *",$2,"*) return 0 ;; *) return 1 ;; esac; }
-for manifest in "$current"/apps/*/manifest.env; do
-	[ -f "$manifest" ] || continue
-	app="${manifest%/manifest.env}"
-	app="${app##*/}"
-	rel="$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)"
-	policy="$current/config/$rel"
-	[ "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" = true ] || continue
-	nodes="$(sed -n 's/^NODES=//p' "$policy" | tail -n1)"
-	csv_has "$nodes" "$node_id" || continue
-	ingress="$(sed -n 's/^INGRESS_MODE=//p' "$manifest" | tail -n1)"
-	if [ "$ingress" = direct ]; then
-		while IFS= read -r endpoint; do
-			[ -n "$endpoint" ] || continue
-			public_key="${endpoint%%|*}"
-			host="${endpoint#*|}"
-			printf '%s\t%s\t%s\n' "$host.$domain" "$app" "$public_key"
-		done <<EOF_ENDPOINTS
-$(printf '%s\n' "$(sed -n 's/^PUBLIC_ENDPOINTS=//p' "$manifest" | tail -n1)" | tr ';' '\n')
-EOF_ENDPOINTS
-		continue
-	fi
-	groups="$(sed -n 's/^ROUTE_GROUPS=//p' "$manifest" | tail -n1)"
-	[ -n "$groups" ] || continue
-	while IFS= read -r group; do
-		[ -n "$group" ] || continue
-		IFS='|' read -r public_key origin_key upstream_key <<EOF_GROUP
-$group
-EOF_GROUP
-		printf '%s\n' "$origin_key" | grep -Eq '^[A-Z][A-Z0-9_]*$' || {
-			printf 'invalid origin key for %s: %s\n' "$app" "$origin_key" >&2
-			exit 1
-		}
-		origin="$(sed -n "s/^$origin_key=//p" "$node_file" | tail -n1)"
-		[ -n "$origin" ] || {
-			printf 'missing origin value for %s/%s\n' "$app" "$origin_key" >&2
-			exit 1
-		}
-		printf '%s\t%s\t%s\n' "$origin" "$app" "${public_key:-route}"
-	done <<EOF_GROUPS
-$(printf '%s\n' "$groups" | tr ';' '\n')
-EOF_GROUPS
-done | sort -u
-REMOTE_ORIGIN_DISCOVERY
+	# origins (LibreChat's public and admin routes via ROUTE_GROUPS=). Read
+	# route groups so every enabled origin on the node is checked before DNS cutover.
+	migration_discover_source_origins "$source_ip" "$node_id" "$domain" "$ssh_port" "$known_hosts"
 }
 discover_source_direct_state() {
-	ssh_source "node_id='$node_id' bash -s" <<'REMOTE_DIRECT_STATE'
-set -Eeuo pipefail
-current=/opt/platform/control/current
-csv_has() { case ",${1//[[:space:]]/}," in *",$2,"*) return 0 ;; *) return 1 ;; esac; }
-for manifest in "$current"/apps/*/manifest.env; do
-	[ -f "$manifest" ] || continue
-	app="${manifest%/manifest.env}"; app="${app##*/}"
-	rel="$(sed -n 's/^POLICY_FILE=//p' "$manifest" | tail -n1)"; policy="$current/config/$rel"
-	[ "$(sed -n 's/^ENABLED=//p' "$policy" | tail -n1)" = true ] || continue
-	[ "$(sed -n 's/^INGRESS_MODE=//p' "$manifest" | tail -n1)" = direct ] || continue
-	nodes="$(sed -n 's/^NODES=//p' "$policy" | tail -n1)"; csv_has "$nodes" "$node_id" || continue
-	runtime_rel="$(sed -n 's/^RUNTIME_ENV_FILE=//p' "$manifest" | tail -n1)"
-	config_rel="$(sed -n 's/^RUNTIME_CONFIG_FILE=//p' "$manifest" | tail -n1)"
-	data_rel="$(sed -n 's/^DATA_ROOT_REL=//p' "$manifest" | tail -n1)"
-	data_root="$(sed -n 's/^DATA_ROOT=//p' /opt/apps/llm-hub-lite/shared/.env.prod | tail -n1)"; data_root="${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}"
-	runtime=''; rendered=''; data="$data_root/$data_rel"
-	[ -z "$runtime_rel" ] || runtime="/etc/llm-hub-lite/$runtime_rel"
-	[ -z "$config_rel" ] || rendered="/etc/llm-hub-lite/$config_rel"
-	[ -z "$runtime_rel" ] || [ -s "$runtime" ] || { printf 'direct runtime env is missing: %s\n' "$runtime" >&2; exit 1; }
-	[ -z "$config_rel" ] || [ -s "$rendered" ] || { printf 'direct rendered runtime config is missing: %s\n' "$rendered" >&2; exit 1; }
-	[ -d "$data" ] || { printf 'direct data directory is missing: %s\n' "$data" >&2; exit 1; }
-	printf '%s\t%s\t%s\t%s\n' "$app" "$runtime" "$rendered" "$data"
-done
-REMOTE_DIRECT_STATE
+	migration_discover_source_direct_state "$source_ip" "$node_id" "$ssh_port" "$known_hosts"
 }
 if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; then
 	log 'checking source and target SSH identity, policy, health, storage, and DNS'
@@ -417,9 +309,6 @@ if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; 
 	domain="$(ssh_source "sed -n 's/^DOMAIN_NAME=//p' /opt/apps/llm-hub-lite/shared/.env.prod 2>/dev/null | tail -n1")"
 	domain="${domain:-aichorage.de}"
 	printf '%s\n' "$domain" | grep -Eq '^[A-Za-z0-9.-]+$' || die 'invalid configured domain'
-	# Let platformctl hold the read lock while it checks health. This both waits
-	# for an in-flight deployment to finish and closes the race where a new
-	# transaction starts between a separate lock probe and the health call.
 	if ! ssh_source 'PLATFORM_READ_LOCK_WAIT=120 platformctl health >/dev/null'; then
 		die 'source has an active deployment or platform transaction, or is unhealthy; retry after it finishes'
 	fi
@@ -443,33 +332,21 @@ if ! phase_at_least preflight || [[ "$resume" == 1 && "$phase" == preflight ]]; 
 	active_origins="$(discover_source_origins)"
 	[[ -n "$active_origins" ]] || die 'no active origin records were discovered'
 	direct_state="$(discover_source_direct_state)"
-	while IFS=$'\t' read -r direct_app direct_runtime direct_rendered direct_data; do
-		[[ -n "$direct_app" ]] || continue
-		[[ "$direct_runtime$direct_rendered$direct_data" != *"'"* && "$direct_runtime$direct_rendered$direct_data" != *$'\n'* && "$direct_runtime$direct_rendered$direct_data" != *$'\r'* ]] || die "unsafe direct state path characters for $direct_app"
-		[[ -z "$direct_runtime" || "$direct_runtime" == /etc/llm-hub-lite/* ]] || die "unsafe direct runtime path for $direct_app"
-		[[ -z "$direct_rendered" || "$direct_rendered" == /etc/llm-hub-lite/runtime/* ]] || die "unsafe direct rendered config path for $direct_app"
-		[[ "$direct_data" == /opt/apps/llm-hub-lite/* ]] || die "unsafe direct data path for $direct_app"
-		ssh_source "if [ -n '$direct_runtime' ]; then test -s '$direct_runtime' || { printf 'direct app runtime env is missing or empty: $direct_app ($direct_runtime)\\n' >&2; exit 1; }; fi; if [ -n '$direct_rendered' ]; then test -s '$direct_rendered' || { printf 'direct rendered runtime config is missing or empty: $direct_app ($direct_rendered)\\n' >&2; exit 1; }; fi; test -d '$direct_data' || { printf 'direct app data directory is missing: $direct_app ($direct_data)\\n' >&2; exit 1; }"
-		log "direct state: $direct_app runtime=${direct_runtime:-none} config=${direct_rendered:-none} data=$direct_data"
-	done <<<"$direct_state"
+	migration_verify_source_direct_state "$source_ip" "$direct_state" "$ssh_port" "$known_hosts" || die 'unsafe direct state paths or missing files on source'
 	while IFS='	' read -r origin app route; do
 		[[ "$origin" =~ ^[A-Za-z0-9.-]+$ ]] || die "invalid origin hostname for $app"
 		resolved_a="$(dig +short A "$origin" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
 		resolved_aaaa="$(dig +short AAAA "$origin" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
 		log "DNS: $origin ($app/${route:-route}) A=${resolved_a:-<none>} AAAA=${resolved_aaaa:-<none>}"
 		if ! printf '%s\n' "$resolved_a" | tr ' ' '\n' | grep -Fxq "$target_ip" || [[ -n "$resolved_aaaa" ]]; then
-			if ((strict_dns)); then
-				die "DNS for $origin does not match target $target_ip (A: ${resolved_a:-<none>}; AAAA: ${resolved_aaaa:-<none>})"
-			fi
+			((strict_dns)) && die "DNS for $origin does not match target $target_ip (A: ${resolved_a:-<none>}; AAAA: ${resolved_aaaa:-<none>})"
 			log "WARNING: DNS for $origin did not resolve cleanly to $target_ip (A: ${resolved_a:-<none>}; AAAA: ${resolved_aaaa:-<none>}); continuing because DNS checks are advisory"
 		fi
 	done <<<"$active_origins"
 	observer_origin="observer-ingest.$domain"
 	observer_a="$(dig +short A "$observer_origin" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
 	if ! printf '%s\n' "$observer_a" | tr ' ' '\n' | grep -Fxq "$leader_ip"; then
-		if ((strict_dns)); then
-			die "$observer_origin does not resolve directly to Leader $leader_ip (A: ${observer_a:-<none>})"
-		fi
+		((strict_dns)) && die "$observer_origin does not resolve directly to Leader $leader_ip (A: ${observer_a:-<none>})"
 		log "WARNING: $observer_origin did not resolve to Leader $leader_ip (A: ${observer_a:-<none>}); continuing because DNS checks are advisory"
 	fi
 	if ((dry_run)); then
@@ -515,8 +392,6 @@ configure_direct_transfer_paths() {
 	transfer_known_hosts_remote="/var/tmp/$transfer_key_id.known-hosts"
 }
 if [[ "$transfer_mode" == direct ]]; then
-	# A SIGKILL after upload can bypass the EXIT trap. Remove deterministic key
-	# artifacts before reusing a completed upload or starting another attempt.
 	configure_direct_transfer_paths
 	purge_stale_transfer_credentials
 fi
@@ -538,58 +413,70 @@ ensure_target_transfer_dir() {
 verify_target_archive() {
 	ssh_target "set -Eeuo pipefail; test -d '$target_root' && test ! -L '$target_root'; test -d '$target_dir' && test ! -L '$target_dir'; archive='$target_dir/node-migration.tar.gz'; checksum=\"\${archive}.sha256\"; test -f \"\$archive\" && test ! -L \"\$archive\" && test -s \"\$archive\"; test -f \"\$checksum\" && test ! -L \"\$checksum\" && test -s \"\$checksum\"; expected=\$(sed 's/[[:space:]].*//' \"\$checksum\"); printf '%s\\n' \"\$expected\" | grep -Eq '^[0-9a-f]{64}\$'; actual=\$(sha256sum \"\$archive\" | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""
 }
+validate_archive_manifest_stream() {
+	local archive="$1" release_sha="$2"
+	local manifest="${archive}.manifest"
+	rm -f "$manifest"
+	tar -tzf "$archive" >"$manifest"
+	chmod 600 "$manifest"
+	grep -Eq '^etc/llm-hub-lite/node\.env$' "$manifest" || {
+		printf 'archive is missing the source node identity\n' >&2
+		return 1
+	}
+	grep -Eq "^opt/platform/control/releases/$release_sha(/|$)" "$manifest" || {
+		printf 'archive is missing the source current release\n' >&2
+		return 1
+	}
+	while IFS= read -r link_target; do
+		case "$link_target" in *'..'*)
+			printf 'unsafe archive symlink target: %s\n' "$link_target" >&2
+			return 1
+			;;
+		esac
+		case "$link_target" in
+		/opt/apps/llm-hub-lite | /opt/apps/llm-hub-lite/* | /opt/platform | /opt/platform/* | /etc/llm-hub-lite | /etc/llm-hub-lite/*) ;;
+		/*)
+			printf 'unsafe archive symlink target: %s\n' "$link_target" >&2
+			return 1
+			;;
+		esac
+	done < <(tar -tvzf "$archive" | awk '/^l/ { sub(/^.* -> /, ""); print }')
+	while IFS= read -r link_target; do
+		case "$link_target" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;;
+		*)
+			printf 'unsafe archive hard-link target: %s\n' "$link_target" >&2
+			return 1
+			;;
+		esac
+		case "$link_target" in /* | *'..'*)
+			printf 'unsafe archive hard-link target: %s\n' "$link_target" >&2
+			return 1
+			;;
+		esac
+	done < <(tar -tvzf "$archive" | awk '/^h/ { sub(/^.* link to /, ""); print }')
+	while IFS= read -r path; do
+		case "$path" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;; *)
+			printf 'unexpected archive path: %s\n' "$path" >&2
+			return 1
+			;;
+		esac
+		case "$path" in /* | *'..'*)
+			printf 'unsafe archive path: %s\n' "$path" >&2
+			exit 1
+			;;
+		esac
+		case "$path" in */collector-buffer | */collector-buffer/*)
+			printf 'excluded collector buffer leaked into archive: %s\n' "$path" >&2
+			exit 1
+			;;
+		esac
+	done <"$manifest"
+}
 validate_target_archive_manifest() {
-	ssh_target "archive='$target_dir/node-migration.tar.gz' release_sha='$release_sha' bash -s" <<'REMOTE_VALIDATE_ARCHIVE'
-set -Eeuo pipefail
-manifest="${archive}.manifest"
-rm -f "$manifest"
-tar -tzf "$archive" >"$manifest"
-chmod 600 "$manifest"
-grep -Eq '^etc/llm-hub-lite/node\.env$' "$manifest" || { printf 'archive is missing the source node identity\n' >&2; exit 1; }
-grep -Eq "^opt/platform/control/releases/$release_sha(/|$)" "$manifest" || { printf 'archive is missing the source current release\n' >&2; exit 1; }
-while IFS= read -r link_target; do
-	case "$link_target" in *'..'*) printf 'unsafe archive symlink target: %s\n' "$link_target" >&2; exit 1 ;; esac
-	case "$link_target" in
-	/opt/apps/llm-hub-lite | /opt/apps/llm-hub-lite/* | /opt/platform | /opt/platform/* | /etc/llm-hub-lite | /etc/llm-hub-lite/*) ;;
-	/*) printf 'unsafe archive symlink target: %s\n' "$link_target" >&2; exit 1 ;;
-	esac
-done < <(tar -tvzf "$archive" | awk '/^l/ { sub(/^.* -> /, ""); print }')
-while IFS= read -r link_target; do
-	case "$link_target" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;;
-	*) printf 'unsafe archive hard-link target: %s\n' "$link_target" >&2; exit 1 ;;
-	esac
-	case "$link_target" in /* | *'..'*) printf 'unsafe archive hard-link target: %s\n' "$link_target" >&2; exit 1 ;; esac
-done < <(tar -tvzf "$archive" | awk '/^h/ { sub(/^.* link to /, ""); print }')
-while IFS= read -r path; do
-	case "$path" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;; *) printf 'unexpected archive path: %s\n' "$path" >&2; exit 1 ;; esac
-	case "$path" in /* | *'..'*) printf 'unsafe archive path: %s\n' "$path" >&2; exit 1 ;; esac
-	case "$path" in */collector-buffer | */collector-buffer/*) printf 'excluded collector buffer leaked into archive: %s\n' "$path" >&2; exit 1 ;; esac
-done <"$manifest"
-REMOTE_VALIDATE_ARCHIVE
+	ssh_target "$(typeset -f validate_archive_manifest_stream); validate_archive_manifest_stream '$target_dir/node-migration.tar.gz' '$release_sha'"
 }
 adopt_legacy_local_partial() {
-	local stable="$archive_local.partial" candidate largest='' size largest_size=0
-	if [[ -e "$stable" || -L "$stable" ]]; then
-		if [[ -f "$stable" && ! -L "$stable" ]]; then
-			return 0
-		fi
-		log 'discarding an unsafe local partial archive'
-		rm -f -- "$stable"
-		[[ ! -e "$stable" && ! -L "$stable" ]] || die "unable to remove unsafe local partial archive: $stable"
-	fi
-	for candidate in "$archive_local.partial."*; do
-		[[ -f "$candidate" && ! -L "$candidate" ]] || continue
-		size="$(wc -c <"$candidate" | tr -d '[:space:]')"
-		[[ "$size" =~ ^[0-9]+$ ]] || continue
-		if ((size > largest_size)); then
-			largest="$candidate"
-			largest_size="$size"
-		fi
-	done
-	if [[ -n "$largest" ]]; then
-		log "adopting interrupted local transfer ($(basename "$largest"), $largest_size bytes)"
-		mv -f -- "$largest" "$stable"
-	fi
+	migration_adopt_legacy_local_partial "$archive_local" || die "unable to remove unsafe local partial archive: $archive_local.partial"
 }
 download_source_archive_resumable() {
 	local partial="$archive_local.partial" checksum_partial="$archive_local.sha256.partial" remote_size local_size attempt expected_hash
@@ -604,27 +491,24 @@ download_source_archive_resumable() {
 	local_size=0
 	[[ ! -f "$partial" ]] || local_size="$(wc -c <"$partial" | tr -d '[:space:]')"
 	[[ "$remote_size" =~ ^[0-9]+$ && "$local_size" =~ ^[0-9]+$ ]] || die 'unable to determine archive transfer size'
-	if ((local_size > remote_size)); then
+	((local_size > remote_size)) && {
 		log 'discarding an oversized partial local archive'
 		rm -f -- "$partial"
-	fi
+	}
 	for attempt in 1 2; do
-		if ! (
-			cd -- "$run_dir"
-			printf 'reget %s %s\n' "$archive_remote" "$(basename "$partial")" | sftp -b - "${sftp_opts[@]}" "root@$source_ip"
-		); then
-			if ((attempt == 1)); then
+		if ! (cd -- "$run_dir" && printf 'reget %s %s\n' "$archive_remote" "$(basename "$partial")" | sftp -b - "${sftp_opts[@]}" "root@$source_ip"); then
+			((attempt == 1)) && {
 				log 'local archive download was interrupted; resuming once'
 				continue
-			fi
+			}
 			die 'local archive download failed twice; rerun with --resume to keep the partial transfer'
 		fi
 		rm -f -- "$checksum_partial"
 		if ! scp_source "$archive_remote.sha256" "$checksum_partial"; then
-			if ((attempt == 1)); then
+			((attempt == 1)) && {
 				log 'archive checksum download failed; retrying once'
 				continue
-			fi
+			}
 			die 'archive checksum download failed twice; rerun with --resume'
 		fi
 		chmod 600 "$partial" "$checksum_partial"
@@ -635,30 +519,19 @@ download_source_archive_resumable() {
 			rm -f -- "$archive_local.partial."* "$archive_local.sha256.partial."*
 			return 0
 		fi
-		if ((attempt == 1)); then
+		((attempt == 1)) && {
 			log 'partial local archive failed checksum verification; retrying once from zero'
 			rm -f -- "$partial" "$checksum_partial"
-		fi
+		}
 	done
 	die 'local archive checksum mismatch after a clean retry'
 }
 prepare_direct_transfer_credentials() {
-	local lookup public_key
+	# command="internal-sftp"
 	ssh_source 'command -v sftp >/dev/null 2>&1' || die 'direct transfer requires the SFTP client on the source VPS'
 	configure_direct_transfer_paths
-	lookup="$target_ip"
-	[[ "$ssh_port" == 22 ]] || lookup="[$target_ip]:$ssh_port"
-	ssh-keygen -F "$lookup" -f "$known_hosts" 2>/dev/null | awk '!/^#/ && NF >= 3 {print}' >"$transfer_known_hosts_local"
-	[[ -s "$transfer_known_hosts_local" ]] || die "target host key is absent from known-hosts for direct transfer: $lookup"
-	rm -f -- "$transfer_key_local" "$transfer_key_local.pub"
-	ssh-keygen -q -t ed25519 -N '' -C "$transfer_key_id" -f "$transfer_key_local"
-	chmod 600 "$transfer_key_local" "$transfer_key_local.pub" "$transfer_known_hosts_local"
-	public_key="$(<"$transfer_key_local.pub")"
+	migration_prepare_direct_credentials "$source_ip" "$target_ip" "$ssh_port" "$known_hosts" "$transfer_key_id" "$transfer_key_local" "$transfer_known_hosts_local" "$transfer_key_remote" "$transfer_known_hosts_remote" || die 'failed to prepare direct transfer credentials'
 	transfer_credentials_active=1
-	printf 'from="%s",restrict,command="internal-sftp" %s\n' "$source_ip" "$public_key" | ssh_target "set -Eeuo pipefail; umask 077; install -d -m 700 /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys; tmp=\$(mktemp /root/.ssh/authorized_keys.XXXXXX); trap 'rm -f \"\$tmp\"' EXIT HUP INT TERM; grep -Fv ' $transfer_key_id' /root/.ssh/authorized_keys >\"\$tmp\" || true; cat >>\"\$tmp\"; chmod 600 \"\$tmp\"; mv -f \"\$tmp\" /root/.ssh/authorized_keys; trap - EXIT HUP INT TERM"
-	scp_to_source "$transfer_key_local" "$transfer_key_remote"
-	scp_to_source "$transfer_known_hosts_local" "$transfer_known_hosts_remote"
-	ssh_source "chmod 600 '$transfer_key_remote' '$transfer_known_hosts_remote'; printf 'pwd\\n' | sftp -q -b - -P '$ssh_port' -i '$transfer_key_remote' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='$transfer_known_hosts_remote' -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 root@'$target_ip' >/dev/null"
 }
 transfer_archive_direct() {
 	local attempt
@@ -675,11 +548,11 @@ transfer_archive_direct() {
 	prepare_direct_transfer_credentials
 	for attempt in 1 2; do
 		if ! ssh_source "set -Eeuo pipefail; printf 'put %s %s\\nput %s %s\\n' '$archive_remote' '$target_dir/node-migration.tar.gz.partial' '$archive_remote.sha256' '$target_dir/node-migration.tar.gz.sha256' | sftp -b - -P '$ssh_port' -i '$transfer_key_remote' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='$transfer_known_hosts_remote' -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 root@'$target_ip'"; then
-			if ((attempt == 1)); then
+			((attempt == 1)) && {
 				log 'direct archive transfer was interrupted; deleting partials and retrying once from zero'
 				ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'"
 				continue
-			fi
+			}
 			die 'direct archive transfer failed twice; rerun with --resume to start a clean transfer'
 		fi
 		if ssh_target "set -Eeuo pipefail; test -f '$target_dir/node-migration.tar.gz.partial' && test ! -L '$target_dir/node-migration.tar.gz.partial'; test -f '$target_dir/node-migration.tar.gz.sha256' && test ! -L '$target_dir/node-migration.tar.gz.sha256'; expected=\$(sed 's/[[:space:]].*//' '$target_dir/node-migration.tar.gz.sha256'); printf '%s\\n' \"\$expected\" | grep -Eq '^[0-9a-f]{64}\$'; actual=\$(sha256sum '$target_dir/node-migration.tar.gz.partial' | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""; then
@@ -688,10 +561,10 @@ transfer_archive_direct() {
 			transfer_credentials_active=0
 			return 0
 		fi
-		if ((attempt == 1)); then
+		((attempt == 1)) && {
 			log 'direct archive failed checksum verification; deleting partials and retrying once from zero'
 			ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'"
-		fi
+		}
 	done
 	die 'direct archive checksum mismatch after a clean retry'
 }
@@ -707,30 +580,27 @@ upload_local_archive_resumable() {
 	local_size="$(wc -c <"$archive_local" | tr -d '[:space:]')"
 	remote_size="$(ssh_target "set -Eeuo pipefail; partial='$target_dir/node-migration.tar.gz.partial'; if [ -L \"\$partial\" ]; then rm -f \"\$partial\"; fi; if [ -e \"\$partial\" ] && [ ! -f \"\$partial\" ]; then printf 'unsafe target partial archive: %s\\n' \"\$partial\" >&2; exit 1; fi; if [ -f \"\$partial\" ]; then stat -c %s \"\$partial\"; else printf '0\\n'; fi")"
 	[[ "$local_size" =~ ^[0-9]+$ && "$remote_size" =~ ^[0-9]+$ ]] || die 'unable to determine local upload size'
-	if ((remote_size > local_size)); then
+	((remote_size > local_size)) && {
 		log 'discarding an oversized partial archive on the target'
 		ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial'"
-	fi
+	}
 	for attempt in 1 2; do
-		if ! (
-			cd -- "$run_dir"
-			printf 'reput %s %s\nput %s %s\n' "$(basename "$archive_local")" "$target_dir/node-migration.tar.gz.partial" "$(basename "$archive_local.sha256")" "$target_dir/node-migration.tar.gz.sha256" |
-				sftp -b - "${sftp_opts[@]}" "root@$target_ip"
-		); then
-			if ((attempt == 1)); then
+		ssh_target "set -Eeuo pipefail; partial='$target_dir/node-migration.tar.gz.partial'; if [ ! -e \"\$partial\" ]; then touch \"\$partial\"; chmod 600 \"\$partial\"; fi"
+		if ! (cd -- "$run_dir" && printf 'reput %s %s\nput %s %s\n' "$(basename "$archive_local")" "$target_dir/node-migration.tar.gz.partial" "$(basename "$archive_local.sha256")" "$target_dir/node-migration.tar.gz.sha256" | sftp -b - "${sftp_opts[@]}" "root@$target_ip"); then
+			((attempt == 1)) && {
 				log 'target archive upload was interrupted; resuming once'
 				continue
-			fi
+			}
 			die 'target archive upload failed twice; rerun with --resume to keep the partial transfer'
 		fi
 		if ssh_target "set -Eeuo pipefail; test -f '$target_dir/node-migration.tar.gz.partial' && test ! -L '$target_dir/node-migration.tar.gz.partial'; test -f '$target_dir/node-migration.tar.gz.sha256' && test ! -L '$target_dir/node-migration.tar.gz.sha256'; chmod 600 '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'; expected=\$(sed 's/[[:space:]].*//' '$target_dir/node-migration.tar.gz.sha256'); printf '%s\\n' \"\$expected\" | grep -Eq '^[0-9a-f]{64}\$'; actual=\$(sha256sum '$target_dir/node-migration.tar.gz.partial' | sed 's/[[:space:]].*//'); test \"\$expected\" = \"\$actual\""; then
 			ssh_target "set -Eeuo pipefail; mv -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz'"
 			return 0
 		fi
-		if ((attempt == 1)); then
+		((attempt == 1)) && {
 			log 'target partial failed checksum verification; retrying once from zero'
 			ssh_target "rm -f '$target_dir/node-migration.tar.gz.partial' '$target_dir/node-migration.tar.gz.sha256'"
-		fi
+		}
 	done
 	die 'target archive checksum mismatch after a clean retry'
 }
@@ -739,29 +609,22 @@ verify_target_identity() {
 }
 verify_target_health() {
 	local attempt
-	# Bootstrap enables the recovery timer before this final check. Recovery and
-	# read-only health share the platform lock, so allow a full recovery pass to
-	# finish and retry instead of treating lock contention as service failure.
 	for attempt in 1 2 3 4; do
-		if ssh_target 'PLATFORM_READ_LOCK_WAIT=120 platformctl health >/dev/null'; then
-			return 0
-		fi
-		if ((attempt < 4)); then
+		ssh_target 'PLATFORM_READ_LOCK_WAIT=120 platformctl health >/dev/null' && return 0
+		((attempt < 4)) && {
 			log "target health check was busy or failed; retrying (${attempt}/4)"
 			sleep 5
-		fi
+		}
 	done
 	die 'target platform health did not pass after retries; inspect target platformctl diagnose output'
 }
 verify_target_direct_state() {
-	ssh_target 'set -Eeuo pipefail; current=/opt/platform/control/current; node_id=$(sed -n "s/^NODE_ID=//p" /etc/llm-hub-lite/node.env | tail -n1); data_root=$(sed -n "s/^DATA_ROOT=//p" /opt/apps/llm-hub-lite/shared/.env.prod | tail -n1); data_root=${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}; csv_has(){ case ",$1," in *",$2,"*) return 0;; *) return 1;; esac; }; safe_rel(){ case "$1" in ""|/*|*..*) return 1;; esac; }; found=0; for manifest in "$current"/apps/*/manifest.env; do [ -f "$manifest" ] || continue; app=${manifest%/manifest.env}; app=${app##*/}; rel=$(sed -n "s/^POLICY_FILE=//p" "$manifest" | tail -n1); policy="$current/config/$rel"; [ "$(sed -n "s/^ENABLED=//p" "$policy" | tail -n1)" = true ] || continue; [ "$(sed -n "s/^INGRESS_MODE=//p" "$manifest" | tail -n1)" = direct ] || continue; nodes=$(sed -n "s/^NODES=//p" "$policy" | tail -n1); csv_has "$nodes" "$node_id" || continue; runtime_rel=$(sed -n "s/^RUNTIME_ENV_FILE=//p" "$manifest" | tail -n1); config_rel=$(sed -n "s/^RUNTIME_CONFIG_FILE=//p" "$manifest" | tail -n1); [ -z "$config_rel" ] && config_rel="runtime/$app/config.yaml"; safe_rel "$runtime_rel" || { printf "unsafe direct runtime env path: %s\\n" "$runtime_rel" >&2; exit 1; }; safe_rel "$config_rel" || { printf "unsafe direct rendered config path: %s\\n" "$config_rel" >&2; exit 1; }; data_rel=$(sed -n "s/^DATA_ROOT_REL=//p" "$manifest" | tail -n1); runtime="/etc/llm-hub-lite/$runtime_rel"; rendered="/etc/llm-hub-lite/$config_rel"; data="$data_root/$data_rel"; [ -z "$runtime_rel" ] || [ -s "$runtime" ] || { printf "direct runtime env missing: %s\\n" "$runtime" >&2; exit 1; }; [ -z "$config_rel" ] || [ -s "$rendered" ] || { printf "direct rendered runtime config missing: %s\\n" "$rendered" >&2; exit 1; }; [ -d "$data" ] || { printf "direct data directory missing: %s\\n" "$data" >&2; exit 1; }; platformctl direct-smoke "$app"; found=1; done; [ "$found" -eq 1 ] || { printf "no active direct applications found on target\\n" >&2; exit 1; }'
+	migration_verify_target_direct_state "$target_ip" "$ssh_port" "$known_hosts"
 }
 if [[ "$transfer_mode" == local ]] && phase_at_least local-copy-verified; then verify_local_archive; fi
 if [[ "$phase" == target-copy-verified ]]; then verify_target_archive; fi
 if phase_at_least target-extracted; then
 	verify_target_identity
-	# A crash immediately after advancing the extraction phase may occur before
-	# its cleanup. Repeating this removal is safe and preserves low disk usage.
 	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256' '$target_dir/node-migration.tar.gz.manifest'"
 fi
 if ! phase_at_least archive-created; then
@@ -772,29 +635,7 @@ fi
 if [[ "$transfer_mode" == local ]] && ! phase_at_least local-copy-verified; then
 	log 'verifying the local checksum and archive manifest'
 	download_source_archive_resumable
-	rm -f -- "$run_dir/manifest.txt"
-	tar -tzf "$archive_local" >"$run_dir/manifest.txt"
-	chmod 600 "$run_dir/manifest.txt"
-	grep -Eq '^etc/llm-hub-lite/node\.env$' "$run_dir/manifest.txt" || die 'archive is missing the source node identity'
-	grep -Eq "^opt/platform/control/releases/$release_sha(/|$)" "$run_dir/manifest.txt" || die 'archive is missing the source current release'
-	while IFS= read -r link_target; do
-		case "$link_target" in *'..'*) die "unsafe archive symlink target: $link_target" ;; esac
-		case "$link_target" in
-		/opt/apps/llm-hub-lite | /opt/apps/llm-hub-lite/* | /opt/platform | /opt/platform/* | /etc/llm-hub-lite | /etc/llm-hub-lite/*) ;;
-		/*) die "unsafe archive symlink target: $link_target" ;;
-		esac
-	done < <(tar -tvzf "$archive_local" | awk '/^l/ { sub(/^.* -> /, ""); print }')
-	while IFS= read -r link_target; do
-		case "$link_target" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;;
-		*) die "unsafe archive hard-link target: $link_target" ;;
-		esac
-		case "$link_target" in /* | *'..'*) die "unsafe archive hard-link target: $link_target" ;; esac
-	done < <(tar -tvzf "$archive_local" | awk '/^h/ { sub(/^.* link to /, ""); print }')
-	while IFS= read -r path; do
-		case "$path" in opt/apps/llm-hub-lite | opt/apps/llm-hub-lite/* | opt/platform | opt/platform/* | etc/llm-hub-lite | etc/llm-hub-lite/*) ;; *) die "unexpected archive path: $path" ;; esac
-		case "$path" in /* | *'..'*) die "unsafe archive path: $path" ;; esac
-		case "$path" in */collector-buffer | */collector-buffer/*) die "excluded collector buffer leaked into archive: $path" ;; esac
-	done <"$run_dir/manifest.txt"
+	validate_archive_manifest_stream "$archive_local" "$release_sha" || die 'local archive manifest verification failed'
 	set_phase local-copy-verified
 fi
 if ! phase_at_least target-copy-verified; then
@@ -813,8 +654,6 @@ if ! phase_at_least target-extracted; then
 	log 'validating and extracting managed state on the target'
 	ssh_target "set -Eeuo pipefail; stage='$target_dir/stage'; rm -rf \"\$stage\"; install -d -m 700 \"\$stage\"; tar -xzf '$target_dir/node-migration.tar.gz' -C \"\$stage\" --no-same-owner; test \"\$(sed -n 's/^NODE_ID=//p' \"\$stage/etc/llm-hub-lite/node.env\" | tail -n1)\" = '$node_id'; test \"\$(readlink \"\$stage/opt/platform/control/current\" | sed 's#.*/##')\" = '$release_sha'; tar -xzf '$target_dir/node-migration.tar.gz' -C / --same-owner --numeric-owner --xattrs --acls --selinux; rm -rf \"\$stage\""
 	set_phase target-extracted
-	# The source archive (and, in local mode, the local archive) remains the
-	# recovery copy. Free scarce target disk before bootstrap pulls images.
 	ssh_target "rm -f '$target_dir/node-migration.tar.gz' '$target_dir/node-migration.tar.gz.sha256' '$target_dir/node-migration.tar.gz.manifest'"
 fi
 if ! phase_at_least bootstrap-complete; then
