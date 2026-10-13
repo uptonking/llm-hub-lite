@@ -16,7 +16,8 @@ make_fixture() {
 	# three-node baseline, so remove the committed reservation in the fixture.
 	rm -f "$fixture/config/cluster/nodes/worker-3.env"
 	rm -f "$fixture/config/cluster/nodes/worker-4.env"
-	sed 's/,worker-3,worker-4$//' "$fixture/config/cluster/policy.env" >"$fixture/config/cluster/policy.env.tmp"
+	rm -f "$fixture/config/cluster/nodes/worker-5.env"
+	sed 's/,worker-3,worker-4,worker-5$//' "$fixture/config/cluster/policy.env" >"$fixture/config/cluster/policy.env.tmp"
 	mv "$fixture/config/cluster/policy.env.tmp" "$fixture/config/cluster/policy.env"
 	# The lifecycle fixture promotes a previously unknown node from joining;
 	# keep the committed worker-3 Flowy placement out of this reduced inventory.

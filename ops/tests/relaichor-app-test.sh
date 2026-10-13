@@ -56,7 +56,7 @@ grep -Fq 'tls internal' "$app/route.follower.caddy"
 grep -Fq 'reverse_proxy relaichor:4000' "$app/route.follower.caddy"
 grep -Fq 'import forward_verified_client_ip' "$app/route.follower.caddy"
 
-for node in leader worker-1 worker-2 worker-3 worker-4; do
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do
 	prefix="${node/-/}"
 	grep -q "^NODE_RELAICHOR_ORIGIN_HOST=${prefix}-relaichor-origin.aichorage.de$" \
 		"$repo_root/config/cluster/nodes/$node.env"

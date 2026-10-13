@@ -13,7 +13,8 @@ enabled PGlite-backed singleton on the active `worker-3` by default. Singleton
 local state is intentionally not replicated; its default DB file storage is
 local, while R2 can be enabled explicitly for durable object storage. Wabase
 (Grist) is enabled on active `worker-4`. That node has `BACKUP_ENABLED=false`,
-so its Restic timers remain disabled. OpenObserve is a
+so its Restic timers remain disabled. `worker-5` follows the same opt-out while
+it moves from `joining` to `active`. OpenObserve is a
 Leader foundation service. Every node runs its read-only Docker socket proxy
 and Vector shipper; each shipper forwards platform-labelled container logs to
 the Leader's `observer-ingest` endpoint and keeps a bounded transient buffer

@@ -39,7 +39,7 @@ ssh -tt root@<worker-1> \
 ```
 
 Repeat the second command for every configured Follower ( `worker-1` through
-`worker-4` ). Supply
+`worker-5` ). Supply
 `RESTIC_REMOTE_PASSWORD_FILE` , `RESTIC_REMOTE_ENV_FILE` ,
 `PLATFORM_SECRET_BUNDLE_FILE` , or corresponding environment variables when
 running non-interactively. Never generate shared secrets independently on
@@ -77,7 +77,7 @@ default; use `BOOTSTRAP_ENDPOINT_RETRIES` and
 Run these checks after all nodes have finished:
 
 ```bash
-for host in <leader> <worker-1> <worker-2> <worker-3> <worker-4>; do
+for host in <leader> <worker-1> <worker-2> <worker-3> <worker-4> <worker-5>; do
   ssh root@"$host" platformctl health
 done
 ssh root@<leader> platformctl observer-smoke

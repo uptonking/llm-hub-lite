@@ -5,7 +5,7 @@ Reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, LibreC
 ## Architecture
 
 The committed inventory is in `config/cluster/` . The current Leader has stable
-node ID `leader` ; it runs Caddy, Woodpecker server, a trusted deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node IDs `worker-1` through `worker-4` ; they run Caddy, Woodpecker workers, Beszel agents, and consumer applications. Worker-4 is active, with scheduled Restic work disabled by committed policy. The IDs are stable labels; the role is selected only by
+node ID `leader` ; it runs Caddy, Woodpecker server, a trusted deployment agent, Beszel Hub, and a Beszel agent. Followers have stable node IDs `worker-1` through `worker-5` ; they run Caddy, Woodpecker workers, Beszel agents, and consumer applications. Worker-4 is active, with scheduled Restic work disabled by committed policy. Worker-5 enters the inventory as `joining` with Restic work disabled by the same policy. The IDs are stable labels; the role is selected only by
 `LEADER_NODE_ID` in the policy.
 
 Caddy is installed on every node. Public DNS names point to the Leader. The

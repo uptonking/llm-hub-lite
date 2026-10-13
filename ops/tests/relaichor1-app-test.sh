@@ -20,7 +20,7 @@ grep -Fq 'reverse_proxy relaichor1:8411' "$app/route.follower.caddy"
 grep -Fq 'health_uri /health' "$app/route.leader.caddy"
 # shellcheck disable=SC2016
 grep -Fq 'reverse_proxy {$RELAICHOR1_UPSTREAM}' "$app/route.leader.caddy"
-for node in leader worker-1 worker-2 worker-3 worker-4; do
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do
 	prefix="${node/-/}"
 	grep -q "^NODE_RELAICHOR1_ORIGIN_HOST=${prefix}-relaichor1-origin.aichorage.de$" \
 		"$repo_root/config/cluster/nodes/$node.env"
