@@ -55,8 +55,8 @@ mkdir -p /run/auther
 # hashed form ever reaches a file.
 cp /config-template/clients.yml /run/auther/clients.yml
 for placeholder in $(sed -n 's/.*\(__AUTHER_OIDC_[A-Z0-9_]*_CLIENT_SECRET__\).*/\1/p' /run/auther/clients.yml | sort -u); do
-	var_name="${placeholder%__}"
-	var_name="${var_name#__AUTHER_}"
+	var_name="${placeholder#__}"
+	var_name="${var_name%__}"
 	eval "secret=\${$var_name:-}"
 	[ -n "$secret" ] || {
 		log "$var_name is not set"
