@@ -7,7 +7,7 @@ LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI, Cu
 and Aichor1 are enabled singleton consumers targeted to configured followers; Aichor1 (Paseo) is
 at `aichor1.aichorage.de` on worker-1, and CPAMP (CPA-Manager-Plus Full Mode) is the management/observability
 panel for CPAPI at `cpamp.aichorage.de` on worker-1.
-Flowy is enabled on worker-3 alongside Verge3 (Hysteria) as a direct orphan service at `verge3.aichorage.de`. Wabase (Grist) is enabled as a SQLite-backed singleton on active worker-4; scheduled Restic work remains disabled there. Verge is an orphan service on worker-4 (`verge.aichorage.de`) and Verge2 is an orphan service on worker-2 (`verge2.aichorage.de`).
+Flowy is enabled on worker-3 alongside Verge3 (Hysteria) as a direct orphan service at `verge3.aichorage.de`. Wabase (Grist) is enabled as a SQLite-backed singleton on active worker-4; scheduled Restic work remains disabled there. Verge is an orphan service on worker-4 (`verge.aichorage.de`) and Verge2 is an orphan service on worker-2 (`verge2.aichorage.de`). Verge5 (Hysteria) is a direct orphan service on worker-5 at `verge5.aichorage.de`; that node has `BACKUP_ENABLED=false` and no scheduled Restic work.
 Pigeon (OutlookEmail) is retained but disabled by committed policy. OpenObserve
 ( `observer` ) is a Leader-only foundation service; read-only socket-proxy and
 bounded Vector collectors run on every node and forward platform-labelled logs
