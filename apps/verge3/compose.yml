@@ -1,0 +1,36 @@
+name: app-verge3
+services:
+  verge3:
+    image: ${VERGE3_IMAGE:?VERGE3_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    mem_limit: ${VERGE3_MEMORY_LIMIT:-512m}
+    cpus: ${VERGE3_CPUS:-0.5}
+    pids_limit: ${VERGE3_PIDS_LIMIT:-64}
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: verge3
+      com.aichorage.component: app-verge3
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+    environment:
+      HYSTERIA_ACME_DIR: /var/lib/hysteria/acme
+      HYSTERIA_DISABLE_UPDATE_CHECK: "true"
+      HYSTERIA_LOG_LEVEL: ${VERGE3_LOG_LEVEL:-warn}
+      GOMAXPROCS: ${VERGE3_GOMAXPROCS:-1}
+      GOMEMLIMIT: ${VERGE3_GOMEMLIMIT:-450MiB}
+    ports:
+      - "0.0.0.0:443:443/udp"
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/verge3:/var/lib/hysteria
+      - ${RUNTIME_CONFIG_FILE:-/etc/llm-hub-lite/runtime/verge3/config.yaml}:/etc/hysteria/config.yaml:ro
+    command: ["server", "-c", "/etc/hysteria/config.yaml"]
