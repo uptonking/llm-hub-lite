@@ -66,7 +66,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 metadata="$tmp/build-metadata.json"
 printf 'Building and publishing %s...\n' "$image_ref"
-docker buildx build --platform linux/amd64 --file "$root/images/aichor/Dockerfile" \
+docker buildx build --progress=plain --platform linux/amd64 --file "$root/images/aichor/Dockerfile" \
 	--build-arg "AICHOR_BASE_IMAGE=$AICHOR_BASE_IMAGE" \
 	--build-arg "AICHOR_CODEX_VERSION=$AICHOR_CODEX_VERSION" \
 	--build-arg "AICHOR_CLAUDE_CODE_VERSION=$AICHOR_CLAUDE_CODE_VERSION" \

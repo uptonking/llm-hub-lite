@@ -10,10 +10,10 @@ mkdir -p "$tmp/bin"
 cat >"$tmp/bin/npm" <<'EOF'
 #!/bin/sh
 case "$1 $2 $3" in
-  'view @openai/codex version') printf '%s\n' "${TEST_CODEX_VERSION:-0.153.4}" ;;
-  'view @anthropic-ai/claude-code version') printf '%s\n' "${TEST_CLAUDE_VERSION:-2.1.263}" ;;
-  'view opencode-ai version') printf '%s\n' "${TEST_OPENCODE_VERSION:-1.18.29}" ;;
-  'view @earendil-works/pi-coding-agent version') printf '%s\n' "${TEST_PI_VERSION:-0.85.1}" ;;
+  'view @openai/codex version') printf '%s\n' "${TEST_CODEX_VERSION:-0.162.1}" ;;
+  'view @anthropic-ai/claude-code version') printf '%s\n' "${TEST_CLAUDE_VERSION:-2.1.296}" ;;
+  'view opencode-ai version') printf '%s\n' "${TEST_OPENCODE_VERSION:-1.19.0}" ;;
+  'view @earendil-works/pi-coding-agent version') printf '%s\n' "${TEST_PI_VERSION:-1.2.0}" ;;
   *) printf 'unexpected npm invocation: %s\n' "$*" >&2; exit 2 ;;
 esac
 EOF
@@ -98,10 +98,10 @@ run_publisher() {
 
 : >"$tmp/docker.log"
 run_publisher
-grep -Fxq 'AICHOR_CODEX_VERSION=0.153.4' "$release"
-grep -Fxq 'AICHOR_CLAUDE_CODE_VERSION=2.1.263' "$release"
-grep -Fxq 'AICHOR_OPENCODE_VERSION=1.18.29' "$release"
-grep -Fxq 'AICHOR_PI_CODING_AGENT_VERSION=0.85.1' "$release"
+grep -Fxq 'AICHOR_CODEX_VERSION=0.162.1' "$release"
+grep -Fxq 'AICHOR_CLAUDE_CODE_VERSION=2.1.296' "$release"
+grep -Fxq 'AICHOR_OPENCODE_VERSION=1.19.0' "$release"
+grep -Fxq 'AICHOR_PI_CODING_AGENT_VERSION=1.2.0' "$release"
 grep -Fq 'buildx build' "$tmp/docker.log"
 
 set +e

@@ -42,7 +42,7 @@ RUN npm install --global \
 
 # Keep provider command names stable if a package exposes a Windows-suffixed
 # bin entry in its npm metadata.
-RUN for command_path in /usr/local/bin/codex.exe /usr/local/bin/claude.exe /usr/local/bin/opencode.exe; do \
+RUN for command_path in /usr/local/bin/codex.exe /usr/local/bin/claude.exe /usr/local/bin/opencode.exe /usr/local/bin/pi.exe; do \
       if [ -e "$command_path" ]; then ln -sf "$(basename "$command_path")" "${command_path%.exe}"; fi; \
     done
 
