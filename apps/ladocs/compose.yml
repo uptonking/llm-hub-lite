@@ -35,7 +35,6 @@ services:
       timeout: 5s
       retries: 30
       start_period: 20s
-
   # Django cache only: everything in it can be dropped without data loss.
   redis:
     image: ${LADOCS_REDIS_IMAGE:?LADOCS_REDIS_IMAGE must be digest-pinned}
@@ -63,7 +62,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 5s
-
   # The collaboration server's own store: it holds updates no worker has
   # persisted to PostgreSQL yet, so it is durable (append-only) and only ever
   # evicts keys carrying an expiry.
@@ -95,7 +93,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 5s
-
   # Node-local object storage. Never published: the nginx media route proxies
   # to it in-cluster with authorization headers signed by the backend.
   minio:
@@ -121,7 +118,6 @@ services:
       timeout: 20s
       retries: 30
       start_period: 10s
-
   # The Django backend. The wrapper entrypoint signs the RSA keypair, ensures
   # the versioned media bucket exists, runs migrations, then execs uvicorn.
   backend:
@@ -199,7 +195,6 @@ services:
       timeout: 30s
       retries: 10
       start_period: 120s
-
   # The collaboration server. Its wrapper entrypoint signs its own RSA keypair
   # and creates its database schema (idempotent) before starting the server.
   yhub:
@@ -240,7 +235,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
-
   # Conversion service (markdown, html, pdf, docx). Nothing routes to it from
   # the outside; the backend calls it in-cluster.
   y-provider:
@@ -268,7 +262,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 30s
-
   # nginx proxy + static editor. The only edge-facing service: the follower
   # Caddy origin route targets this alias on the shared platform network.
   ladocs-frontend:
