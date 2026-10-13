@@ -114,6 +114,14 @@ cat >"$tmp/config/verge5.env" <<'EOF'
 VERGE5_AUTH_PASSWORD=0123456789abcdef0123456789abcdef
 VERGE5_CLOUDFLARE_API_TOKEN=test-cloudflare-token-0123456789
 EOF
+cat >"$tmp/config/auther.env" <<'EOF'
+AUTHER_SESSION_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+AUTHER_STORAGE_ENCRYPTION_KEY=fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+AUTHER_JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+AUTHER_OIDC_HMAC_SECRET=fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+AUTHER_BOOTSTRAP_ADMIN_PASSWORD=test-auther-admin-password-0123456789abcdef
+AUTHER_OIDC_LADOCS_CLIENT_SECRET=test-auther-ladocs-client-secret-0123456789abcdef
+EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
 LEADER_PUBLIC_IP=192.0.2.10
@@ -125,6 +133,7 @@ NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
 NODE_AICHOR_ORIGIN_HOST=worker2-aichor.example.invalid
 NODE_AICHOR1_ORIGIN_HOST=worker2-aichor1.example.invalid
+NODE_AUTHER_ORIGIN_HOST=worker2-auther.example.invalid
 NODE_SEARX_ORIGIN_HOST=worker2-searx.example.invalid
 NODE_CURSORAPI_ORIGIN_HOST=worker2-cursorapi.example.invalid
 NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
@@ -175,6 +184,7 @@ case "$*" in
   *app-cpapi*) printf 'cpapi\nhealth-probe\n';;
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
   *app-aichor1*) printf 'aichor1\n';;
+  *app-auther*) printf 'auther\n';;
   *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;

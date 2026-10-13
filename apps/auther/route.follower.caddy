@@ -1,0 +1,13 @@
+{$NODE_AUTHER_ORIGIN_HOST} {
+  # Private Leader-to-follower origin.
+  tls internal
+  import common_proxy
+  reverse_proxy auther:9091 {
+    flush_interval -1
+    header_up Host {$AUTHER_SITE_HOST}:443
+    header_up X-Forwarded-Host {$AUTHER_SITE_HOST}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+}

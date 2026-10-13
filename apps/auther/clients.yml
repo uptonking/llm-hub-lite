@@ -1,0 +1,22 @@
+# OIDC relying-party registrations for Auther. entrypoint.sh copies this
+# file to /run/auther/clients.yml replacing every __AUTHER_OIDC_*_CLIENT_SECRET__
+# placeholder with a pbkdf2 digest of the matching environment secret, and
+# passes it to Authelia as an additional --config file (Authelia merges
+# list-valued sections by replacement, so all clients live in this one list).
+# To register another relying party: append its entry here, declare its
+# client-secret key in NODE_SECRET_KEYS (plus WOODPECKER_SECRET_NAMES for an
+# operator-supplied secret or GENERATED_SECRET_KEYS for a generated one), add
+# the compose environment passthrough, and push.
+clients:
+  - client_id: ladocs
+    client_name: LaSuite Docs
+    client_secret: '__AUTHER_OIDC_LADOCS_CLIENT_SECRET__'
+    redirect_uris:
+      - 'https://ladocs.aichorage.de/api/v1.0/callback/'
+    scopes:
+      - 'openid'
+      - 'email'
+      - 'profile'
+    authorization_policy: one_factor
+    consent_mode: auto
+    token_endpoint_auth_method: client_secret_basic

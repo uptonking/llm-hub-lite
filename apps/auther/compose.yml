@@ -1,0 +1,53 @@
+name: app-auther
+services:
+  auther:
+    image: ${AUTHER_IMAGE:?AUTHER_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,noexec,nosuid
+      - /run/auther:size=4m,noexec,nosuid
+    mem_limit: ${AUTHER_MEMORY_LIMIT:-256m}
+    cpus: ${AUTHER_CPUS:-0.5}
+    pids_limit: ${AUTHER_PIDS_LIMIT:-128}
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: auther
+      com.aichorage.component: app-auther
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+    environment:
+      # Authelia loads these through its AUTHELIA_ environment mapping; the
+      # OIDC JWKS and clients are rendered by entrypoint.sh instead because
+      # Authelia cannot take lists from environment variables.
+      AUTHELIA_LOG_LEVEL: ${AUTHER_LOG_LEVEL:-info}
+      AUTHELIA_THEME: ${AUTHER_THEME:-auto}
+      AUTHELIA_SESSION_SECRET: ${AUTHER_SESSION_SECRET:?AUTHER_SESSION_SECRET must be set}
+      AUTHELIA_STORAGE_ENCRYPTION_KEY: ${AUTHER_STORAGE_ENCRYPTION_KEY:?AUTHER_STORAGE_ENCRYPTION_KEY must be set}
+      AUTHELIA_JWT_SECRET: ${AUTHER_JWT_SECRET:?AUTHER_JWT_SECRET must be set}
+      AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET: ${AUTHER_OIDC_HMAC_SECRET:?AUTHER_OIDC_HMAC_SECRET must be set}
+      # The image ships a healthcheck.sh that only probes the health endpoint
+      # when X_AUTHELIA_HEALTHCHECK is not empty.
+      X_AUTHELIA_HEALTHCHECK: "true"
+      # Consumed by entrypoint.sh only.
+      AUTHER_BOOTSTRAP_ADMIN_PASSWORD: ${AUTHER_BOOTSTRAP_ADMIN_PASSWORD:?AUTHER_BOOTSTRAP_ADMIN_PASSWORD must be set}
+      AUTHER_OIDC_LADOCS_CLIENT_SECRET: ${AUTHER_OIDC_LADOCS_CLIENT_SECRET:?AUTHER_OIDC_LADOCS_CLIENT_SECRET must be set}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/auther:/config
+      - ./configuration.yml:/config-template/configuration.yml:ro
+      - ./clients.yml:/config-template/clients.yml:ro
+      - ./entrypoint.sh:/auther-entrypoint.sh:ro
+    networks: [platform_edge]
+    command: ["--config", "/config-template/configuration.yml", "--config", "/run/auther/jwks.yml", "--config", "/run/auther/clients.yml"]
+    entrypoint: ["/bin/sh", "/auther-entrypoint.sh"]
+networks:
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

@@ -1,0 +1,35 @@
+# Static Auther configuration (Authelia). Scalar secrets are injected through
+# AUTHELIA_* environment variables by compose.yml; the OIDC JWKS and the
+# clients list are rendered by entrypoint.sh into /run/auther/*.yml because
+# Authelia cannot read list-valued sections from the environment.
+server:
+  address: tcp://0.0.0.0:9091
+log:
+  level: info
+theme: auto
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+access_control:
+  # Auther runs as a dedicated OIDC identity provider: relying parties are
+  # authorized through their per-client authorization_policy, not through
+  # these forward-auth rules. Register domain rules here when a host starts
+  # using Authelia as an authenticating proxy directly.
+  default_policy: deny
+session:
+  name: auther_session
+  cookies:
+    - domain: aichorage.de
+      authelia_url: https://auther.aichorage.de
+      default_redirection_url: https://www.aichorage.de
+      expiration: 1h
+      inactivity: 30m
+      remember_me_duration: 30d
+storage:
+  sqlite:
+    path: /config/db.sqlite3
+notifier:
+  filesystem:
+    filename: /config/notification.txt
+totp:
+  issuer: auther.aichorage.de
