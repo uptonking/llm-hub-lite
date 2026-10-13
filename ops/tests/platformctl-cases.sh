@@ -298,8 +298,8 @@ if observer_smoke_failure="$(OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=2 OB
 	printf 'Observer smoke check accepted a missing collector heartbeat\n' >&2
 	exit 1
 fi
-grep -Fq 'attempt=1/2 reason=missing recent heartbeat nodes=leader,worker-1,worker-2,worker-3,worker-4 retry_in=0s' <<<"$observer_smoke_failure"
-grep -Fq 'reason=missing recent heartbeat nodes=leader,worker-1,worker-2,worker-3,worker-4' <<<"$observer_smoke_failure"
+grep -Fq 'attempt=1/2 reason=missing recent heartbeat nodes=leader,worker-1,worker-2,worker-3,worker-4,worker-5 retry_in=0s' <<<"$observer_smoke_failure"
+grep -Fq 'reason=missing recent heartbeat nodes=leader,worker-1,worker-2,worker-3,worker-4,worker-5' <<<"$observer_smoke_failure"
 if OBSERVER_CONTROLLER_UNHEALTHY=1 bash "$repo_root/ops/platformctl.sh" health >/dev/null 2>&1; then
 	printf 'Observer controller health sidecar failure was accepted\n' >&2
 	exit 1

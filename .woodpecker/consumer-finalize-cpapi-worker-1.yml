@@ -17,6 +17,7 @@ depends_on:
   - consumer-stop-cpapi-worker-2
   - consumer-stop-cpapi-worker-3
   - consumer-stop-cpapi-worker-4
+  - consumer-stop-cpapi-worker-5
   - control-sync-worker-1
   - name: foundation-reconcile-worker-1
     optional: true

@@ -33,7 +33,7 @@ for woodpecker_compose in "$repo_root"/compose/foundation/woodpecker-*.yml; do
 	}
 done
 for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
-grep -q '^NODE_STATE=joining$' "$repo_root/config/cluster/nodes/worker-5.env"
+grep -q '^NODE_STATE=active$' "$repo_root/config/cluster/nodes/worker-5.env"
 grep -q '^BACKUP_ENABLED=false$' "$repo_root/config/cluster/nodes/worker-5.env"
 if grep -R -q '^NODE_PUBLIC_IP=' "$repo_root/config/cluster/nodes"; then
 	printf 'committed node inventory contains a public IP field\n' >&2

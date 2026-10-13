@@ -17,6 +17,7 @@ depends_on:
   - consumer-stop-aichor-worker-1
   - consumer-stop-aichor-worker-3
   - consumer-stop-aichor-worker-4
+  - consumer-stop-aichor-worker-5
   - control-sync-worker-2
   - name: foundation-reconcile-worker-2
     optional: true
