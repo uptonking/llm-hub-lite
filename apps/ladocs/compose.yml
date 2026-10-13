@@ -108,7 +108,7 @@ services:
       MINIO_ROOT_USER: ${LADOCS_MINIO_ROOT_USER:-ladocs-admin}
       MINIO_ROOT_PASSWORD: ${LADOCS_MINIO_ROOT_PASSWORD:?LADOCS_MINIO_ROOT_PASSWORD must be set}
     entrypoint: ""
-    command: minio server /data
+    command: silo server /data
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/ladocs/minio:/data
     networks: [ladocs_private]
