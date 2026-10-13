@@ -42,11 +42,12 @@ fi
 
 mkdir -p /run/auther
 
-# The JWKS section embeds the private key; a block scalar must be indented
-# past its parent key.
+# The JWKS section embeds the private key as a block scalar. The `key:` field
+# sits at indentation 8 (inside the list item at indentation 6), so the PEM
+# content must be indented past 8 to satisfy YAML block scalar rules.
 {
 	printf 'identity_providers:\n  oidc:\n    jwks:\n      - key: |\n'
-	sed 's/^/        /' /config/oidc-rsa-private.pem
+	sed 's/^/          /' /config/oidc-rsa-private.pem
 } >/run/auther/jwks.yml
 
 # Render the committed clients list, replacing every secret placeholder with
