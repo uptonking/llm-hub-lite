@@ -270,7 +270,11 @@ services:
   ladocs-frontend:
     image: ${LADOCS_FRONTEND_IMAGE:?LADOCS_FRONTEND_IMAGE must be digest-pinned}
     restart: unless-stopped
-    user: "101"
+    # Runs as root: the platform's umask 077 makes bind-mounted files
+    # unreadable by the image's default unprivileged uid (101). The
+    # nginx-unprivileged entrypoint still creates a passwd entry and
+    # nginx worker processes drop to the nobody user internally.
+    user: "0:0"
     mem_limit: ${LADOCS_FRONTEND_MEMORY_LIMIT:-48m}
     cpus: ${LADOCS_FRONTEND_CPUS:-0.15}
     pids_limit: ${LADOCS_FRONTEND_PIDS_LIMIT:-96}
