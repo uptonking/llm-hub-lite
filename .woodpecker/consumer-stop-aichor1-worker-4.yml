@@ -5,30 +5,30 @@ when:
     branch: main
     path:
       include:
-        - apps/aichor3/**
-        - config/cluster/apps/aichor3.policy
-        - config/cluster/overrides/**/aichor3.env
-        - apps/aichor3/route*.caddy
-        - apps/aichor3/images.lock.env
+        - apps/aichor1/**
+        - config/cluster/apps/aichor1.policy
+        - config/cluster/overrides/**/aichor1.env
+        - apps/aichor1/route*.caddy
+        - apps/aichor1/images.lock.env
       on_empty: false
 
 depends_on:
-  - consumer-publish-aichor3
-  - control-sync-worker-1
-  - name: foundation-reconcile-worker-1
+  - consumer-publish-aichor1
+  - control-sync-worker-4
+  - name: foundation-reconcile-worker-4
     optional: true
-  - name: cluster-reconcile-worker-1
+  - name: cluster-reconcile-worker-4
     optional: true
 
 labels:
-  node: worker-1
+  node: worker-4
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-node-worker-1
+  group: llm-hub-lite-node-worker-4
 
 steps:
   stop:
@@ -49,4 +49,4 @@ steps:
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
       - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
     commands:
-      - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=aichor3 /usr/local/bin/platform-submit consumer-stop "$CI_COMMIT_SHA"
+      - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=aichor1 /usr/local/bin/platform-submit consumer-stop "$CI_COMMIT_SHA"

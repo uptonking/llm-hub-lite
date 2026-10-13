@@ -235,18 +235,18 @@ data; sessions, credentials, and workspace contents are never migrated
 automatically. Verify the UI, authenticated API, `/ws`, and streaming output
 after the move.
 
-Aichor3 uses the same Paseo runtime and bundled-agent image as Aichor but is a
+Aichor1 uses the same Paseo runtime and bundled-agent image as Aichor but is a
 separate single-node service. Its public endpoint is
-`aichor3.aichorage.de`; the default selected follower is worker-3 and its
-DNS-only origin is `worker3-aichor3-origin.<domain>`. Keep
-`AICHOR3_PASSWORD`, `AICHOR3_PI_*` provider settings, the `aichor3` data root,
-and the `app-aichor3` Compose project separate from Aichor. The service is
-resource-capped at 900 MiB, 0.80 CPU, and 128 processes. Configure a move by
-changing `NODES` in `config/cluster/apps/aichor3.policy` or running
-`ops/configure-app-placement.sh aichor3 <follower>`; the normal singleton
+`aichor1.aichorage.de`; the default selected follower is worker-1 and its
+DNS-only origin is `worker1-aichor1-origin.<domain>`. Keep
+`AICHOR1_PASSWORD`, `AICHOR1_PI_*` provider settings, the `aichor1` data root,
+and the `app-aichor1` Compose project separate from Aichor. The service is
+resource-capped at 900 MiB, 0.80 CPU, and 384 processes. Configure a move by
+changing `NODES` in `config/cluster/apps/aichor1.policy` or running
+`ops/configure-app-placement.sh aichor1 <follower>`; the normal singleton
 fresh-target workflow applies and never replicates state with Aichor. Pi's
 non-secret settings can be synchronized with
-`ops/sync-paseo-pi-config.sh aichor3 ...`.
+`ops/sync-paseo-pi-config.sh aichor1 ...`.
 
 Relaichor is the repository-owned Paseo Relay singleton at
 `relaichor.aichorage.de`, enabled on worker-2 by default. Public traffic enters

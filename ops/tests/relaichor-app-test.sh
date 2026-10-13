@@ -77,7 +77,7 @@ if find "$repo_root/.woodpecker" -maxdepth 1 -name 'consumer-stage-relaichor-wor
 fi
 
 # Prove empty app hooks do not pass empty PASEO relay overrides, while explicit
-# per-app values are translated independently for Aichor and Aichor3.
+# per-app values are translated independently for Aichor and Aichor1.
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/home" "$tmp/workspace"
@@ -115,8 +115,8 @@ grep -Fxq 'PUBLIC_ENDPOINT=relaichor.aichorage.de:443' "$tmp/hook.log"
 grep -Fxq 'USE_TLS=true' "$tmp/hook.log"
 grep -Fxq 'PUBLIC_USE_TLS=true' "$tmp/hook.log"
 
-AICHOR3_RELAY_ENABLED=false AICHOR3_RELAY_ENDPOINT=relay.internal:443 \
-	AICHOR3_RELAY_USE_TLS=true run_paseo_host aichor3
+AICHOR1_RELAY_ENABLED=false AICHOR1_RELAY_ENDPOINT=relay.internal:443 \
+	AICHOR1_RELAY_USE_TLS=true run_paseo_host aichor1
 grep -Fxq 'ENABLED=false' "$tmp/hook.log"
 grep -Fxq 'ENDPOINT=relay.internal:443' "$tmp/hook.log"
 grep -Fxq 'PUBLIC_ENDPOINT=unset' "$tmp/hook.log"

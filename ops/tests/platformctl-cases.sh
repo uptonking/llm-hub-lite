@@ -594,7 +594,7 @@ cp "$tmp/cpapi-policy.original" "$tmp/control/current/config/cluster/apps/cpapi.
 install_test_node worker-1
 : >"$tmp/compose.log"
 bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
-for project in app-librechat app-aichorouter app-cpapi app-cursorapi; do
+for project in app-librechat app-aichorouter app-cpapi app-cursorapi app-aichor1; do
 	grep -Fq "$project" "$tmp/compose.log"
 done
 # A staged application release must force-recreate its selected project.
@@ -604,7 +604,7 @@ done
 PLATFORM_RECREATE_APPS=1 PLATFORM_ONLY_APP_ID=cpapi bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
 grep -Fq 'app-cpapi' "$tmp/compose.log"
 grep -Fq -- '--force-recreate --wait' "$tmp/compose.log"
-for project in app-librechat app-aichorouter app-cursorapi; do
+for project in app-librechat app-aichorouter app-cursorapi app-aichor1; do
 	if grep -Fq "$project" "$tmp/compose.log"; then
 		printf 'focused application recreate touched unrelated project: %s\n' "$project" >&2
 		exit 1
@@ -620,7 +620,7 @@ install_test_node worker-2
 : >"$tmp/compose.log"
 bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
 grep -Fq 'app-librechat' "$tmp/compose.log"
-for project in app-aichorouter app-cpapi app-cursorapi; do
+for project in app-aichorouter app-cpapi app-cursorapi app-aichor1; do
 	if grep -Fq "$project" "$tmp/compose.log"; then
 		printf 'worker-2 reconciled worker-1 singleton project: %s\n' "$project" >&2
 		exit 1

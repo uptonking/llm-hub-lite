@@ -87,6 +87,9 @@ EOF
 cat >"$tmp/config/aichor.env" <<'EOF'
 AICHOR_PASSWORD=test-aichor-password-0123456789abcdef
 EOF
+cat >"$tmp/config/aichor1.env" <<'EOF'
+AICHOR1_PASSWORD=test-aichor1-password-0123456789abcdef
+EOF
 cat >"$tmp/config/cursorapi.env" <<'EOF'
 CURSORAPI_CURSOR_API_KEY=test-cursor-account-key
 CURSORAPI_BRIDGE_API_KEY=test-cursor-bridge-key-0123456789abcdef
@@ -113,6 +116,7 @@ NODE_LIBRECHAT_ORIGIN_HOST=worker2-chat.example.invalid
 NODE_LIBRECHAT_ADMIN_ORIGIN_HOST=worker2-chat-admin.example.invalid
 NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
 NODE_AICHOR_ORIGIN_HOST=worker2-aichor.example.invalid
+NODE_AICHOR1_ORIGIN_HOST=worker2-aichor1.example.invalid
 NODE_SEARX_ORIGIN_HOST=worker2-searx.example.invalid
 NODE_CURSORAPI_ORIGIN_HOST=worker2-cursorapi.example.invalid
 NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
@@ -161,6 +165,7 @@ case "$*" in
   *app-cpamp*) printf 'cpamp\nhealth-probe\n';;
   *app-cpapi*) printf 'cpapi\nhealth-probe\n';;
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
+  *app-aichor1*) printf 'aichor1\n';;
   *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;

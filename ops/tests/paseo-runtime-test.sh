@@ -26,7 +26,7 @@ run_host() {
 		"$repo_root/apps/$app/entrypoint.sh" smoke
 }
 
-for app_spec in 'aichor AICHOR .aichor-ownership-v1' 'aichor3 AICHOR3 .aichor3-ownership-v1'; do
+for app_spec in 'aichor AICHOR .aichor-ownership-v1' 'aichor1 AICHOR1 .aichor1-ownership-v1'; do
 	IFS=' ' read -r app prefix marker <<EOF
 $app_spec
 EOF
@@ -42,7 +42,7 @@ EOF
 			PASEO_TEST_ENTRYPOINT_LOG="$tmp/$app-entrypoint.log" PATH="$tmp/bin:$PATH" \
 			"$repo_root/apps/$app/entrypoint.sh" smoke
 	else
-		AICHOR3_PI_OPENROUTER_ENABLED=true AICHOR3_PI_OPENROUTER_API_KEY=openrouter \
+		AICHOR1_PI_OPENROUTER_ENABLED=true AICHOR1_PI_OPENROUTER_API_KEY=openrouter \
 			PASEO_HOME="$tmp/$app-home" PASEO_WORKSPACE="$tmp/$app-workspace" \
 			PASEO_COMMON_ENTRYPOINT="$repo_root/apps/paseo/entrypoint-common.sh" \
 			PASEO_BASE_ENTRYPOINT="$tmp/bin/base-entrypoint" PASEO_APP_PREFIX="$prefix" \

@@ -22,8 +22,6 @@ make_fixture() {
 	# keep the committed worker-3 Flowy placement out of this reduced inventory.
 	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/flowy.policy" >"$fixture/config/cluster/apps/flowy.policy.tmp"
 	mv "$fixture/config/cluster/apps/flowy.policy.tmp" "$fixture/config/cluster/apps/flowy.policy"
-	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/aichor3.policy" >"$fixture/config/cluster/apps/aichor3.policy.tmp"
-	mv "$fixture/config/cluster/apps/aichor3.policy.tmp" "$fixture/config/cluster/apps/aichor3.policy"
 	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/wabase.policy" >"$fixture/config/cluster/apps/wabase.policy.tmp"
 	mv "$fixture/config/cluster/apps/wabase.policy.tmp" "$fixture/config/cluster/apps/wabase.policy"
 	printf '%s\n' "$fixture"

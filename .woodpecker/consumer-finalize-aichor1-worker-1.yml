@@ -5,33 +5,36 @@ when:
     branch: main
     path:
       include:
-        - apps/aichor3/**
-        - config/cluster/apps/aichor3.policy
-        - config/cluster/overrides/**/aichor3.env
-        - apps/aichor3/route*.caddy
-        - apps/aichor3/images.lock.env
+        - apps/aichor1/**
+        - config/cluster/apps/aichor1.policy
+        - config/cluster/overrides/**/aichor1.env
+        - apps/aichor1/route*.caddy
+        - apps/aichor1/images.lock.env
       on_empty: false
 
 depends_on:
-  - consumer-stage-aichor3-worker-3
-  - control-sync-leader
-  - name: foundation-reconcile-leader
+  - consumer-publish-aichor1
+  - consumer-stop-aichor1-worker-2
+  - consumer-stop-aichor1-worker-3
+  - consumer-stop-aichor1-worker-4
+  - control-sync-worker-1
+  - name: foundation-reconcile-worker-1
     optional: true
-  - name: cluster-reconcile-leader
+  - name: cluster-reconcile-worker-1
     optional: true
 
 labels:
-  node: leader
+  node: worker-1
   deployment: "true"
   target: production
   repo: uptonking/llm-hub-lite
 
 concurrency:
   limit: 1
-  group: llm-hub-lite-node-leader
+  group: llm-hub-lite-node-worker-1
 
 steps:
-  publish:
+  finalize:
     image: ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0@sha256:1038afc7446cdba70318586753adba3d4a2c78e1f5e878d8adfa68e06ac2af25
     pull: true
     environment:
@@ -49,4 +52,4 @@ steps:
       - /usr/local/bin/configure-firewall:/usr/local/bin/configure-firewall:ro
       - /opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro
     commands:
-      - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; DEPLOY_DEBUG_LEVEL=off CONSUMER_APP_ID=aichor3 /usr/local/bin/platform-submit consumer-publish "$CI_COMMIT_SHA"
+      - if ! test -n "$CI_COMMIT_SHA" || ! printf "%s" "$CI_COMMIT_SHA" | grep -Eq "^[0-9a-f]{40}$"; then printf "CI_COMMIT_SHA must be a full 40-character lowercase commit SHA\\n" >&2; exit 2; fi; DEPLOY_DEBUG_LEVEL=off SINGLETON_FINAL_STOP=1 CONSUMER_APP_ID=aichor1 /usr/local/bin/platform-submit consumer-stop "$CI_COMMIT_SHA"

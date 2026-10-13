@@ -132,12 +132,12 @@ and it starts with a 900 MiB / 0.80 CPU profile. Change `NODES` in
 `config/cluster/apps/aichor.policy` to move it to another active follower; the
 move is fresh and does not copy sessions, credentials, or workspace contents.
 
-Aichor3 is an independent Paseo singleton at `aichor3.aichorage.de`, targeting
-worker-3 by default through `worker3-aichor3-origin.<domain>`. It has its own
+Aichor1 is an independent Paseo singleton at `aichor1.aichorage.de`, targeting
+worker-1 by default through `worker1-aichor1-origin.<domain>`. It has its own
 password, provider fallback secrets, Compose project, persistent
-`data/prod/aichor3` home, and daemon identity; it is not a replica or failover
-target for Aichor. Change `NODES` in `config/cluster/apps/aichor3.policy` (or
-use `ops/configure-app-placement.sh aichor3 <follower>`) to select another
+`data/prod/aichor1` home, and daemon identity; it is not a replica or failover
+target for Aichor. Change `NODES` in `config/cluster/apps/aichor1.policy` (or
+use `ops/configure-app-placement.sh aichor1 <follower>`) to select another
 active follower. Both hosts use the shared Paseo runtime helper and the same
 digest-pinned bundled-agent image, so a future Paseo host only needs a new
 manifest/config/Compose/routes/policy set with a unique prefix and data root.

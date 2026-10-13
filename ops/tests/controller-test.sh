@@ -16,8 +16,9 @@ if grep -Fq '${WOODPECKER_DATA_ROOT:-/opt/platform/woodpecker}/data:/var/lib/woo
 	exit 1
 fi
 grep -Fq '${BESZEL_DATA_ROOT:-/opt/platform/beszel/hub}:/beszel_data' "$repo_root/compose/foundation/beszel-controller.yml"
-grep -Fq '${BESZEL_AGENT_DATA_ROOT:-/opt/platform/beszel/agent}:/var/lib/beszel-agent' "$repo_root/compose/foundation/beszel-worker.yml"
-grep -Fq 'status.${DOMAIN_NAME:-aichorage.de}:${LEADER_PUBLIC_IP:-127.0.0.1}' "$repo_root/compose/foundation/beszel-worker.yml"
+for pat in '${BESZEL_AGENT_DATA_ROOT:-/opt/platform/beszel/agent}:/var/lib/beszel-agent' 'status.${DOMAIN_NAME:-aichorage.de}:${LEADER_PUBLIC_IP:-127.0.0.1}'; do
+	grep -Fq "$pat" "$repo_root/compose/foundation/beszel-worker.yml"
+done
 grep -Fq '${WOODPECKER_AGENT_CONFIG_ROOT:-/opt/platform/woodpecker/agent}:/etc/woodpecker' "$repo_root/compose/foundation/woodpecker-worker.yml"
 grep -Fq '${WOODPECKER_DEPLOYER_CONFIG_ROOT:-/opt/platform/woodpecker/deployer}:/etc/woodpecker' "$repo_root/compose/foundation/woodpecker-deployer.yml"
 for woodpecker_compose in "$repo_root"/compose/foundation/woodpecker-*.yml; do
@@ -59,9 +60,9 @@ done
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/bootstrap-vps.sh"
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/configure-app-secrets.sh"
 grep -Fq 'write_secrets "$conditional_keys" "$runtime_file"' "$repo_root/ops/configure-app-secrets.sh"
-grep -q '^LEADER_NODE_ID=leader$' "$repo_root/config/cluster/policy.env"
-grep -q '^NODE_IDS=leader,worker-1,worker-2,worker-3,worker-4$' "$repo_root/config/cluster/policy.env"
-grep -q '^REPO_SLUG=uptonking/llm-hub-lite$' "$repo_root/config/cluster/policy.env"
+for pat in '^LEADER_NODE_ID=leader$' '^NODE_IDS=leader,worker-1,worker-2,worker-3,worker-4$' '^REPO_SLUG=uptonking/llm-hub-lite$'; do
+	grep -q "$pat" "$repo_root/config/cluster/policy.env"
+done
 grep -q '^APP_ID=cpapi$' "$repo_root/apps/cpapi/manifest.env"
 grep -q '^GENERATED_SECRET_BYTES=FLOWY_ENCRYPTION_KEY:16,FLOWY_JWT_SECRET:32$' "$repo_root/apps/flowy/manifest.env"
 grep -Fq 'SECRET_REGEXES=FLOWY_ENCRYPTION_KEY:^[A-Fa-f0-9]{32}$' "$repo_root/apps/flowy/manifest.env"
@@ -70,58 +71,56 @@ grep -q '^NETWORK_ALIAS=librechat-client$' "$repo_root/apps/librechat/manifest.e
 grep -Fq 'LIBRECHAT_OPENROUTER_KEY' "$repo_root/apps/librechat/manifest.env"
 grep -Fq 'LIBRECHAT_OPENROUTER_KEY:24' "$repo_root/apps/librechat/manifest.env"
 grep -Fq 'OPENROUTER_KEY: ${LIBRECHAT_OPENROUTER_KEY:?LIBRECHAT_OPENROUTER_KEY must be set}' "$repo_root/apps/librechat/compose.yml"
-grep -q '^LIBRECHAT_ALLOW_REGISTRATION=false$' "$repo_root/apps/librechat/config.env"
-grep -q '^LIBRECHAT_APP_TITLE=aichorchat$' "$repo_root/apps/librechat/config.env"
-grep -q '^LIBRECHAT_HELP_AND_FAQ_URL=https://www.librechat.ai/docs/features$' "$repo_root/apps/librechat/config.env"
+for pat in '^LIBRECHAT_ALLOW_REGISTRATION=false$' '^LIBRECHAT_APP_TITLE=aichorchat$' '^LIBRECHAT_HELP_AND_FAQ_URL=https://www.librechat.ai/docs/features$'; do
+	grep -q "$pat" "$repo_root/apps/librechat/config.env"
+done
 grep -Fq 'APP_TITLE: ${LIBRECHAT_APP_TITLE:-LibreChat}' "$repo_root/apps/librechat/compose.yml"
 grep -Fq 'HELP_AND_FAQ_URL: ${LIBRECHAT_HELP_AND_FAQ_URL:-https://librechat.ai}' "$repo_root/apps/librechat/compose.yml"
-grep -Fq 'baseURL: "https://openrouter.ai/api/v1"' "$repo_root/apps/librechat/librechat.yaml"
-grep -Fq 'default: ["openrouter/free"]' "$repo_root/apps/librechat/librechat.yaml"
-grep -Fq 'fetch: false' "$repo_root/apps/librechat/librechat.yaml"
+for pat in 'baseURL: "https://openrouter.ai/api/v1"' 'default: ["openrouter/free"]' 'fetch: false'; do
+	grep -Fq "$pat" "$repo_root/apps/librechat/librechat.yaml"
+done
 grep -q '^LIBRECHAT_CLIENT_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
 grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^APP_ID=aichorouter$' "$repo_root/apps/aichorouter/manifest.env"
 grep -q '^APP_ID=aichor$' "$repo_root/apps/aichor/manifest.env"
-grep -q '^APP_ID=aichor3$' "$repo_root/apps/aichor3/manifest.env"
-grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/aichor3/manifest.env"
-grep -q '^DATA_ROOT_REL=aichor3$' "$repo_root/apps/aichor3/manifest.env"
-grep -q '^NODE_SECRET_KEYS=AICHOR3_PASSWORD,GH_TOKEN$' "$repo_root/apps/aichor3/manifest.env"
-grep -q '^OPTIONAL_SECRET_KEYS=GH_TOKEN$' "$repo_root/apps/aichor3/manifest.env"
-grep -Fq 'GH_TOKEN:GH_TOKEN' "$repo_root/apps/aichor3/manifest.env"
-grep -q '^GENERATED_SECRET_BYTES=AICHOR3_PASSWORD:32$' "$repo_root/apps/aichor3/manifest.env"
-grep -q '^AICHOR3_MEMORY_LIMIT=900m$' "$repo_root/apps/aichor3/config.env"
-grep -q '^AICHOR3_CPUS=0.80$' "$repo_root/apps/aichor3/config.env"
-grep -q '^AICHOR3_PIDS_LIMIT=384$' "$repo_root/apps/aichor3/config.env"
-grep -Fq 'PASEO_PASSWORD: ${AICHOR3_PASSWORD:?AICHOR3_PASSWORD must be set}' "$repo_root/apps/aichor3/compose.yml"
-grep -Fq 'GH_TOKEN: ${GH_TOKEN:-}' "$repo_root/apps/aichor3/compose.yml"
-grep -Fq 'mem_limit: ${AICHOR3_MEMORY_LIMIT:-900m}' "$repo_root/apps/aichor3/compose.yml"
-grep -Fq 'cpus: ${AICHOR3_CPUS:-0.80}' "$repo_root/apps/aichor3/compose.yml"
-grep -Fq '/aichor3:/home/paseo' "$repo_root/apps/aichor3/compose.yml"
-grep -Fq 'reverse_proxy aichor3:6767' "$repo_root/apps/aichor3/route.follower.caddy"
-grep -Fq '{$AICHOR3_SITE}' "$repo_root/apps/aichor3/route.leader.caddy"
-grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/aichor3.policy"
-grep -q '^NODES=worker-3$' "$repo_root/config/cluster/apps/aichor3.policy"
-grep -q '^NODE_AICHOR3_ORIGIN_HOST=worker3-aichor3-origin.aichorage.de$' "$repo_root/config/cluster/nodes/worker-3.env"
-grep -q '^APP_ID=searx$' "$repo_root/apps/searx/manifest.env"
-grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/searx/manifest.env"
-grep -q '^STATE_MODE=files$' "$repo_root/apps/searx/manifest.env"
-grep -q '^NODE_SECRET_KEYS=SEARX_SECRET$' "$repo_root/apps/searx/manifest.env"
-grep -q '^CLUSTER_SECRET_KEYS=SEARX_AUTH_USER,SEARX_AUTH_HASH$' "$repo_root/apps/searx/manifest.env"
-grep -q '^DEPLOYMENT_SECRET_KEYS=SEARX_AUTH_USER,SEARX_AUTH_HASH$' "$repo_root/apps/searx/manifest.env"
-grep -q '^GENERATED_SECRET_BYTES=SEARX_SECRET:32$' "$repo_root/apps/searx/manifest.env"
-grep -q '^SECRET_REGEXES=SEARX_AUTH_USER:' "$repo_root/apps/searx/manifest.env"
-grep -q '^SEARX_MEMORY_LIMIT=900m$' "$repo_root/apps/searx/config.env"
-grep -q '^SEARX_CPUS=0.80$' "$repo_root/apps/searx/config.env"
-grep -q '^SEARX_PIDS_LIMIT=128$' "$repo_root/apps/searx/config.env"
+for pat in '^APP_ID=aichor1$' '^UPSTREAM_MODE=singleton$' '^DATA_ROOT_REL=aichor1$' \
+	'^NODE_SECRET_KEYS=AICHOR1_PASSWORD,GH_TOKEN$' '^OPTIONAL_SECRET_KEYS=GH_TOKEN$' \
+	'^GENERATED_SECRET_BYTES=AICHOR1_PASSWORD:32$'; do
+	grep -q "$pat" "$repo_root/apps/aichor1/manifest.env"
+done
+grep -Fq 'GH_TOKEN:GH_TOKEN' "$repo_root/apps/aichor1/manifest.env"
+for pat in '^AICHOR1_MEMORY_LIMIT=900m$' '^AICHOR1_CPUS=0.80$' '^AICHOR1_PIDS_LIMIT=384$'; do
+	grep -q "$pat" "$repo_root/apps/aichor1/config.env"
+done
+for pat in 'PASEO_PASSWORD: ${AICHOR1_PASSWORD:?AICHOR1_PASSWORD must be set}' \
+	'GH_TOKEN: ${GH_TOKEN:-}' 'mem_limit: ${AICHOR1_MEMORY_LIMIT:-900m}' \
+	'cpus: ${AICHOR1_CPUS:-0.80}' '/aichor1:/home/paseo'; do
+	grep -Fq "$pat" "$repo_root/apps/aichor1/compose.yml"
+done
+grep -Fq 'reverse_proxy aichor1:6767' "$repo_root/apps/aichor1/route.follower.caddy"
+grep -Fq '{$AICHOR1_SITE}' "$repo_root/apps/aichor1/route.leader.caddy"
+grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/aichor1.policy"
+grep -q '^NODES=worker-1$' "$repo_root/config/cluster/apps/aichor1.policy"
+grep -q '^NODE_AICHOR1_ORIGIN_HOST=worker1-aichor1-origin.aichorage.de$' "$repo_root/config/cluster/nodes/worker-1.env"
+for pat in '^APP_ID=searx$' '^UPSTREAM_MODE=singleton$' '^STATE_MODE=files$' \
+	'^NODE_SECRET_KEYS=SEARX_SECRET$' '^CLUSTER_SECRET_KEYS=SEARX_AUTH_USER,SEARX_AUTH_HASH$' \
+	'^DEPLOYMENT_SECRET_KEYS=SEARX_AUTH_USER,SEARX_AUTH_HASH$' '^GENERATED_SECRET_BYTES=SEARX_SECRET:32$' \
+	'^SECRET_REGEXES=SEARX_AUTH_USER:'; do
+	grep -q "$pat" "$repo_root/apps/searx/manifest.env"
+done
+for pat in '^SEARX_MEMORY_LIMIT=900m$' '^SEARX_CPUS=0.80$' '^SEARX_PIDS_LIMIT=128$'; do
+	grep -q "$pat" "$repo_root/apps/searx/config.env"
+done
 grep -q '^SEARX_IMAGE=.*@sha256:[0-9a-f]\{64\}$' "$repo_root/ops/images.apps.prod.env"
-grep -Fq 'SEARXNG_SECRET: ${SEARX_SECRET:?SEARX_SECRET must be set}' "$repo_root/apps/searx/compose.yml"
+for pat in 'SEARXNG_SECRET: ${SEARX_SECRET:?SEARX_SECRET must be set}' \
+	'mem_limit: ${SEARX_MEMORY_LIMIT:-900m}' 'cpus: ${SEARX_CPUS:-0.80}'; do
+	grep -Fq "$pat" "$repo_root/apps/searx/compose.yml"
+done
 if grep -Fq 'SEARXNG_LOG_LEVEL' "$repo_root/apps/searx/compose.yml"; then
 	printf 'unsupported SearXNG log-level environment variable remains\n' >&2
 	exit 1
 fi
-grep -Fq 'mem_limit: ${SEARX_MEMORY_LIMIT:-900m}' "$repo_root/apps/searx/compose.yml"
-grep -Fq 'cpus: ${SEARX_CPUS:-0.80}' "$repo_root/apps/searx/compose.yml"
 grep -Fq 'reverse_proxy searx:8080' "$repo_root/apps/searx/route.follower.caddy"
 grep -Fq 'health_uri /healthz' "$repo_root/apps/searx/route.leader.caddy"
 grep -Fq 'basic_auth @searx_auth_required' "$repo_root/apps/searx/route.leader.caddy"
@@ -135,7 +134,7 @@ if grep -Eiq 'valkey|redis|ports:|/var/run/docker.sock' "$repo_root/apps/searx/c
 	exit 1
 fi
 grep -Fq '../paseo/entrypoint-common.sh:/paseo-entrypoint-common.sh:ro' "$repo_root/apps/aichor/compose.yml"
-grep -Fq '../paseo/entrypoint-common.sh:/paseo-entrypoint-common.sh:ro' "$repo_root/apps/aichor3/compose.yml"
+grep -Fq '../paseo/entrypoint-common.sh:/paseo-entrypoint-common.sh:ro' "$repo_root/apps/aichor1/compose.yml"
 grep -q '^UPSTREAM_MODE=singleton$' "$repo_root/apps/aichor/manifest.env"
 grep -q '^STATE_MODE=files$' "$repo_root/apps/aichor/manifest.env"
 grep -q '^RECOVERY_REQUIRED_PATHS=.paseo/server-id,.paseo/daemon-keypair.json,.paseo/config.json$' "$repo_root/apps/aichor/manifest.env"
@@ -454,44 +453,34 @@ if grep -Eiq 'postgres|redis|nats' "$repo_root/compose/foundation/observer-contr
 	printf 'OpenObserve foundation service must not define external dependencies\n' >&2
 	exit 1
 fi
-grep -Fq 'CPAPI_MANAGEMENT_KEY' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'CPAPI_API_KEY' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'config-seed.sha256' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'test: ["CMD-SHELL", "test -s /runtime/config.yaml && kill -0 1"]' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'curl -fsS http://cpapi:8317/healthz' "$repo_root/apps/cpapi/compose.yml"
+for pat in 'CPAPI_MANAGEMENT_KEY' 'CPAPI_API_KEY' 'config-seed.sha256' \
+	'test: ["CMD-SHELL", "test -s /runtime/config.yaml && kill -0 1"]' \
+	'curl -fsS http://cpapi:8317/healthz' 'mem_limit: ${CPAPI_MEMORY_LIMIT:-256m}' \
+	'cpus: ${CPAPI_CPUS:-0.25}' 'pids_limit: ${CPAPI_PIDS_LIMIT:-128}' 'WRITABLE_PATH: /runtime' \
+	'enabled: ${CPAPI_PLUGINS_ENABLED:-true}' 'logging-to-file: ${CPAPI_LOGGING_TO_FILE:-true}' \
+	'logs-max-total-size-mb: ${CPAPI_LOGS_MAX_TOTAL_SIZE_MB:-50}' 'request-log: false'; do
+	grep -Fq "$pat" "$repo_root/apps/cpapi/compose.yml"
+done
 if grep -Fq 'test: ["CMD", "bash"' "$repo_root/apps/cpapi/compose.yml"; then
 	printf 'CPAPI must not require Bash for its healthcheck\n' >&2
 	exit 1
 fi
-grep -Fq 'mem_limit: ${CPAPI_MEMORY_LIMIT:-256m}' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'cpus: ${CPAPI_CPUS:-0.25}' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'pids_limit: ${CPAPI_PIDS_LIMIT:-128}' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'WRITABLE_PATH: /runtime' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'enabled: ${CPAPI_PLUGINS_ENABLED:-true}' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'logging-to-file: ${CPAPI_LOGGING_TO_FILE:-true}' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'logs-max-total-size-mb: ${CPAPI_LOGS_MAX_TOTAL_SIZE_MB:-50}' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'request-log: false' "$repo_root/apps/cpapi/compose.yml"
-grep -Fq 'CPAPI_LOGGING_TO_FILE' "$repo_root/apps/cpapi/manifest.env"
-grep -Fq 'CPAPI_LOGS_MAX_TOTAL_SIZE_MB' "$repo_root/apps/cpapi/manifest.env"
-grep -Fq 'CPAPI_PLUGINS_ENABLED' "$repo_root/apps/cpapi/manifest.env"
-grep -Fq 'CPAPI_LOGGING_TO_FILE=true' "$repo_root/apps/cpapi/config.env"
-grep -Fq 'CPAPI_LOGS_MAX_TOTAL_SIZE_MB=50' "$repo_root/apps/cpapi/config.env"
-grep -Fq 'CPAPI_PLUGINS_ENABLED=true' "$repo_root/apps/cpapi/config.env"
+for pat in 'CPAPI_LOGGING_TO_FILE' 'CPAPI_LOGS_MAX_TOTAL_SIZE_MB' 'CPAPI_PLUGINS_ENABLED'; do
+	grep -Fq "$pat" "$repo_root/apps/cpapi/manifest.env"
+	grep -Fq "$pat=true" "$repo_root/apps/cpapi/config.env" 2>/dev/null || grep -Fq "$pat=50" "$repo_root/apps/cpapi/config.env"
+done
 if grep -Eq 'ports:' "$repo_root/apps/cpapi/compose.yml"; then
 	printf 'CPAPI must not publish a host port\n' >&2
 	exit 1
 fi
-grep -Fq 'CURSOR_API_KEY: ${CURSORAPI_CURSOR_API_KEY:?CURSORAPI_CURSOR_API_KEY must be set}' "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq 'CURSOR_BRIDGE_API_KEY: ${CURSORAPI_BRIDGE_API_KEY:?CURSORAPI_BRIDGE_API_KEY must be set}' "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq 'mem_limit: ${CURSORAPI_MEMORY_LIMIT:-512m}' "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq 'cpus: ${CURSORAPI_CPUS:-0.50}' "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq 'pids_limit: ${CURSORAPI_PIDS_LIMIT:-128}' "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq 'read_only: true' "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq 'cap_drop: [ALL]' "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq "security_opt: ['no-new-privileges:true']" "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq "fetch('http://127.0.0.1:8765/healthz')" "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq 'curl -fsS http://cursorapi:8765/healthz' "$repo_root/apps/cursorapi/compose.yml"
-grep -Fq 'com.aichorage.observer.ignore-logs: "true"' "$repo_root/apps/cursorapi/compose.yml"
+for pat in 'CURSOR_API_KEY: ${CURSORAPI_CURSOR_API_KEY:?CURSORAPI_CURSOR_API_KEY must be set}' \
+	'CURSOR_BRIDGE_API_KEY: ${CURSORAPI_BRIDGE_API_KEY:?CURSORAPI_BRIDGE_API_KEY must be set}' \
+	'mem_limit: ${CURSORAPI_MEMORY_LIMIT:-512m}' 'cpus: ${CURSORAPI_CPUS:-0.50}' \
+	'pids_limit: ${CURSORAPI_PIDS_LIMIT:-128}' 'read_only: true' 'cap_drop: [ALL]' \
+	"security_opt: ['no-new-privileges:true']" "fetch('http://127.0.0.1:8765/healthz')" \
+	'curl -fsS http://cursorapi:8765/healthz' 'com.aichorage.observer.ignore-logs: "true"'; do
+	grep -Fq -- "$pat" "$repo_root/apps/cursorapi/compose.yml"
+done
 grep -q '^HEALTH_URL=/healthz$' "$repo_root/apps/cursorapi/manifest.env"
 grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/cursorapi/manifest.env"
 grep -Fq '@cursorapi_api path /v1/* /healthz' "$repo_root/apps/cursorapi/route.leader.caddy"
@@ -506,19 +495,16 @@ if grep -Eq '^[[:space:]]+volumes:' "$repo_root/apps/cursorapi/compose.yml"; the
 	printf 'Cursorapi must remain ephemeral and must not mount persistent volumes\n' >&2
 	exit 1
 fi
-grep -Fq 'DATABASE_PATH: /data/outlook_accounts.db' "$repo_root/apps/pigeon/compose.yml"
-grep -Fq 'DOCKER_UPDATE_ENABLED: "false"' "$repo_root/apps/pigeon/compose.yml"
-grep -Fq 'test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/login >/dev/null"]' "$repo_root/apps/pigeon/compose.yml"
-grep -Fq 'curl -fsS http://pigeon:5000/login' "$repo_root/apps/pigeon/compose.yml"
-grep -Fq 'mem_limit: ${PIGEON_MEMORY_LIMIT:-512m}' "$repo_root/apps/pigeon/compose.yml"
-grep -Fq 'cpus: ${PIGEON_CPUS:-0.50}' "$repo_root/apps/pigeon/compose.yml"
-grep -Fq 'pids_limit: ${PIGEON_PIDS_LIMIT:-128}' "$repo_root/apps/pigeon/compose.yml"
+for pat in 'DATABASE_PATH: /data/outlook_accounts.db' 'DOCKER_UPDATE_ENABLED: "false"' \
+	'test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/login >/dev/null"]' \
+	'curl -fsS http://pigeon:5000/login' 'mem_limit: ${PIGEON_MEMORY_LIMIT:-512m}' \
+	'cpus: ${PIGEON_CPUS:-0.50}' 'pids_limit: ${PIGEON_PIDS_LIMIT:-128}' \
+	'read_only: true' 'cap_drop: [ALL]' '/root/.gunicorn:rw,noexec,nosuid,size=1m'; do
+	grep -Fq -- "$pat" "$repo_root/apps/pigeon/compose.yml"
+done
 grep -q '^HEALTH_URL=/login$' "$repo_root/apps/pigeon/manifest.env"
 grep -Fq 'health_uri /login' "$repo_root/apps/pigeon/route.leader.caddy"
 grep -Fq 'reverse_proxy pigeon:5000' "$repo_root/apps/pigeon/route.follower.caddy"
-grep -Fq 'read_only: true' "$repo_root/apps/pigeon/compose.yml"
-grep -Fq 'cap_drop: [ALL]' "$repo_root/apps/pigeon/compose.yml"
-grep -Fq '/root/.gunicorn:rw,noexec,nosuid,size=1m' "$repo_root/apps/pigeon/compose.yml"
 if grep -Eq 'ports:' "$repo_root/apps/pigeon/compose.yml"; then
 	printf 'Pigeon must not publish a host port\n' >&2
 	exit 1
@@ -532,19 +518,15 @@ if grep -Eiq 'REDIS_CONN_STRING|SQL_DSN|postgres|redis' "$repo_root/apps/aichoro
 	exit 1
 fi
 if grep -Eq 'mongodb:|meilisearch:|vectordb:|rag_api:' "$repo_root/apps/librechat/compose.yml"; then exit 1; fi
-grep -q 'LIBRECHAT_MONGO_URI' "$repo_root/apps/librechat/compose.yml"
-grep -q 'LIBRECHAT_REDIS_URI' "$repo_root/apps/librechat/compose.yml"
-grep -q '/librechat/images:/app/client/public/images' "$repo_root/apps/librechat/compose.yml"
-grep -q '/librechat/uploads:/app/uploads' "$repo_root/apps/librechat/compose.yml"
-grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/newapi/manifest.env"
-grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/cpapi/manifest.env"
-grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/cpapi/manifest.env"
-grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/cpapi/manifest.env"
-grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/aichorouter/manifest.env"
-grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/aichorouter/manifest.env"
+for pat in 'LIBRECHAT_MONGO_URI' 'LIBRECHAT_REDIS_URI' '/librechat/images:/app/client/public/images' '/librechat/uploads:/app/uploads'; do
+	grep -q "$pat" "$repo_root/apps/librechat/compose.yml"
+done
+for app in newapi cpapi; do grep -q '^SMOKE_LOCAL=healthcheck$' "$repo_root/apps/$app/manifest.env"; done
+for app in cpapi aichorouter pigeon; do
+	grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/$app/manifest.env"
+	grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/$app/manifest.env"
+done
 grep -q '^HEALTH_URL=/healthz$' "$repo_root/apps/cpapi/manifest.env"
-grep -q '^HEALTH_MODE=healthcheck$' "$repo_root/apps/pigeon/manifest.env"
-grep -q '^HEALTH_SERVICE=health-probe$' "$repo_root/apps/pigeon/manifest.env"
 grep -Fq 'health_uri /healthz' "$repo_root/apps/cpapi/route.leader.caddy"
 grep -Fq 'observer-health-probe:' "$repo_root/compose/foundation/observer-controller.yml"
 grep -Fq 'singleton-transition-fail' "$repo_root/ops/platformctl.sh"
@@ -562,10 +544,7 @@ grep -Fq 'CONSUMER_APP_ID=cpapi /usr/local/bin/platform-submit consumer-stage' "
 grep -Fq 'consumer-stage-cpapi-worker-1' "$repo_root/.woodpecker/consumer-publish-cpapi.yml"
 for node in leader worker-1 worker-2 worker-3 worker-4; do
 	[[ -f "$repo_root/.woodpecker/control-sync-$node.yml" ]]
-done
-grep -Fq 'bash /opt/platform/control/current/ops/deploy-controller.sh control-sync' "$repo_root/.woodpecker/control-sync-leader.yml"
-for node in worker-1 worker-2 worker-3 worker-4; do
-	grep -Fq 'bash /opt/platform/control/current/ops/deploy-controller.sh control-verify' "$repo_root/.woodpecker/control-sync-$node.yml"
+	grep -Fq "control-$([[ "$node" == leader ]] && printf sync || printf verify)" "$repo_root/.woodpecker/control-sync-$node.yml"
 done
 grep -Fq 'control-sync-worker-1' "$repo_root/.woodpecker/consumer-stage-cpapi-worker-1.yml"
 grep -Fq 'control-verify' "$repo_root/ops/deploy-controller.sh"
@@ -585,12 +564,10 @@ grep -q '^NEW_API_NODE_TYPE=master$' "$repo_root/config/cluster/nodes/worker-1.e
 grep -q '^NEW_API_NODE_TYPE=slave$' "$repo_root/config/cluster/nodes/worker-2.env"
 grep -q '^NEW_API_BACKUP_NODE_ID=worker-2$' "$repo_root/config/cluster/apps/newapi.policy"
 grep -q '^NEW_API_MIGRATION_NODE_ID=worker-1$' "$repo_root/config/cluster/apps/newapi.policy"
-grep -Fq 'cluster-reconcile' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'consumer-stage)' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'DEPLOY_RECREATE_APPS=1' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'PLATFORM_RECREATE_APPS="${DEPLOY_RECREATE_APPS:-0}"' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'consumer-publish)' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'consumer-stop)' "$repo_root/ops/deploy-controller.sh"
+for pat in 'cluster-reconcile' 'consumer-stage)' 'DEPLOY_RECREATE_APPS=1' \
+	'PLATFORM_RECREATE_APPS="${DEPLOY_RECREATE_APPS:-0}"' 'consumer-publish)' 'consumer-stop)'; do
+	grep -Fq "$pat" "$repo_root/ops/deploy-controller.sh"
+done
 if grep -Eq '^(singleton-stage|singleton-switch|singleton-stop)\)' "$repo_root/ops/deploy-controller.sh"; then
 	printf 'deployment controller still exposes a retired singleton workflow mode\n' >&2
 	exit 1
@@ -599,12 +576,10 @@ if grep -Eq '\^\(.*singleton-(stage|switch|stop)' "$repo_root/ops/platform-submi
 	printf 'platform submitter still accepts a retired singleton workflow mode\n' >&2
 	exit 1
 fi
-grep -Fq 'singleton-prepare' "$repo_root/ops/platformctl.sh"
-grep -Fq 'app_in_reconcile_scope' "$repo_root/ops/platformctl.sh"
-grep -Fq 'PLATFORM_FORCE_SINGLETON_ACTION' "$repo_root/ops/platformctl.sh"
-grep -Fq 'singleton-origin-smoke' "$repo_root/ops/platformctl.sh"
-grep -Fq 'Leader route and active containers reconciled' "$repo_root/ops/platformctl.sh"
-grep -Fq 'app_policy_enabled "$(basename "$d")"' "$repo_root/ops/platformctl.sh"
+for pat in 'singleton-prepare' 'app_in_reconcile_scope' 'PLATFORM_FORCE_SINGLETON_ACTION' \
+	'singleton-origin-smoke' 'Leader route and active containers reconciled' 'app_policy_enabled "$(basename "$d")"'; do
+	grep -Fq "$pat" "$repo_root/ops/platformctl.sh"
+done
 grep -Fq 'record_singleton_transitions' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'singleton_prepare_failed' "$repo_root/ops/deploy-controller.sh"
 grep -Fq 'stop_removed_foundation_projects "$old_current" "$release"' "$repo_root/ops/deploy-controller.sh"
@@ -613,15 +588,14 @@ if grep -Fq 'docker ps -aq --filter "label=com.docker.compose.project=$project" 
 	printf 'deployment cleanup still ignores Docker enumeration failures\n' >&2
 	exit 1
 fi
-grep -Fq 'cluster app policy requires its consumer reconciliation workflow' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'unsupported cluster configuration path in application deployment' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'application image manifest changes require the reviewed consumer workflow' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'prune_stale_image_keys' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'removing stale image key' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'validate_release_cached' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'control_sync_matches_sha' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'ops/*.sh | ops/deploy-runner/** | ops/tests/**' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}"' "$repo_root/ops/deploy-controller.sh"
+for pat in 'cluster app policy requires its consumer reconciliation workflow' \
+	'unsupported cluster configuration path in application deployment' \
+	'application image manifest changes require the reviewed consumer workflow' \
+	'prune_stale_image_keys' 'removing stale image key' 'validate_release_cached' \
+	'control_sync_matches_sha' 'ops/*.sh | ops/deploy-runner/** | ops/tests/**' \
+	'PLATFORM_ONLY_APP_ID="${PLATFORM_ONLY_APP_ID:-}"'; do
+	grep -Fq "$pat" "$repo_root/ops/deploy-controller.sh"
+done
 grep -Fq 'singleton-state' "$repo_root/ops/backup-platform.sh"
 if grep -Fq 'rm -f -- "$runtime_env"' "$repo_root/ops/platformctl.sh"; then
 	printf 'singleton stop must retain runtime secrets\n' >&2
@@ -703,26 +677,22 @@ compose/foundation/observer-controller.yml|observer-health-probe
 compose/foundation/observer-collector.yml|observer-log-proxy
 compose/foundation/observer-collector.yml|observer-log-shipper
 EOF
-grep -Fq 'prepare_application_secrets()' "$repo_root/ops/bootstrap-vps.sh"
-grep -Fq "s/^CLUSTER_SECRET_KEYS=//p" "$repo_root/ops/bootstrap-vps.sh"
-grep -Fq "s/^NODE_SECRET_KEYS=//p" "$repo_root/ops/bootstrap-vps.sh"
-grep -Fq 'PathExists=/etc/llm-hub-lite/firewall-reconcile.request' "$repo_root/ops/systemd/platform-firewall.path"
-grep -Fq 'deployment failed; restoring previous complete bundle' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'DEPLOY_SYNC_SCOPE=all reconcile || true' "$repo_root/ops/deploy-controller.sh"
-grep -Fq 'git_auth_source:/usr/local/bin/git-auth.sh:ro' "$repo_root/ops/platform-submit.sh"
-grep -Fq '/opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro' "$repo_root/.woodpecker/foundation-upgrade-leader.yml"
-grep -Fq 'RESTORE_IDENTITY' "$repo_root/ops/restore-platform.sh"
+for pat in 'prepare_application_secrets()' "s/^CLUSTER_SECRET_KEYS=//p" "s/^NODE_SECRET_KEYS=//p" 'PathExists=/etc/llm-hub-lite/firewall-reconcile.request'; do
+	grep -Fq "$pat" "$repo_root/ops/bootstrap-vps.sh" 2>/dev/null || grep -Fq "$pat" "$repo_root/ops/systemd/platform-firewall.path"
+done
+for pat in 'deployment failed; restoring previous complete bundle' 'DEPLOY_SYNC_SCOPE=all reconcile || true'; do
+	grep -Fq "$pat" "$repo_root/ops/deploy-controller.sh"
+done
+for pat in 'git_auth_source:/usr/local/bin/git-auth.sh:ro' '/opt/platform/control/current/ops/git-auth.sh:/usr/local/bin/git-auth.sh:ro' 'RESTORE_IDENTITY'; do
+	grep -Fq "$pat" "$repo_root/ops/platform-submit.sh" 2>/dev/null || grep -Fq "$pat" "$repo_root/.woodpecker/foundation-upgrade-leader.yml" 2>/dev/null || grep -Fq "$pat" "$repo_root/ops/restore-platform.sh"
+done
 recover_body="$(sed -n '/^recover() {/,/^}/p' "$repo_root/ops/platformctl.sh")"
 foundation_line="$(printf '%s\n' "$recover_body" | grep -n 'projects_foundation' | head -n1 | cut -d: -f1)"
 consumer_line="$(printf '%s\n' "$recover_body" | grep -n 'start_consumer_projects_parallel' | head -n1 | cut -d: -f1)"
 [[ -n "$foundation_line" && -n "$consumer_line" && "$foundation_line" -lt "$consumer_line" ]]
-if grep -q 'NEW_API_SITE' "$repo_root/apps/newapi/route.follower.caddy"; then
-	exit 1
-fi
-if find "$repo_root/apps/cliproxyapi" "$repo_root/config/cluster/apps/cliproxyapi.policy" -type f -print -quit 2>/dev/null | grep -q .; then
-	exit 1
-fi
-if rg -n 'CLIPROXY|cliproxy|cpa\.aichorage\.de' "$repo_root" --hidden --glob '!.git/**' --glob '!ops/tests/**' --glob '!ops/images.apps.prod.env' >/dev/null 2>&1; then
+if grep -q 'NEW_API_SITE' "$repo_root/apps/newapi/route.follower.caddy" ||
+	find "$repo_root/apps/cliproxyapi" "$repo_root/config/cluster/apps/cliproxyapi.policy" -type f -print -quit 2>/dev/null | grep -q . ||
+	rg -n 'CLIPROXY|cliproxy|cpa\.aichorage\.de' "$repo_root" --hidden --glob '!.git/**' --glob '!ops/tests/**' --glob '!ops/images.apps.prod.env' >/dev/null 2>&1; then
 	printf 'legacy CPA references remain in the repository\n' >&2
 	exit 1
 fi

@@ -70,9 +70,10 @@ for file in \
 	consumer-secrets-aichor-worker-2.yml consumer-stop-aichor-worker-1.yml \
 	consumer-stop-aichor-worker-3.yml consumer-stop-aichor-worker-4.yml \
 	consumer-finalize-aichor-worker-2.yml \
-	consumer-publish-aichor3.yml consumer-stop-aichor3-worker-1.yml \
-	consumer-stop-aichor3-worker-2.yml \
-	consumer-stop-aichor3-worker-4.yml \
+	consumer-stage-aichor1-worker-1.yml consumer-publish-aichor1.yml \
+	consumer-secrets-aichor1-worker-1.yml consumer-stop-aichor1-worker-2.yml \
+	consumer-stop-aichor1-worker-3.yml consumer-stop-aichor1-worker-4.yml \
+	consumer-finalize-aichor1-worker-1.yml \
 	consumer-stage-aichorouter-worker-1.yml consumer-publish-aichorouter.yml consumer-stop-aichorouter-worker-2.yml \
 	consumer-finalize-aichorouter-worker-1.yml \
 	consumer-stage-librechat-worker-1.yml consumer-stage-librechat-worker-2.yml consumer-publish-librechat.yml \
@@ -90,22 +91,18 @@ for file in \
 		exit 1
 	}
 done
-aichor3_enabled="$(make_fixture aichor3-enabled)"
-sed 's/^ENABLED=.*/ENABLED=true/' "$aichor3_enabled/config/cluster/apps/aichor3.policy" >"$aichor3_enabled/aichor3.policy"
-mv "$aichor3_enabled/aichor3.policy" "$aichor3_enabled/config/cluster/apps/aichor3.policy"
-generate_fixture "$aichor3_enabled"
-grep -Fq 'configure-app-secrets aichor3 --target-node worker-3 --ensure-generated' "$aichor3_enabled/workflows/consumer-stage-aichor3-worker-3.yml"
-grep -Fq 'GH_TOKEN:' "$aichor3_enabled/workflows/consumer-stage-aichor3-worker-3.yml"
-grep -Fq 'from_secret: GH_TOKEN' "$aichor3_enabled/workflows/consumer-stage-aichor3-worker-3.yml"
-grep -Fq 'GH_TOKEN:' "$aichor3_enabled/workflows/consumer-secrets-aichor3-worker-3.yml"
-grep -Fq 'from_secret: GH_TOKEN' "$aichor3_enabled/workflows/consumer-secrets-aichor3-worker-3.yml"
-grep -Fq 'consumer-stage-aichor3-worker-3' "$aichor3_enabled/workflows/consumer-publish-aichor3.yml"
+grep -Fq 'configure-app-secrets aichor1 --target-node worker-1 --ensure-generated' "$base/workflows/consumer-stage-aichor1-worker-1.yml"
+grep -Fq 'GH_TOKEN:' "$base/workflows/consumer-stage-aichor1-worker-1.yml"
+grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-stage-aichor1-worker-1.yml"
+grep -Fq 'GH_TOKEN:' "$base/workflows/consumer-secrets-aichor1-worker-1.yml"
+grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-secrets-aichor1-worker-1.yml"
+grep -Fq 'consumer-stage-aichor1-worker-1' "$base/workflows/consumer-publish-aichor1.yml"
 grep -Fq '/usr/local/bin/configure-app-secrets aichor --target-node worker-2 --ensure-generated' "$base/workflows/consumer-stage-aichor-worker-2.yml"
 grep -Fq 'GH_TOKEN:' "$base/workflows/consumer-stage-aichor-worker-2.yml"
 grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-stage-aichor-worker-2.yml"
 grep -Fq 'from_secret: aichor_password' "$base/workflows/consumer-secrets-aichor-worker-2.yml"
 grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-secrets-aichor-worker-2.yml"
-if grep -R -q 'from_secret: GH_TOKEN' "$base/workflows/consumer-publish-aichor.yml" "$base/workflows/consumer-publish-aichor3.yml" "$base/workflows/control-sync-leader.yml"; then
+if grep -R -q 'from_secret: GH_TOKEN' "$base/workflows/consumer-publish-aichor.yml" "$base/workflows/consumer-publish-aichor1.yml" "$base/workflows/control-sync-leader.yml"; then
 	printf 'GH_TOKEN leaked into a Leader or publish workflow\n' >&2
 	exit 1
 fi
@@ -353,7 +350,7 @@ expect_invalid "$leader_target" 'consumer node must be an active follower: cpapi
 draining="$(make_fixture draining)"
 sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$draining/config/cluster/nodes/worker-1.env" >"$draining/worker-1.env"
 mv "$draining/worker-1.env" "$draining/config/cluster/nodes/worker-1.env"
-expect_invalid "$draining" 'consumer node must be an active follower: aichorouter/worker-1'
+expect_invalid "$draining" 'consumer node must be an active follower: aichor1/worker-1'
 
 draining_leader="$(make_fixture draining-leader)"
 sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$draining_leader/config/cluster/nodes/leader.env" >"$draining_leader/leader.env"
