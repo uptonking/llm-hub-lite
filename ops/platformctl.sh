@@ -1320,9 +1320,14 @@ validate_descriptor() {
 		if [[ "$ingress" == direct ]]; then
 			[[ -z "$(descriptor_value "$d" ROUTE_GROUPS)" ]] || die "ROUTE_GROUPS is not valid for direct-only app: $d"
 		fi
+		forward_target="$(descriptor_value "$d" DIRECT_FORWARD_TARGET)"
+		if [[ -n "$forward_target" ]]; then
+			[[ "$forward_target" =~ ^[a-zA-Z0-9.-]+:[0-9]+$ ]] || die "DIRECT_FORWARD_TARGET must be host:port or ip:port: $d"
+		fi
 	else
 		[[ -z "$(descriptor_value "$d" DIRECT_LISTENERS)" ]] || die "DIRECT_LISTENERS is only valid for direct apps: $d"
 		[[ -z "$(descriptor_value "$d" DIRECT_PORT_RANGES)" ]] || die "DIRECT_PORT_RANGES is only valid for direct apps: $d"
+		[[ -z "$(descriptor_value "$d" DIRECT_FORWARD_TARGET)" ]] || die "DIRECT_FORWARD_TARGET is only valid for direct apps: $d"
 	fi
 	mode="$(descriptor_value "$d" STATE_MODE)"
 	[[ -n "$mode" ]] || mode=files

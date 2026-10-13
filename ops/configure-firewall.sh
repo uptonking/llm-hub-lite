@@ -82,6 +82,20 @@ clear_port_hop_rules() {
 		iptables -t nat "${rule_args[@]}" >/dev/null 2>&1 || true
 	done < <(iptables -t nat -S PREROUTING 2>/dev/null | grep -- '-m comment --comment llm-hub-lite-hop' || true)
 }
+# Direct forward (DNAT) rules relay traffic to a remote target at the kernel
+# level, bypassing the container's docker-proxy entirely. They are rebuilt on
+# every reconciliation so targets removed from manifests do not linger.
+clear_forward_rules() {
+	local rule
+	local -a rule_args
+	for table_chain in 'PREROUTING' 'POSTROUTING'; do
+		while IFS= read -r rule; do
+			[[ "$rule" == -* ]] || continue
+			read -r -a rule_args <<<"${rule/-A/-D}"
+			iptables -t nat "${rule_args[@]}" >/dev/null 2>&1 || true
+		done < <(iptables -t nat -S "$table_chain" 2>/dev/null | grep -- '-m comment --comment llm-hub-lite-forward' || true)
+	done
+}
 chain=LLM_HUB_LITE_DOCKER
 # Node security baseline beyond the packet filter: refuse SSH password logins.
 # This script is the only root, timer-driven reconciliation hook that both new
@@ -105,6 +119,7 @@ if [[ "$NODE_ROLE" == leader ]]; then
 	iptables -F "$chain" 2>/dev/null || true
 	iptables -X "$chain" 2>/dev/null || true
 	clear_port_hop_rules
+	clear_forward_rules
 	rm -f -- "$REQUEST_FILE"
 	exit 0
 fi
@@ -118,6 +133,7 @@ command -v ip >/dev/null 2>&1 || {
 }
 PUBLIC_INTERFACE="$(public_interface)"
 clear_port_hop_rules
+clear_forward_rules
 
 # Docker evaluates DOCKER-USER for both ingress and container egress. Scope the
 # policy to the public ingress interface so outbound HTTPS remains available.
@@ -138,6 +154,12 @@ while IFS= read -r manifest; do
 	[[ "$(value ENABLED "$CONTROL_ROOT/current/config/$policy_rel")" == true ]] || continue
 	nodes="$(value NODES "$CONTROL_ROOT/current/config/$policy_rel")"
 	[[ ",$nodes," == *",$node_id,"* ]] || continue
+	forward_target="$(value DIRECT_FORWARD_TARGET "$manifest")"
+	forward_host='' forward_port=''
+	if [[ -n "$forward_target" ]]; then
+		forward_host="${forward_target%%:*}"
+		forward_port="${forward_target##*:}"
+	fi
 	while IFS= read -r listener; do
 		[[ -n "$listener" ]] || continue
 		proto="${listener%%:*}"
@@ -158,6 +180,16 @@ while IFS= read -r manifest; do
 		}
 		iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j RETURN
 		ufw allow "$port/$proto" comment "Direct $app" >/dev/null
+		# Kernel-level DNAT to a remote target bypasses docker-proxy and the
+		# container entirely, which is required for QUIC traffic that session-
+		# managed UDP relays (e.g. gost udp://) fragment. The container stays
+		# up as a health-check placeholder; traffic never enters it.
+		if [[ -n "$forward_target" ]]; then
+			iptables -t nat -C PREROUTING -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j DNAT --to-destination "$forward_target" -m comment --comment llm-hub-lite-forward 2>/dev/null ||
+				iptables -t nat -I PREROUTING 1 -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j DNAT --to-destination "$forward_target" -m comment --comment llm-hub-lite-forward
+			iptables -t nat -C POSTROUTING -d "$forward_host" -p "$proto" --dport "$forward_port" -j MASQUERADE -m comment --comment llm-hub-lite-forward 2>/dev/null ||
+				iptables -t nat -A POSTROUTING -d "$forward_host" -p "$proto" --dport "$forward_port" -j MASQUERADE -m comment --comment llm-hub-lite-forward
+		fi
 	done <<<"$(value DIRECT_LISTENERS "$manifest" | tr ',' '\n')"
 	# Port hopping for QUIC-based direct apps: a UDP port range is DNAT'd with
 	# REDIRECT onto the app's published listener port, so clients can hop ports
@@ -191,7 +223,11 @@ while IFS= read -r manifest; do
 			exit 1
 		}
 		ufw allow "$from:$to/$proto" comment "Direct hop $app" >/dev/null
-		hop_args=(-i "$PUBLIC_INTERFACE" -p "$proto" --dport "$from:$to" -j REDIRECT --to-ports "$target" -m comment --comment llm-hub-lite-hop)
+		if [[ -n "$forward_target" ]]; then
+			hop_args=(-i "$PUBLIC_INTERFACE" -p "$proto" --dport "$from:$to" -j DNAT --to-destination "$forward_target" -m comment --comment llm-hub-lite-hop)
+		else
+			hop_args=(-i "$PUBLIC_INTERFACE" -p "$proto" --dport "$from:$to" -j REDIRECT --to-ports "$target" -m comment --comment llm-hub-lite-hop)
+		fi
 		iptables -t nat -C PREROUTING "${hop_args[@]}" 2>/dev/null || iptables -t nat -I PREROUTING 1 "${hop_args[@]}"
 	done <<<"$(value DIRECT_PORT_RANGES "$manifest" | tr ',' '\n')"
 done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
