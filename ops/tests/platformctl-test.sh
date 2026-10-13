@@ -136,9 +136,10 @@ cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
-  *"-p app-verge "*" ps --status running --services"*|*"-p app-verge2 "*" ps --status running --services"*|*"-p app-verge3 "*" ps --status running --services"*|*"-p app-verge5 "*" ps --status running --services"*) printf 'verge\n'; exit 0;;
-  *"-p app-verge "*" ps -q verge"*|*"-p app-verge2 "*" ps -q verge2"*|*"-p app-verge3 "*" ps -q verge3"*|*"-p app-verge5 "*" ps -q verge5"*) printf 'verge-container\n'; exit 0;;
+  *"-p app-verge "*" ps --status running --services"*|*"-p app-verge2 "*" ps --status running --services"*|*"-p app-verge3 "*" ps --status running --services"*|*"-p app-verge5 "*" ps --status running --services"*|*"-p app-verge-relay "*" ps --status running --services"*) printf 'verge\n'; exit 0;;
+  *"-p app-verge "*" ps -q verge"*|*"-p app-verge2 "*" ps -q verge2"*|*"-p app-verge3 "*" ps -q verge3"*|*"-p app-verge5 "*" ps -q verge5"*|*"-p app-verge-relay "*" ps -q verge-relay"*) printf 'verge-container\n'; exit 0;;
   *"-p app-verge "*" port --protocol udp verge 443"*|*"-p app-verge2 "*" port --protocol udp verge2 443"*|*"-p app-verge3 "*" port --protocol udp verge3 443"*|*"-p app-verge5 "*" port --protocol udp verge5 443"*) printf '%s\n' "${DIRECT_PORT_BIND:-0.0.0.0:443}"; exit 0;;
+  *"-p app-verge-relay "*" port --protocol udp verge-relay 2053"*) printf '%s\n' "${VERGE_RELAY_PORT_BIND:-0.0.0.0:2053}"; exit 0;;
   *" ps --all -q observer-log-shipper"*) printf 'observer-log-shipper\n'; exit 0;;
   *" ps --all -q observer-controller"*) printf 'observer-controller\n'; exit 0;;
   *" ps --all -q beszel-socket-proxy"*) printf 'beszel-socket-proxy\n'; exit 0;;
@@ -181,6 +182,7 @@ case "$*" in
   *app-searx*) printf 'searx\n';;
   *app-relaichor*) printf 'relaichor\nhealth-probe\n';;
   *app-relaichor1*) printf 'relaichor1\nhealth-probe\n';;
+  *app-verge-relay*) printf 'verge-relay\n';;
   *app-verge3*) printf 'verge3\n';;
   *app-verge5*) printf 'verge5\n';;
   *app-verge2*) printf 'verge2\n';;
