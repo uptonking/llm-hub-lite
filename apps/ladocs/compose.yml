@@ -120,7 +120,9 @@ services:
       start_period: 10s
   # The Django backend. The wrapper entrypoint signs the RSA keypair, ensures
   # the versioned media bucket exists, runs migrations, then execs uvicorn.
-  backend:
+  # Named ladocs-backend (not backend) to match SERVICE_NAME: the platform's
+  # validate check requires SERVICE_NAME to equal a compose service name.
+  ladocs-backend:
     image: ${LADOCS_BACKEND_IMAGE:?LADOCS_BACKEND_IMAGE must be digest-pinned}
     restart: unless-stopped
     stop_grace_period: 60s
@@ -142,7 +144,6 @@ services:
       DJANGO_SECRET_KEY: ${LADOCS_DJANGO_SECRET_KEY:?LADOCS_DJANGO_SECRET_KEY must be set}
       PYTHONPATH: /app
       WEB_CONCURRENCY: ${LADOCS_BACKEND_WORKERS:-2}
-      LOGGING_LEVEL_HANDLERS_CONSOLE: ERROR
       LOGGING_LEVEL_LOGGERS_ROOT: INFO
       LOGGING_LEVEL_LOGGERS_APP: INFO
       DB_HOST: postgresql
@@ -213,7 +214,7 @@ services:
       REDIS: redis://yhub-valkey:6379
       REDIS_PREFIX: yhub
       POSTGRES: postgres://docs:${LADOCS_DB_PASSWORD:?LADOCS_DB_PASSWORD must be set}@postgresql:5432/yhub
-      COLLABORATION_BACKEND_BASE_URL: http://backend:8000
+      COLLABORATION_BACKEND_BASE_URL: http://ladocs-backend:8000
       COLLABORATION_SERVER_ORIGIN: ${LADOCS_SITE:?LADOCS_SITE must be set}
       Y_PROVIDER_API_KEY: ${LADOCS_Y_PROVIDER_API_KEY:?LADOCS_Y_PROVIDER_API_KEY must be set}
       YHUB_JWT_PRIVATE_KEY_FILE: /keys/yhub-private.pem
@@ -226,7 +227,7 @@ services:
         condition: service_healthy
       yhub-valkey:
         condition: service_healthy
-      backend:
+      ladocs-backend:
         condition: service_healthy
     networks: [ladocs_private]
     healthcheck:
@@ -249,11 +250,11 @@ services:
       com.aichorage.component: app-ladocs-y-provider
     environment:
       Y_PROVIDER_API_KEY: ${LADOCS_Y_PROVIDER_API_KEY:?LADOCS_Y_PROVIDER_API_KEY must be set}
-      COLLABORATION_BACKEND_BASE_URL: http://backend:8000
+      COLLABORATION_BACKEND_BASE_URL: http://ladocs-backend:8000
       COLLABORATION_SERVER_ORIGIN: ${LADOCS_SITE:?LADOCS_SITE must be set}
       COLLABORATION_LOGGING: "false"
     depends_on:
-      backend:
+      ladocs-backend:
         condition: service_healthy
     networks: [ladocs_private]
     healthcheck:
@@ -276,7 +277,7 @@ services:
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-frontend
     environment:
-      BACKEND_HOST: backend
+      BACKEND_HOST: ladocs-backend
       FRONTEND_HOST: ladocs-frontend
       YHUB_HOST: yhub
       S3_HOST: minio:9000
@@ -286,7 +287,7 @@ services:
     entrypoint: ["/docker-entrypoint.sh"]
     command: ["nginx", "-g", "daemon off;"]
     depends_on:
-      backend:
+      ladocs-backend:
         condition: service_healthy
       yhub:
         condition: service_healthy

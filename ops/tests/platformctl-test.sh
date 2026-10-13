@@ -193,7 +193,7 @@ case "$*" in
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
   *app-aichor1*) printf 'aichor1\n';;
   *app-auther*) printf 'auther\n';;
-  *app-ladocs*) printf 'postgresql\nredis\nyhub-valkey\nminio\nbackend\nyhub\ny-provider\nladocs-frontend\n';;
+  *app-ladocs*) printf 'postgresql\nredis\nyhub-valkey\nminio\nladocs-backend\nyhub\ny-provider\nladocs-frontend\n';;
   *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
