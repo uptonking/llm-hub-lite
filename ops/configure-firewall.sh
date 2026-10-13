@@ -155,10 +155,21 @@ while IFS= read -r manifest; do
 	nodes="$(value NODES "$CONTROL_ROOT/current/config/$policy_rel")"
 	[[ ",$nodes," == *",$node_id,"* ]] || continue
 	forward_target="$(value DIRECT_FORWARD_TARGET "$manifest")"
-	forward_host='' forward_port=''
+	forward_ip='' forward_port=''
 	if [[ -n "$forward_target" ]]; then
 		forward_host="${forward_target%%:*}"
 		forward_port="${forward_target##*:}"
+		# iptables-nft does not resolve hostnames; resolve to an IP now so
+		# rules survive DNS changes on re-deploy. Literal IPs skip resolution.
+		if valid_ipv4 "$forward_host"; then
+			forward_ip="$forward_host"
+		else
+			forward_ip="$(getent hosts "$forward_host" | awk '{print $1}' | head -1)"
+			[[ -n "$forward_ip" ]] || {
+				printf 'configure-firewall: cannot resolve DIRECT_FORWARD_TARGET host: %s (%s)\n' "$forward_host" "$app" >&2
+				exit 1
+			}
+		fi
 	fi
 	while IFS= read -r listener; do
 		[[ -n "$listener" ]] || continue
@@ -185,10 +196,10 @@ while IFS= read -r manifest; do
 		# managed UDP relays (e.g. gost udp://) fragment. The container stays
 		# up as a health-check placeholder; traffic never enters it.
 		if [[ -n "$forward_target" ]]; then
-			iptables -t nat -C PREROUTING -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j DNAT --to-destination "$forward_target" -m comment --comment llm-hub-lite-forward 2>/dev/null ||
-				iptables -t nat -I PREROUTING 1 -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j DNAT --to-destination "$forward_target" -m comment --comment llm-hub-lite-forward
-			iptables -t nat -C POSTROUTING -d "$forward_host" -p "$proto" --dport "$forward_port" -j MASQUERADE -m comment --comment llm-hub-lite-forward 2>/dev/null ||
-				iptables -t nat -A POSTROUTING -d "$forward_host" -p "$proto" --dport "$forward_port" -j MASQUERADE -m comment --comment llm-hub-lite-forward
+			iptables -t nat -C PREROUTING -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j DNAT --to-destination "$forward_ip:$forward_port" -m comment --comment llm-hub-lite-forward 2>/dev/null ||
+				iptables -t nat -I PREROUTING 1 -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j DNAT --to-destination "$forward_ip:$forward_port" -m comment --comment llm-hub-lite-forward
+			iptables -t nat -C POSTROUTING -d "$forward_ip" -p "$proto" --dport "$forward_port" -j MASQUERADE -m comment --comment llm-hub-lite-forward 2>/dev/null ||
+				iptables -t nat -A POSTROUTING -d "$forward_ip" -p "$proto" --dport "$forward_port" -j MASQUERADE -m comment --comment llm-hub-lite-forward
 		fi
 	done <<<"$(value DIRECT_LISTENERS "$manifest" | tr ',' '\n')"
 	# Port hopping for QUIC-based direct apps: a UDP port range is DNAT'd with
@@ -224,7 +235,7 @@ while IFS= read -r manifest; do
 		}
 		ufw allow "$from:$to/$proto" comment "Direct hop $app" >/dev/null
 		if [[ -n "$forward_target" ]]; then
-			hop_args=(-i "$PUBLIC_INTERFACE" -p "$proto" --dport "$from:$to" -j DNAT --to-destination "$forward_target" -m comment --comment llm-hub-lite-hop)
+			hop_args=(-i "$PUBLIC_INTERFACE" -p "$proto" --dport "$from:$to" -j DNAT --to-destination "$forward_ip:$forward_port" -m comment --comment llm-hub-lite-hop)
 		else
 			hop_args=(-i "$PUBLIC_INTERFACE" -p "$proto" --dport "$from:$to" -j REDIRECT --to-ports "$target" -m comment --comment llm-hub-lite-hop)
 		fi

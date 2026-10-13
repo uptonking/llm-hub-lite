@@ -108,13 +108,13 @@ grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 20000:30000 -j
 # DIRECT_FORWARD_TARGET switches the listener and hop-range rules from
 # REDIRECT-to-docker-proxy to kernel-level DNAT+MASQUERADE, which is required
 # for QUIC traffic that session-managed UDP relays fragment.
-printf 'APP_ID=verge\nINGRESS_MODE=direct\nPOLICY_FILE=cluster/apps/verge.policy\nDIRECT_LISTENERS=udp:443:443\nDIRECT_PORT_RANGES=udp:20000:30000:443\nDIRECT_FORWARD_TARGET=verge3.example.invalid:443\n' \
+printf 'APP_ID=verge\nINGRESS_MODE=direct\nPOLICY_FILE=cluster/apps/verge.policy\nDIRECT_LISTENERS=udp:443:443\nDIRECT_PORT_RANGES=udp:20000:30000:443\nDIRECT_FORWARD_TARGET=192.0.2.50:443\n' \
 	>"$tmp/control/current/apps/verge/manifest.env"
 : >"$FIREWALL_LOG"
 run_firewall >/dev/null
-grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 443 -j DNAT --to-destination verge3.example.invalid:443 -m comment --comment llm-hub-lite-forward' "$FIREWALL_LOG"
-grep -Fqx 'iptables -t nat -A POSTROUTING -d verge3.example.invalid -p udp --dport 443 -j MASQUERADE -m comment --comment llm-hub-lite-forward' "$FIREWALL_LOG"
-grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 20000:30000 -j DNAT --to-destination verge3.example.invalid:443 -m comment --comment llm-hub-lite-hop' "$FIREWALL_LOG"
+grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 443 -j DNAT --to-destination 192.0.2.50:443 -m comment --comment llm-hub-lite-forward' "$FIREWALL_LOG"
+grep -Fqx 'iptables -t nat -A POSTROUTING -d 192.0.2.50 -p udp --dport 443 -j MASQUERADE -m comment --comment llm-hub-lite-forward' "$FIREWALL_LOG"
+grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 20000:30000 -j DNAT --to-destination 192.0.2.50:443 -m comment --comment llm-hub-lite-hop' "$FIREWALL_LOG"
 if grep -Fq 'REDIRECT --to-ports 443' "$FIREWALL_LOG"; then
 	printf 'firewall used REDIRECT instead of DNAT when DIRECT_FORWARD_TARGET is set\n' >&2
 	exit 1
