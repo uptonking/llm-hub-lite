@@ -130,7 +130,7 @@ services:
     # bind-mounted /keys directory docker creates on first deployment. This
     # matches the platform's other root-run app containers.
     user: "0:0"
-    mem_limit: ${LADOCS_BACKEND_MEMORY_LIMIT:-512m}
+    mem_limit: ${LADOCS_BACKEND_MEMORY_LIMIT:-800m}
     cpus: ${LADOCS_BACKEND_CPUS:-0.75}
     pids_limit: ${LADOCS_BACKEND_PIDS_LIMIT:-256}
     labels:
@@ -182,6 +182,7 @@ services:
       - ./entrypoint-backend.sh:/ladocs/entrypoint-backend.sh:ro
       - ./bootstrap_s3.py:/ladocs/bootstrap_s3.py:ro
     entrypoint: ["/bin/sh", "/ladocs/entrypoint-backend.sh"]
+    command: ["uvicorn", "--app-dir=/app", "--host=0.0.0.0", "--timeout-graceful-shutdown=300", "--limit-max-requests=20000", "--lifespan=off", "impress.asgi:application"]
     depends_on:
       postgresql:
         condition: service_healthy
@@ -193,9 +194,9 @@ services:
     healthcheck:
       test: ["CMD", "python", "manage.py", "check"]
       interval: 20s
-      timeout: 30s
+      timeout: 60s
       retries: 10
-      start_period: 120s
+      start_period: 180s
   # The collaboration server. Its wrapper entrypoint signs its own RSA keypair
   # and creates its database schema (idempotent) before starting the server.
   yhub:
@@ -222,6 +223,7 @@ services:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/ladocs/keys:/keys
       - ./entrypoint-yhub.sh:/ladocs/entrypoint-yhub.sh:ro
     entrypoint: ["/bin/sh", "/ladocs/entrypoint-yhub.sh"]
+    command: ["node", "--import", "./dist/sentry.js", "dist/server.js"]
     depends_on:
       postgresql:
         condition: service_healthy
