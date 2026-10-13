@@ -1,0 +1,312 @@
+name: app-ladocs
+services:
+  # Documentation lives in three stores: PostgreSQL holds the Django schema and
+  # the yhub collaboration database, the valkey holds unpersisted collaboration
+  # updates (durable, append-only), and the silo bucket keeps attachments and
+  # their version history. Initialization happens inside the long-running
+  # backend and yhub containers so the project never keeps exited one-shot
+  # containers that would fail the platform's all-containers-healthy gate.
+  postgresql:
+    image: ${LADOCS_POSTGRES_IMAGE:?LADOCS_POSTGRES_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${LADOCS_POSTGRES_MEMORY_LIMIT:-384m}
+    cpus: ${LADOCS_POSTGRES_CPUS:-0.6}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: ladocs
+      com.aichorage.component: app-ladocs-postgresql
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_DB: docs
+      POSTGRES_USER: docs
+      POSTGRES_PASSWORD: ${LADOCS_DB_PASSWORD:?LADOCS_DB_PASSWORD must be set}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${LADOCS_POSTGRES_SHARED_BUFFERS:-64MB}
+      - -c
+      - max_connections=40
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/ladocs/postgresql:/var/lib/postgresql/data
+    networks: [ladocs_private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # Django cache only: everything in it can be dropped without data loss.
+  redis:
+    image: ${LADOCS_REDIS_IMAGE:?LADOCS_REDIS_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${LADOCS_REDIS_MEMORY_LIMIT:-64m}
+    cpus: 0.25
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: ladocs
+      com.aichorage.component: app-ladocs-redis
+    command:
+      - redis-server
+      - --maxmemory
+      - ${LADOCS_REDIS_MAX_MEMORY:-48mb}
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    networks: [ladocs_private]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # The collaboration server's own store: it holds updates no worker has
+  # persisted to PostgreSQL yet, so it is durable (append-only) and only ever
+  # evicts keys carrying an expiry.
+  yhub-valkey:
+    image: ${LADOCS_VALKEY_IMAGE:?LADOCS_VALKEY_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${LADOCS_VALKEY_MEMORY_LIMIT:-192m}
+    cpus: 0.25
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: ladocs
+      com.aichorage.component: app-ladocs-yhub-valkey
+    command:
+      - valkey-server
+      - --maxmemory
+      - ${LADOCS_VALKEY_MAX_MEMORY:-128mb}
+      - --maxmemory-policy
+      - volatile-lru
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/ladocs/yhub-valkey:/data
+    networks: [ladocs_private]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # Node-local object storage. Never published: the nginx media route proxies
+  # to it in-cluster with authorization headers signed by the backend.
+  minio:
+    image: ${LADOCS_MINIO_IMAGE:?LADOCS_MINIO_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${LADOCS_MINIO_MEMORY_LIMIT:-256m}
+    cpus: ${LADOCS_MINIO_CPUS:-0.4}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: ladocs
+      com.aichorage.component: app-ladocs-minio
+    environment:
+      MINIO_ROOT_USER: ${LADOCS_MINIO_ROOT_USER:-ladocs-admin}
+      MINIO_ROOT_PASSWORD: ${LADOCS_MINIO_ROOT_PASSWORD:?LADOCS_MINIO_ROOT_PASSWORD must be set}
+    entrypoint: ""
+    command: minio server /data
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/ladocs/minio:/data
+    networks: [ladocs_private]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 20s
+      retries: 30
+      start_period: 10s
+
+  # The Django backend. The wrapper entrypoint signs the RSA keypair, ensures
+  # the versioned media bucket exists, runs migrations, then execs uvicorn.
+  backend:
+    image: ${LADOCS_BACKEND_IMAGE:?LADOCS_BACKEND_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    # Runs as root: the image's unprivileged uid cannot write the root-owned
+    # bind-mounted /keys directory docker creates on first deployment. This
+    # matches the platform's other root-run app containers.
+    user: "0:0"
+    mem_limit: ${LADOCS_BACKEND_MEMORY_LIMIT:-512m}
+    cpus: ${LADOCS_BACKEND_CPUS:-0.75}
+    pids_limit: ${LADOCS_BACKEND_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: ladocs
+      com.aichorage.component: app-ladocs-backend
+    environment:
+      DJANGO_SETTINGS_MODULE: impress.settings
+      DJANGO_CONFIGURATION: Production
+      DJANGO_ALLOWED_HOSTS: ${LADOCS_SITE_HOST:?LADOCS_SITE_HOST must be set}
+      DJANGO_SECRET_KEY: ${LADOCS_DJANGO_SECRET_KEY:?LADOCS_DJANGO_SECRET_KEY must be set}
+      PYTHONPATH: /app
+      WEB_CONCURRENCY: ${LADOCS_BACKEND_WORKERS:-2}
+      LOGGING_LEVEL_HANDLERS_CONSOLE: ERROR
+      LOGGING_LEVEL_LOGGERS_ROOT: INFO
+      LOGGING_LEVEL_LOGGERS_APP: INFO
+      DB_HOST: postgresql
+      DB_NAME: docs
+      DB_USER: docs
+      DB_PASSWORD: ${LADOCS_DB_PASSWORD:?LADOCS_DB_PASSWORD must be set}
+      DB_PORT: "5432"
+      REDIS_URL: redis://redis:6379/2
+      JWT_PRIVATE_KEY_FILE: /keys/private.pem
+      YHUB_API_BASE_URL: http://yhub:3002
+      Y_PROVIDER_API_BASE_URL: http://y-provider:4444/api/
+      Y_PROVIDER_API_KEY: ${LADOCS_Y_PROVIDER_API_KEY:?LADOCS_Y_PROVIDER_API_KEY must be set}
+      AWS_S3_ENDPOINT_URL: http://minio:9000
+      AWS_S3_ACCESS_KEY_ID: ${LADOCS_MINIO_ROOT_USER:-ladocs-admin}
+      AWS_S3_SECRET_ACCESS_KEY: ${LADOCS_MINIO_ROOT_PASSWORD:?LADOCS_MINIO_ROOT_PASSWORD must be set}
+      AWS_S3_REGION_NAME: us-east-1
+      AWS_S3_SIGNATURE_VERSION: s3v4
+      AWS_STORAGE_BUCKET_NAME: ${LADOCS_BUCKET_NAME:-ladocs-media}
+      MEDIA_BASE_URL: ${LADOCS_SITE:?LADOCS_SITE must be set}
+      OIDC_OP_JWKS_ENDPOINT: https://auther.aichorage.de/jwks.json
+      OIDC_OP_AUTHORIZATION_ENDPOINT: https://auther.aichorage.de/api/oidc/authorization
+      OIDC_OP_TOKEN_ENDPOINT: https://auther.aichorage.de/api/oidc/token
+      OIDC_OP_USER_ENDPOINT: https://auther.aichorage.de/api/oidc/userinfo
+      OIDC_RP_CLIENT_ID: ladocs
+      OIDC_RP_CLIENT_SECRET: ${LADOCS_OIDC_RP_CLIENT_SECRET:?LADOCS_OIDC_RP_CLIENT_SECRET must be set}
+      OIDC_RP_SIGN_ALGO: RS256
+      OIDC_RP_SCOPES: openid email profile
+      LOGIN_REDIRECT_URL: ${LADOCS_SITE:?LADOCS_SITE must be set}
+      LOGIN_REDIRECT_URL_FAILURE: ${LADOCS_SITE:?LADOCS_SITE must be set}
+      LOGOUT_REDIRECT_URL: ${LADOCS_SITE:?LADOCS_SITE must be set}
+      OIDC_REDIRECT_ALLOWED_HOSTS: '["${LADOCS_SITE:?}"]'
+      AI_FEATURE_ENABLED: ${LADOCS_AI_FEATURES_ENABLED:-false}
+      AI_FEATURE_BLOCKNOTE_ENABLED: ${LADOCS_AI_BLOCKNOTE_ENABLED:-false}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/ladocs/keys:/keys
+      - ./entrypoint-backend.sh:/ladocs/entrypoint-backend.sh:ro
+      - ./bootstrap_s3.py:/ladocs/bootstrap_s3.py:ro
+    entrypoint: ["/bin/sh", "/ladocs/entrypoint-backend.sh"]
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    networks: [ladocs_private]
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check"]
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 120s
+
+  # The collaboration server. Its wrapper entrypoint signs its own RSA keypair
+  # and creates its database schema (idempotent) before starting the server.
+  yhub:
+    image: ${LADOCS_YHUB_IMAGE:?LADOCS_YHUB_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    user: "0:0"
+    mem_limit: ${LADOCS_YHUB_MEMORY_LIMIT:-256m}
+    cpus: ${LADOCS_YHUB_CPUS:-0.5}
+    pids_limit: ${LADOCS_YHUB_PIDS_LIMIT:-192}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: ladocs
+      com.aichorage.component: app-ladocs-yhub
+    environment:
+      PORT: "3002"
+      REDIS: redis://yhub-valkey:6379
+      REDIS_PREFIX: yhub
+      POSTGRES: postgres://docs:${LADOCS_DB_PASSWORD:?LADOCS_DB_PASSWORD must be set}@postgresql:5432/yhub
+      COLLABORATION_BACKEND_BASE_URL: http://backend:8000
+      COLLABORATION_SERVER_ORIGIN: ${LADOCS_SITE:?LADOCS_SITE must be set}
+      Y_PROVIDER_API_KEY: ${LADOCS_Y_PROVIDER_API_KEY:?LADOCS_Y_PROVIDER_API_KEY must be set}
+      YHUB_JWT_PRIVATE_KEY_FILE: /keys/yhub-private.pem
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/ladocs/keys:/keys
+      - ./entrypoint-yhub.sh:/ladocs/entrypoint-yhub.sh:ro
+    entrypoint: ["/bin/sh", "/ladocs/entrypoint-yhub.sh"]
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      yhub-valkey:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks: [ladocs_private]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3002/collaboration/ready/v1').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # Conversion service (markdown, html, pdf, docx). Nothing routes to it from
+  # the outside; the backend calls it in-cluster.
+  y-provider:
+    image: ${LADOCS_YPROVIDER_IMAGE:?LADOCS_YPROVIDER_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${LADOCS_YPROVIDER_MEMORY_LIMIT:-256m}
+    cpus: ${LADOCS_YPROVIDER_CPUS:-0.5}
+    pids_limit: ${LADOCS_YPROVIDER_PIDS_LIMIT:-192}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: ladocs
+      com.aichorage.component: app-ladocs-y-provider
+    environment:
+      Y_PROVIDER_API_KEY: ${LADOCS_Y_PROVIDER_API_KEY:?LADOCS_Y_PROVIDER_API_KEY must be set}
+      COLLABORATION_BACKEND_BASE_URL: http://backend:8000
+      COLLABORATION_SERVER_ORIGIN: ${LADOCS_SITE:?LADOCS_SITE must be set}
+      COLLABORATION_LOGGING: "false"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [ladocs_private]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4444/ping').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # nginx proxy + static editor. The only edge-facing service: the follower
+  # Caddy origin route targets this alias on the shared platform network.
+  ladocs-frontend:
+    image: ${LADOCS_FRONTEND_IMAGE:?LADOCS_FRONTEND_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    user: "101"
+    mem_limit: ${LADOCS_FRONTEND_MEMORY_LIMIT:-48m}
+    cpus: ${LADOCS_FRONTEND_CPUS:-0.15}
+    pids_limit: ${LADOCS_FRONTEND_PIDS_LIMIT:-96}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: ladocs
+      com.aichorage.component: app-ladocs-frontend
+    environment:
+      BACKEND_HOST: backend
+      FRONTEND_HOST: ladocs-frontend
+      YHUB_HOST: yhub
+      S3_HOST: minio:9000
+      BUCKET_NAME: ${LADOCS_BUCKET_NAME:-ladocs-media}
+    volumes:
+      - ./nginx/docs.conf.template:/etc/nginx/templates/docs.conf.template:ro
+    entrypoint: ["/docker-entrypoint.sh"]
+    command: ["nginx", "-g", "daemon off;"]
+    depends_on:
+      backend:
+        condition: service_healthy
+      yhub:
+        condition: service_healthy
+    networks: [ladocs_private, platform_edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8083/ || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+networks:
+  ladocs_private:
+    name: app-ladocs_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

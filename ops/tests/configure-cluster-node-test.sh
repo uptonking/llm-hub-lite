@@ -25,8 +25,12 @@ make_fixture() {
 	mv "$fixture/config/cluster/apps/flowy.policy.tmp" "$fixture/config/cluster/apps/flowy.policy"
 	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/verge3.policy" >"$fixture/config/cluster/apps/verge3.policy.tmp"
 	mv "$fixture/config/cluster/apps/verge3.policy.tmp" "$fixture/config/cluster/apps/verge3.policy"
-	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/verge5.policy" >"$fixture/config/cluster/apps/verge5.policy.tmp"
-	mv "$fixture/config/cluster/apps/verge5.policy.tmp" "$fixture/config/cluster/apps/verge5.policy"
+sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/verge5.policy" >"$fixture/config/cluster/apps/verge5.policy.tmp"
+mv "$fixture/config/cluster/apps/verge5.policy.tmp" "$fixture/config/cluster/apps/verge5.policy"
+# This reduced inventory has no worker-5, so the Ladocs consumer singleton is
+# re-pointed like Wabase instead of its production placement.
+sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/ladocs.policy" >"$fixture/config/cluster/apps/ladocs.policy.tmp"
+mv "$fixture/config/cluster/apps/ladocs.policy.tmp" "$fixture/config/cluster/apps/ladocs.policy"
 	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/verge-relay.policy" >"$fixture/config/cluster/apps/verge-relay.policy.tmp"
 	mv "$fixture/config/cluster/apps/verge-relay.policy.tmp" "$fixture/config/cluster/apps/verge-relay.policy"
 	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/wabase.policy" >"$fixture/config/cluster/apps/wabase.policy.tmp"

@@ -122,6 +122,13 @@ AUTHER_OIDC_HMAC_SECRET=fedcba9876543210fedcba9876543210fedcba9876543210fedcba98
 AUTHER_BOOTSTRAP_ADMIN_PASSWORD=test-auther-admin-password-0123456789abcdef
 AUTHER_OIDC_LADOCS_CLIENT_SECRET=test-auther-ladocs-client-secret-0123456789abcdef
 EOF
+cat >"$tmp/config/ladocs.env" <<'EOF'
+LADOCS_DB_PASSWORD=0123456789abcdef0123456789abcdef
+LADOCS_DJANGO_SECRET_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+LADOCS_MINIO_ROOT_PASSWORD=fedcba9876543210fedcba9876543210
+LADOCS_Y_PROVIDER_API_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+LADOCS_OIDC_RP_CLIENT_SECRET=test-ladocs-oidc-client-secret-0123456789abcdef
+EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
 LEADER_PUBLIC_IP=192.0.2.10
@@ -134,6 +141,7 @@ NODE_AICHOROUTER_ORIGIN_HOST=worker2-aichorouter.example.invalid
 NODE_AICHOR_ORIGIN_HOST=worker2-aichor.example.invalid
 NODE_AICHOR1_ORIGIN_HOST=worker2-aichor1.example.invalid
 NODE_AUTHER_ORIGIN_HOST=worker2-auther.example.invalid
+NODE_LADOCS_ORIGIN_HOST=worker2-ladocs.example.invalid
 NODE_SEARX_ORIGIN_HOST=worker2-searx.example.invalid
 NODE_CURSORAPI_ORIGIN_HOST=worker2-cursorapi.example.invalid
 NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
@@ -185,6 +193,7 @@ case "$*" in
   *app-aichorouter*) printf 'aichorouter\nhealth-probe\n';;
   *app-aichor1*) printf 'aichor1\n';;
   *app-auther*) printf 'auther\n';;
+  *app-ladocs*) printf 'postgresql\nredis\nyhub-valkey\nminio\nbackend\nyhub\ny-provider\nladocs-frontend\n';;
   *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;

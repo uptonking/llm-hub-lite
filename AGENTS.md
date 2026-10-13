@@ -14,6 +14,15 @@ file authentication backend and SQLite storage, exposing `/.well-known/openid-co
 digests are generated on first start by an app-owned `entrypoint.sh` (authelia `crypto pair` / `crypto hash` CLI);
 registered relying parties live in the committed `clients.yml` (Authelia replaces lists on `--config` merge, so all
 clients occupy one file).
+Ladocs (La Suite Docs) is an enabled leader-proxy singleton on worker-5 at `ladocs.aichorage.de`, the
+collaborative document editor from Lasuite: nginx frontend proxy plus Django backend, yhub collaboration
+server, y-provider converter, and node-local stores (PostgreSQL with `docs` + `yhub` databases, Redis cache,
+durable yhub Valkey, silo object storage with the versioned `ladocs-media` bucket). It authenticates through
+Auther's `ladocs` OIDC client (shared `auther_ladocs_oidc_secret` repository secret). All initialization runs
+inside the long-running containers via wrapper entrypoints (RSA keypair generation, idempotent `yarn
+init-db`, Django `migrate`, bucket+versioning bootstrap) so the project never keeps exited one-shot
+containers that would fail the platform's all-containers-healthy gate; memory limits keep the whole
+project under ~2GB to fit the 3GB budget VPS.
 Flowy is enabled on worker-3 alongside Verge3 (Hysteria) as a direct orphan service at `verge3.aichorage.de`. Wabase (Grist) is enabled as a SQLite-backed singleton on active worker-4; scheduled Restic work remains disabled there. Verge is an orphan service on worker-4 (`verge.aichorage.de`) and Verge2 is an orphan service on worker-2 (`verge2.aichorage.de`). Verge5 (Hysteria) is a direct orphan service on worker-5 at `verge5.aichorage.de`; that node has `BACKUP_ENABLED=false` and no scheduled Restic work. Verge-relay is a stateless direct UDP forwarder on worker-5 at `verge-relay.aichorage.de:2053` (hop range 31000-36000) that relays raw hysteria2 traffic to `verge3.aichorage.de:443` on worker-3; the forwarding is kernel-level iptables DNAT+MASQUERADE (`DIRECT_FORWARD_TARGET` manifest field) rather than the gost container, because gost's session-managed `udp://` handler fragments QUIC traffic; the gost container stays as a health-check placeholder. Relay clients keep `sni=verge3.aichorage.de` and the real verge3 ACME certificate still validates because DNAT never terminates TLS.
 Pigeon (OutlookEmail) is retained but disabled by committed policy. OpenObserve
 ( `observer` ) is a Leader-only foundation service; read-only socket-proxy and

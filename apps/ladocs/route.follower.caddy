@@ -1,0 +1,21 @@
+{$NODE_LADOCS_ORIGIN_HOST} {
+  # Private Leader-to-follower origin.
+  tls internal
+  import common_proxy
+  reverse_proxy ladocs-frontend:8083 {
+    flush_interval -1
+    # Long-lived collaboration websockets: let the upstream, not the proxy,
+    # decide when a connection ends.
+    transport http {
+      response_header_timeout 24h
+      read_timeout 24h
+      write_timeout 24h
+    }
+    # Keep generated URLs, cookies, and OIDC redirects on the public host.
+    header_up Host {$LADOCS_SITE_HOST}
+    header_up X-Forwarded-Host {$LADOCS_SITE_HOST}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+}
