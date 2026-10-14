@@ -217,7 +217,7 @@ case "$*" in
     if [ "${OBSERVER_SMOKE_EMPTY:-0}" = 1 ]; then
       printf '%s\n' '{"total":0,"hits":[]}'
     else
-      printf '%s\n' '{"total":5,"hits":[{"node_id":"leader"},{"node_id":"worker-1"},{"node_id":"worker-2"},{"node_id":"worker-3"},{"node_id":"worker-4"}]}'
+      printf '%s\n' '{"total":6,"hits":[{"node_id":"leader"},{"node_id":"worker-1"},{"node_id":"worker-2"},{"node_id":"worker-3"},{"node_id":"worker-4"},{"node_id":"worker-5"}]}'
     fi
     exit 0
     ;;

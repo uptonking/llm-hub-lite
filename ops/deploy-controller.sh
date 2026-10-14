@@ -134,30 +134,26 @@ image_required() {
 			foundation_enabled "$component" && return 0
 		done
 	done
-	while IFS= read -r descriptor; do
-		while IFS= read -r image_key; do
+	for descriptor in "$APP_RELEASE_ROOT"/apps/*/manifest.env; do
+		[[ -f "$descriptor" ]] || continue
+		for image_key in $(env_value IMAGE_KEYS "$descriptor"); do
 			[[ "$image_key" == "$key" ]] || continue
 			matched=1
 			app_id="$(env_value APP_ID "$descriptor")"
 			app_enabled_for_image "$app_id" && return 0
-		done < <(env_value IMAGE_KEYS "$descriptor" | tr ' ' '\n')
-	done < <(find "$APP_RELEASE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+		done
+	done
 	((matched == 0)) && die "image key is not declared by a manifest: $key"
 	return 1
 }
 image_key_declared() {
 	local key="$1" manifest image_key
-	for manifest in "$CONTROL_ROOT"/current/compose/foundation/manifests/*.env; do
+	for manifest in "$CONTROL_ROOT"/current/compose/foundation/manifests/*.env "$APP_RELEASE_ROOT"/apps/*/manifest.env; do
 		[[ -f "$manifest" ]] || continue
 		for image_key in $(env_value IMAGE_KEYS "$manifest"); do
 			[[ "$image_key" == "$key" ]] && return 0
 		done
 	done
-	while IFS= read -r manifest; do
-		while IFS= read -r image_key; do
-			[[ "$image_key" == "$key" ]] && return 0
-		done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
-	done < <(find "$APP_RELEASE_ROOT/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
 	return 1
 }
 prune_stale_image_keys() {
@@ -700,13 +696,13 @@ validate_application_image_locks() {
 		app="$(env_value APP_ID "$manifest")"
 		lock="$release/apps/$app/images.lock.env"
 		[[ -f "$lock" ]] || die "application image lock is missing: $app"
-		while IFS= read -r key; do
+		for key in $(env_value IMAGE_KEYS "$manifest"); do
 			[[ -n "$key" ]] || continue
 			image="$(env_value "$key" "$release/ops/images.apps.prod.env")"
 			lock_image="$(env_value "$key" "$lock")"
 			[[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] || die "canonical application image is not digest-pinned: $app/$key"
 			[[ "$lock_image" == "$image" ]] || die "application image lock differs from the canonical manifest: $app/$key"
-		done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
+		done
 		while IFS= read -r line || [[ -n "$line" ]]; do
 			case "$line" in '' | \#*) continue ;; *=*) lock_key="${line%%=*}" ;; *) die "invalid application image lock entry: $lock" ;; esac
 			csv_contains "$(env_value IMAGE_KEYS "$manifest" | tr ' ' ',')" "$lock_key" || die "undeclared image key in application lock: $app/$lock_key"
@@ -839,12 +835,12 @@ changed_foundation_projects() {
 			[[ "$payload" =~ ^[A-Za-z0-9._-]+$ ]] || die "unsafe relative foundation payload in $compose: $payload"
 			cmp -s "$release/compose/foundation/$payload" "$FOUNDATION_ROOT/$payload" || projects="$(append_csv_unique "$projects" "$component")"
 		done < <(grep -oE '\./[A-Za-z0-9._-]+:' "$release/compose/foundation/$compose" 2>/dev/null | sort -u || true)
-		while IFS= read -r key; do
+		for key in $(env_value IMAGE_KEYS "$manifest"); do
 			[[ -n "$key" ]] || continue
 			candidate_image="$(env_value "$key" "$release/ops/images.foundation.prod.env")"
 			installed_image="$(env_value "$key" "$FOUNDATION_IMAGE_ENV")"
 			[[ "$candidate_image" == "$installed_image" ]] || projects="$(append_csv_unique "$projects" "$component")"
-		done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
+		done
 	done < <(find "$release/compose/foundation/manifests" -mindepth 1 -maxdepth 1 -type f -name '*.env' -print | sort)
 	# Keep removed components in the transaction list. They are stopped before
 	# installation; if a later step fails, rollback restores their manifests and
@@ -990,7 +986,7 @@ install_application_image_lock() {
 	install -d -m 700 "$(dirname "$APP_IMAGE_ENV")"
 	tmp="$(mktemp "${APP_IMAGE_ENV}.tmp.XXXXXX")"
 	[[ -f "$APP_IMAGE_ENV" ]] && cp "$APP_IMAGE_ENV" "$tmp"
-	while IFS= read -r key; do
+	for key in $(env_value IMAGE_KEYS "$manifest"); do
 		[[ -n "$key" ]] || continue
 		image="$(env_value "$key" "$lock")"
 		[[ -n "$image" ]] || die "application image lock is missing $key: $app"
@@ -998,7 +994,7 @@ install_application_image_lock() {
 		sed "/^${key}=/d" "$tmp" >"$next"
 		printf '%s=%s\n' "$key" "$image" >>"$next"
 		mv -f -- "$next" "$tmp"
-	done < <(env_value IMAGE_KEYS "$manifest" | tr ' ' '\n')
+	done
 	chmod 600 "$tmp"
 	mv -f -- "$tmp" "$APP_IMAGE_ENV"
 }
