@@ -189,13 +189,19 @@ while IFS= read -r manifest; do
 			printf 'configure-firewall: direct listener is not allowlisted: %s/%s (%s)\n' "$proto" "$port" "$app" >&2
 			exit 1
 		}
-		iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j RETURN
+		if [[ -n "$forward_target" ]]; then
+			iptables -C "$chain" -i "$PUBLIC_INTERFACE" -d "$forward_ip" -p "$proto" --dport "$forward_port" -j ACCEPT 2>/dev/null ||
+				iptables -I "$chain" 1 -i "$PUBLIC_INTERFACE" -d "$forward_ip" -p "$proto" --dport "$forward_port" -j ACCEPT
+		else
+			iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j RETURN
+		fi
 		ufw allow "$port/$proto" comment "Direct $app" >/dev/null
 		# Kernel-level DNAT to a remote target bypasses docker-proxy and the
 		# container entirely, which is required for QUIC traffic that session-
 		# managed UDP relays (e.g. gost udp://) fragment. The container stays
 		# up as a health-check placeholder; traffic never enters it.
 		if [[ -n "$forward_target" ]]; then
+			command -v sysctl >/dev/null 2>&1 && sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 			iptables -t nat -C PREROUTING -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j DNAT --to-destination "$forward_ip:$forward_port" -m comment --comment llm-hub-lite-forward 2>/dev/null ||
 				iptables -t nat -I PREROUTING 1 -i "$PUBLIC_INTERFACE" -p "$proto" --dport "$port" -j DNAT --to-destination "$forward_ip:$forward_port" -m comment --comment llm-hub-lite-forward
 			iptables -t nat -C POSTROUTING -d "$forward_ip" -p "$proto" --dport "$forward_port" -j MASQUERADE -m comment --comment llm-hub-lite-forward 2>/dev/null ||

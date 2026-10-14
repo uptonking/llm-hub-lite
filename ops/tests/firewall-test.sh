@@ -115,6 +115,11 @@ run_firewall >/dev/null
 grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 443 -j DNAT --to-destination 192.0.2.50:443 -m comment --comment llm-hub-lite-forward' "$FIREWALL_LOG"
 grep -Fqx 'iptables -t nat -A POSTROUTING -d 192.0.2.50 -p udp --dport 443 -j MASQUERADE -m comment --comment llm-hub-lite-forward' "$FIREWALL_LOG"
 grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 20000:30000 -j DNAT --to-destination 192.0.2.50:443 -m comment --comment llm-hub-lite-hop' "$FIREWALL_LOG"
+grep -Fqx 'iptables -I LLM_HUB_LITE_DOCKER 1 -i eth0 -d 192.0.2.50 -p udp --dport 443 -j ACCEPT' "$FIREWALL_LOG"
+if grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p udp --dport 443 -j RETURN' "$FIREWALL_LOG"; then
+	printf 'firewall used RETURN instead of ACCEPT for forwarded traffic\n' >&2
+	exit 1
+fi
 if grep -Fq 'REDIRECT --to-ports 443' "$FIREWALL_LOG"; then
 	printf 'firewall used REDIRECT instead of DNAT when DIRECT_FORWARD_TARGET is set\n' >&2
 	exit 1

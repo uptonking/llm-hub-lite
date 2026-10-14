@@ -153,7 +153,11 @@ cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"${COMPOSE_CALL_LOG:?}"
 case "$*" in
-  *"-p app-verge4 "*" ps --status running --services"*|*"-p app-verge2 "*" ps --status running --services"*|*"-p app-verge3 "*" ps --status running --services"*|*"-p app-verge5 "*" ps --status running --services"*|*"-p app-verge-relay "*" ps --status running --services"*) printf 'verge\n'; exit 0;;
+  *"-p app-verge4 "*" ps --status running --services"*) printf 'verge4\n'; exit 0;;
+  *"-p app-verge2 "*" ps --status running --services"*) printf 'verge2\n'; exit 0;;
+  *"-p app-verge3 "*" ps --status running --services"*) printf 'verge3\n'; exit 0;;
+  *"-p app-verge5 "*" ps --status running --services"*) printf 'verge5\n'; exit 0;;
+  *"-p app-verge-relay "*" ps --status running --services"*) printf 'verge-relay\n'; exit 0;;
   *"-p app-verge4 "*" ps -q verge4"*|*"-p app-verge2 "*" ps -q verge2"*|*"-p app-verge3 "*" ps -q verge3"*|*"-p app-verge5 "*" ps -q verge5"*|*"-p app-verge-relay "*" ps -q verge-relay"*) printf 'verge-container\n'; exit 0;;
   *"-p app-verge4 "*" port --protocol udp verge4 443"*|*"-p app-verge2 "*" port --protocol udp verge2 443"*|*"-p app-verge3 "*" port --protocol udp verge3 443"*|*"-p app-verge5 "*" port --protocol udp verge5 443"*) printf '%s\n' "${DIRECT_PORT_BIND:-0.0.0.0:443}"; exit 0;;
   *"-p app-verge-relay "*" port --protocol udp verge-relay 2053"*) printf '%s\n' "${VERGE_RELAY_PORT_BIND:-0.0.0.0:2053}"; exit 0;;
