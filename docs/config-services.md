@@ -789,7 +789,7 @@ that listener itself and no Leader Caddy route is created; the protocol/port
 must also appear in the cluster policy's `DIRECT_PORT_ALLOWLIST`. The
 `platformctl direct-smoke` operation verifies the selected Compose service,
 health state, and exact published host-port mapping. Direct-only manifests may
-not declare proxy route groups. Hysteria `verge` is the first direct
+not declare proxy route groups. Hysteria `verge4` is a direct
 application and defaults to `worker-4`; its Cloudflare record must remain
 DNS-only because UDP/443 is served by the follower. Follower Caddy's optional
 HTTP/3 listener is bound to loopback on the reviewed

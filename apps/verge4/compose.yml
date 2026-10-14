@@ -1,0 +1,36 @@
+name: app-verge4
+services:
+  verge4:
+    image: ${VERGE4_IMAGE:?VERGE4_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    mem_limit: ${VERGE4_MEMORY_LIMIT:-512m}
+    cpus: ${VERGE4_CPUS:-0.5}
+    pids_limit: ${VERGE4_PIDS_LIMIT:-64}
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: verge4
+      com.aichorage.component: app-verge4
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+    environment:
+      HYSTERIA_ACME_DIR: /var/lib/hysteria/acme
+      HYSTERIA_DISABLE_UPDATE_CHECK: "true"
+      HYSTERIA_LOG_LEVEL: ${VERGE4_LOG_LEVEL:-warn}
+      GOMAXPROCS: ${VERGE4_GOMAXPROCS:-1}
+      GOMEMLIMIT: ${VERGE4_GOMEMLIMIT:-450MiB}
+    ports:
+      - "0.0.0.0:443:443/udp"
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/verge4:/var/lib/hysteria
+      - ${RUNTIME_CONFIG_FILE:-/etc/llm-hub-lite/runtime/verge4/config.yaml}:/etc/hysteria/config.yaml:ro
+    command: ["server", "-c", "/etc/hysteria/config.yaml"]

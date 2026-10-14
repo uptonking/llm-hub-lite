@@ -4,20 +4,20 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/control/current/config/cluster/apps" "$tmp/config" "$tmp/control/current/apps/verge"
+mkdir -p "$tmp/bin" "$tmp/control/current/config/cluster/apps" "$tmp/config" "$tmp/control/current/apps/verge4"
 
 cat >"$tmp/control/current/config/cluster/policy.env" <<'EOF'
 LEADER_NODE_ID=leader
 DIRECT_PORT_ALLOWLIST=udp/443,udp/20000-30000
 EOF
-cat >"$tmp/control/current/config/cluster/apps/verge.policy" <<'EOF'
+cat >"$tmp/control/current/config/cluster/apps/verge4.policy" <<'EOF'
 ENABLED=true
 NODES=worker-1
 EOF
-cat >"$tmp/control/current/apps/verge/manifest.env" <<'EOF'
-APP_ID=verge
+cat >"$tmp/control/current/apps/verge4/manifest.env" <<'EOF'
+APP_ID=verge4
 INGRESS_MODE=direct
-POLICY_FILE=cluster/apps/verge.policy
+POLICY_FILE=cluster/apps/verge4.policy
 DIRECT_LISTENERS=udp:443:443
 DIRECT_PORT_RANGES=udp:20000:30000:443
 EOF
@@ -100,7 +100,7 @@ if grep -Eq '([0-9]{1,3}\.){3}[0-9]{1,3}' <<<"$firewall_output"; then
 	printf 'firewall logged the private Leader IP\n' >&2
 	exit 1
 fi
-grep -Fqx 'ufw allow 20000:30000/udp comment Direct hop verge' "$FIREWALL_LOG"
+grep -Fqx 'ufw allow 20000:30000/udp comment Direct hop verge4' "$FIREWALL_LOG"
 grep -Fqx 'iptables -t nat -S PREROUTING' "$FIREWALL_LOG"
 grep -Fqx 'iptables -t nat -C PREROUTING -i eth0 -p udp --dport 20000:30000 -j REDIRECT --to-ports 443 -m comment --comment llm-hub-lite-hop' "$FIREWALL_LOG"
 grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 20000:30000 -j REDIRECT --to-ports 443 -m comment --comment llm-hub-lite-hop' "$FIREWALL_LOG"
@@ -108,8 +108,8 @@ grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 20000:30000 -j
 # DIRECT_FORWARD_TARGET switches the listener and hop-range rules from
 # REDIRECT-to-docker-proxy to kernel-level DNAT+MASQUERADE, which is required
 # for QUIC traffic that session-managed UDP relays fragment.
-printf 'APP_ID=verge\nINGRESS_MODE=direct\nPOLICY_FILE=cluster/apps/verge.policy\nDIRECT_LISTENERS=udp:443:443\nDIRECT_PORT_RANGES=udp:20000:30000:443\nDIRECT_FORWARD_TARGET=192.0.2.50:443\n' \
-	>"$tmp/control/current/apps/verge/manifest.env"
+printf 'APP_ID=verge4\nINGRESS_MODE=direct\nPOLICY_FILE=cluster/apps/verge4.policy\nDIRECT_LISTENERS=udp:443:443\nDIRECT_PORT_RANGES=udp:20000:30000:443\nDIRECT_FORWARD_TARGET=192.0.2.50:443\n' \
+	>"$tmp/control/current/apps/verge4/manifest.env"
 : >"$FIREWALL_LOG"
 run_firewall >/dev/null
 grep -Fqx 'iptables -t nat -I PREROUTING 1 -i eth0 -p udp --dport 443 -j DNAT --to-destination 192.0.2.50:443 -m comment --comment llm-hub-lite-forward' "$FIREWALL_LOG"
@@ -129,15 +129,15 @@ declare -a invalid_ranges=(
 	'udp:0:30000:443'      # zero first port
 )
 for invalid in "${invalid_ranges[@]}"; do
-	printf 'APP_ID=verge\nINGRESS_MODE=direct\nPOLICY_FILE=cluster/apps/verge.policy\nDIRECT_LISTENERS=udp:443:443\nDIRECT_PORT_RANGES=%s\n' "$invalid" \
-		>"$tmp/control/current/apps/verge/manifest.env"
+	printf 'APP_ID=verge4\nINGRESS_MODE=direct\nPOLICY_FILE=cluster/apps/verge4.policy\nDIRECT_LISTENERS=udp:443:443\nDIRECT_PORT_RANGES=%s\n' "$invalid" \
+		>"$tmp/control/current/apps/verge4/manifest.env"
 	if run_firewall >/dev/null 2>&1; then
 		printf 'firewall accepted invalid direct port range: %s\n' "$invalid" >&2
 		exit 1
 	fi
 done
-printf 'APP_ID=verge\nINGRESS_MODE=direct\nPOLICY_FILE=cluster/apps/verge.policy\nDIRECT_LISTENERS=udp:443:443\nDIRECT_PORT_RANGES=udp:20000:30000:443\n' \
-	>"$tmp/control/current/apps/verge/manifest.env"
+printf 'APP_ID=verge4\nINGRESS_MODE=direct\nPOLICY_FILE=cluster/apps/verge4.policy\nDIRECT_LISTENERS=udp:443:443\nDIRECT_PORT_RANGES=udp:20000:30000:443\n' \
+	>"$tmp/control/current/apps/verge4/manifest.env"
 
 for invalid_ip in missing 999.0.2.10 192.0.2.10. 192.0.2.10.1 192.0.2.x; do
 	sed '/^LEADER_PUBLIC_IP=/d' "$tmp/config/node.env" >"$tmp/config/node.invalid"

@@ -46,12 +46,12 @@ grep -R -Fq "PLATFORM_CONTROLLER_IMAGE: $runner_image" "$base/workflows"
 # Disabled direct applications are reconciled from the Leader only so stale
 # follower listeners can be stopped; they must never emit a direct-publish job.
 disabled_direct="$(make_fixture disabled-direct)"
-sed 's/^ENABLED=.*/ENABLED=false/' "$disabled_direct/config/cluster/apps/verge.policy" >"$disabled_direct/config/cluster/apps/verge.policy.tmp"
-mv "$disabled_direct/config/cluster/apps/verge.policy.tmp" "$disabled_direct/config/cluster/apps/verge.policy"
+sed 's/^ENABLED=.*/ENABLED=false/' "$disabled_direct/config/cluster/apps/verge4.policy" >"$disabled_direct/config/cluster/apps/verge4.policy.tmp"
+mv "$disabled_direct/config/cluster/apps/verge4.policy.tmp" "$disabled_direct/config/cluster/apps/verge4.policy"
 generate_fixture "$disabled_direct"
-[[ ! -e "$disabled_direct/workflows/direct-publish-verge.yml" ]]
-[[ -f "$disabled_direct/workflows/consumer-publish-verge.yml" ]]
-grep -Fq 'CONSUMER_APP_ID=verge /usr/local/bin/platform-submit consumer-publish' "$disabled_direct/workflows/consumer-publish-verge.yml"
+[[ ! -e "$disabled_direct/workflows/direct-publish-verge4.yml" ]]
+[[ -f "$disabled_direct/workflows/consumer-publish-verge4.yml" ]]
+grep -Fq 'CONSUMER_APP_ID=verge4 /usr/local/bin/platform-submit consumer-publish' "$disabled_direct/workflows/consumer-publish-verge4.yml"
 grep -Fq 'CI_COMMIT_SHA must be a full 40-character lowercase commit SHA' "$base/workflows/consumer-publish-aichorouter.yml"
 grep -Fq 'CI_COMMIT_SHA must be a full 40-character lowercase commit SHA' "$base/workflows/control-sync-leader.yml"
 

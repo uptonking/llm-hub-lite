@@ -630,11 +630,11 @@ install_test_node leader
 
 # Direct/orphan smoke requires a public wildcard mapping, not merely the
 # expected port number. Verify both the successful and loopback-only cases.
-mkdir -p "$tmp/config/runtime/verge" "$tmp/app/current/apps/verge"
-printf 'runtime: test\n' >"$tmp/config/runtime/verge/config.yaml"
+mkdir -p "$tmp/config/runtime/verge4" "$tmp/app/current/apps/verge4"
+printf 'runtime: test\n' >"$tmp/config/runtime/verge4/config.yaml"
 install_test_node worker-4
-bash "$repo_root/ops/platformctl.sh" direct-smoke verge >/dev/null
-if DIRECT_PORT_BIND='127.0.0.1:443' bash "$repo_root/ops/platformctl.sh" direct-smoke verge >/dev/null 2>&1; then
+bash "$repo_root/ops/platformctl.sh" direct-smoke verge4 >/dev/null
+if DIRECT_PORT_BIND='127.0.0.1:443' bash "$repo_root/ops/platformctl.sh" direct-smoke verge4 >/dev/null 2>&1; then
 	printf 'direct smoke accepted a loopback-only listener\n' >&2
 	exit 1
 fi

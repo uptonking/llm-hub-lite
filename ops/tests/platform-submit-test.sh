@@ -48,7 +48,7 @@ fi
 grep -Fq -- 'PLATFORM_ONLY_APP_ID=' "$tmp/docker.log"
 
 : >"$tmp/firewall.log"
-FIREWALL_SCRIPT="$tmp/bin/firewall" DIRECT_APP_ID=verge bash "$repo_root/ops/platform-submit.sh" direct-publish "0123456789abcdef0123456789abcdef01234567"
+FIREWALL_SCRIPT="$tmp/bin/firewall" DIRECT_APP_ID=verge4 bash "$repo_root/ops/platform-submit.sh" direct-publish "0123456789abcdef0123456789abcdef01234567"
 grep -Fqx firewall "$tmp/firewall.log"
 
 if output="$(bash "$repo_root/ops/platform-submit.sh" deploy "0123456789abcdef" 2>&1)"; then

@@ -117,7 +117,7 @@ For an unhealthy project, inspect its Compose state and recent diagnostics:
 platformctl diagnose foundation
 platformctl diagnose consumers
 platformctl diagnose app:aichorouter
-platformctl diagnose app:verge
+platformctl diagnose app:verge4
 journalctl -u platform-recovery.service -n 200 --no-pager
 ```
 
