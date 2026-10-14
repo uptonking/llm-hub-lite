@@ -20,5 +20,5 @@ identity_providers:
           - 'email'
           - 'profile'
         authorization_policy: one_factor
-        consent_mode: auto
+        consent_mode: implicit
         token_endpoint_auth_method: client_secret_post
