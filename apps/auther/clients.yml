@@ -21,4 +21,4 @@ identity_providers:
           - 'profile'
         authorization_policy: one_factor
         consent_mode: auto
-        token_endpoint_auth_method: client_secret_basic
+        token_endpoint_auth_method: client_secret_post
