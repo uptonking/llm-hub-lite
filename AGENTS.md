@@ -28,7 +28,7 @@ Pigeon (OutlookEmail) is retained but disabled by committed policy. OpenObserve
 ( `observer` ) is a Leader-only foundation service; read-only socket-proxy and
 bounded Vector collectors run on every node and forward platform-labelled logs
 to the Leader.
-Legacy New API remains retained and disabled by policy. Aichor is a
+Legacy New API and legacy Verge remain retained and disabled by policy. Aichor is a
 repository-owned Paseo child image with durable single-node state and must
 recover from an unexpected VPS restart without losing completed conversations.
 
