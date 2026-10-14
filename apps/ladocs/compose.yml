@@ -140,7 +140,7 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: impress.settings
       DJANGO_CONFIGURATION: Production
-      DJANGO_ALLOWED_HOSTS: ${LADOCS_SITE_HOST:?LADOCS_SITE_HOST must be set},${NODE_LADOCS_ORIGIN_HOST:-localhost},ladocs-backend:8000
+      DJANGO_ALLOWED_HOSTS: ${LADOCS_SITE_HOST:?LADOCS_SITE_HOST must be set},${NODE_LADOCS_ORIGIN_HOST:-localhost},ladocs-backend,ladocs-frontend
       DJANGO_SECRET_KEY: ${LADOCS_DJANGO_SECRET_KEY:?LADOCS_DJANGO_SECRET_KEY must be set}
       PYTHONPATH: /app
       WEB_CONCURRENCY: ${LADOCS_BACKEND_WORKERS:-2}
@@ -217,7 +217,7 @@ services:
       REDIS: redis://yhub-valkey:6379
       REDIS_PREFIX: yhub
       POSTGRES: postgres://docs:${LADOCS_DB_PASSWORD:?LADOCS_DB_PASSWORD must be set}@postgresql:5432/yhub
-      COLLABORATION_BACKEND_BASE_URL: http://ladocs-backend:8000
+      COLLABORATION_BACKEND_BASE_URL: ${LADOCS_SITE:?LADOCS_SITE must be set}
       COLLABORATION_SERVER_ORIGIN: ${LADOCS_SITE:?LADOCS_SITE must be set}
       Y_PROVIDER_API_KEY: ${LADOCS_Y_PROVIDER_API_KEY:?LADOCS_Y_PROVIDER_API_KEY must be set}
       YHUB_JWT_PRIVATE_KEY_FILE: /keys/yhub-private.pem
@@ -254,7 +254,7 @@ services:
       com.aichorage.component: app-ladocs-y-provider
     environment:
       Y_PROVIDER_API_KEY: ${LADOCS_Y_PROVIDER_API_KEY:?LADOCS_Y_PROVIDER_API_KEY must be set}
-      COLLABORATION_BACKEND_BASE_URL: http://ladocs-backend:8000
+      COLLABORATION_BACKEND_BASE_URL: ${LADOCS_SITE:?LADOCS_SITE must be set}
       COLLABORATION_SERVER_ORIGIN: ${LADOCS_SITE:?LADOCS_SITE must be set}
       COLLABORATION_LOGGING: "false"
     depends_on:
