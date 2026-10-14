@@ -34,6 +34,28 @@ if [ ! -s /config/users_database.yml ]; then
 	log 'generated /config/users_database.yml'
 fi
 
+# Ensure collaborator account exists for multi-user collaboration and testing.
+if ! grep -q "^  collaborator:" /config/users_database.yml 2>/dev/null; then
+	[ -n "${AUTHER_BOOTSTRAP_ADMIN_PASSWORD:-}" ] || {
+		log 'AUTHER_BOOTSTRAP_ADMIN_PASSWORD is not set'
+		exit 1
+	}
+	digest="$(authelia crypto hash generate argon2 --password "$AUTHER_BOOTSTRAP_ADMIN_PASSWORD" --no-confirm | sed -n 's/^Digest: //p')"
+	[ -n "$digest" ] || {
+		log 'failed to generate the collaborator argon2 digest'
+		exit 1
+	}
+	{
+		printf '  collaborator:\n'
+		printf '    displayname: Collaborator\n'
+		printf '    password: %s\n' "$digest"
+		printf '    email: collaborator@aichorage.de\n'
+		printf '    groups:\n'
+		printf '      - users\n'
+	} >>/config/users_database.yml
+	log 'added collaborator account to /config/users_database.yml'
+fi
+
 # Idempotent RS256 signing key for OIDC ID tokens and the /jwks.json endpoint.
 if [ ! -s /config/oidc-rsa-private.pem ]; then
 	authelia crypto pair rsa generate --bits 2048 --directory /config --file.private-key oidc-rsa-private.pem --file.public-key oidc-rsa-public.pem >/dev/null
@@ -55,6 +77,7 @@ mkdir -p /run/auther
 # relying party's presented plaintext secret against this digest, so only the
 # hashed form ever reaches a file.
 cp /config-template/clients.yml /run/auther/clients.yml
+# shellcheck disable=SC2013
 for placeholder in $(sed -n 's/.*\(__AUTHER_OIDC_[A-Z0-9_]*_CLIENT_SECRET__\).*/\1/p' /run/auther/clients.yml | sort -u); do
 	var_name="${placeholder#__}"
 	var_name="${var_name%__}"
@@ -64,6 +87,7 @@ for placeholder in $(sed -n 's/.*\(__AUTHER_OIDC_[A-Z0-9_]*_CLIENT_SECRET__\).*/
 		exit 1
 	}
 	digest="$(authelia crypto hash generate pbkdf2 --password "$secret" --no-confirm | sed -n 's/^Digest: //p')"
+	# shellcheck disable=SC2016
 	case "$digest" in
 	'$pbkdf2-sha512$'*) ;;
 	*)
