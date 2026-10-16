@@ -25,6 +25,7 @@ services:
       DISABLE_SSH: ${GTEA_DISABLE_SSH:-true}
       LFS_START_SERVER: "false"
       DB_TYPE: sqlite3
+      GITEA__database__PATH: /data/gitea/gitea.db
       INSTALL_LOCK: "true"
       SECRET_KEY: ${GTEA_SECRET_KEY:?GTEA_SECRET_KEY must be set}
       DISABLE_REGISTRATION: ${GTEA_DISABLE_REGISTRATION:-false}
