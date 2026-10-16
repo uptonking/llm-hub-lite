@@ -32,11 +32,9 @@ for woodpecker_compose in "$repo_root"/compose/foundation/woodpecker-*.yml; do
 		exit 1
 	}
 done
-for node in leader worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do grep -q "^NODE_ID=$node$" "$repo_root/config/cluster/nodes/$node.env"; done
 grep -q '^NODE_STATE=active$' "$repo_root/config/cluster/nodes/worker-5.env"
 grep -q '^BACKUP_ENABLED=false$' "$repo_root/config/cluster/nodes/worker-5.env"
-grep -q '^NODE_STATE=active$' "$repo_root/config/cluster/nodes/worker-6.env"
-grep -q '^BACKUP_ENABLED=false$' "$repo_root/config/cluster/nodes/worker-6.env"
 if grep -R -q '^NODE_PUBLIC_IP=' "$repo_root/config/cluster/nodes"; then
 	printf 'committed node inventory contains a public IP field\n' >&2
 	exit 1
@@ -64,7 +62,7 @@ done
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/bootstrap-vps.sh"
 grep -Fq 'valid_mongo_uri()' "$repo_root/ops/configure-app-secrets.sh"
 grep -Fq 'write_secrets "$conditional_keys" "$runtime_file"' "$repo_root/ops/configure-app-secrets.sh"
-for pat in '^LEADER_NODE_ID=leader$' '^NODE_IDS=leader,worker-1,worker-2,worker-3,worker-4,worker-5,worker-6$' '^REPO_SLUG=uptonking/llm-hub-lite$'; do
+for pat in '^LEADER_NODE_ID=leader$' '^NODE_IDS=leader,worker-1,worker-2,worker-3,worker-4,worker-5$' '^REPO_SLUG=uptonking/llm-hub-lite$'; do
 	grep -q "$pat" "$repo_root/config/cluster/policy.env"
 done
 grep -q '^APP_ID=cpapi$' "$repo_root/apps/cpapi/manifest.env"
@@ -534,7 +532,7 @@ grep -Fq '[observer-collector-recent]' "$repo_root/ops/platformctl.sh"
 grep -Fq 'transition_begin' "$repo_root/ops/platformctl.sh"
 grep -Fq 'CONSUMER_APP_ID=cpapi /usr/local/bin/platform-submit consumer-stage' "$repo_root/.woodpecker/consumer-stage-cpapi-worker-1.yml"
 grep -Fq 'consumer-stage-cpapi-worker-1' "$repo_root/.woodpecker/consumer-publish-cpapi.yml"
-for node in leader worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do
 	[[ -f "$repo_root/.woodpecker/control-sync-$node.yml" ]]
 	grep -Fq "control-$([[ "$node" == leader ]] && printf sync || printf verify)" "$repo_root/.woodpecker/control-sync-$node.yml"
 done

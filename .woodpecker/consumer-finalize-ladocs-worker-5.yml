@@ -18,7 +18,6 @@ depends_on:
   - consumer-stop-ladocs-worker-2
   - consumer-stop-ladocs-worker-3
   - consumer-stop-ladocs-worker-4
-  - consumer-stop-ladocs-worker-6
   - control-sync-worker-5
   - name: foundation-reconcile-worker-5
     optional: true
