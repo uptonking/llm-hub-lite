@@ -8,6 +8,7 @@ grep -q '^APP_ID=openclouds$' "$app/manifest.env"
 grep -q '^UPSTREAM_MODE=singleton$' "$app/manifest.env"
 grep -q '^STATE_MODE=files$' "$app/manifest.env"
 grep -q '^HEALTH_URL=/status.php$' "$app/manifest.env"
+grep -q '^HEALTH_EXPECT=OpenCloud$' "$app/manifest.env"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/openclouds.policy"
 grep -q '^NODES=worker-2$' "$repo_root/config/cluster/apps/openclouds.policy"
 
