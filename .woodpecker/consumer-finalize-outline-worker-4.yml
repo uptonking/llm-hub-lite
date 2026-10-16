@@ -18,6 +18,7 @@ depends_on:
   - consumer-stop-outline-worker-2
   - consumer-stop-outline-worker-3
   - consumer-stop-outline-worker-5
+  - consumer-stop-outline-worker-6
   - control-sync-worker-4
   - name: foundation-reconcile-worker-4
     optional: true

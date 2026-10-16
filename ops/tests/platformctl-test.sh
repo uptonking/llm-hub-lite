@@ -162,9 +162,10 @@ case "$*" in
   *"-p app-verge2 "*" ps --status running --services"*) printf 'verge2\n'; exit 0;;
   *"-p app-verge3 "*" ps --status running --services"*) printf 'verge3\n'; exit 0;;
   *"-p app-verge5 "*" ps --status running --services"*) printf 'verge5\n'; exit 0;;
+  *"-p app-verge6 "*" ps --status running --services"*) printf 'verge6\n'; exit 0;;
   *"-p app-verge-relay "*" ps --status running --services"*) printf 'verge-relay\n'; exit 0;;
-  *"-p app-verge4 "*" ps -q verge4"*|*"-p app-verge2 "*" ps -q verge2"*|*"-p app-verge3 "*" ps -q verge3"*|*"-p app-verge5 "*" ps -q verge5"*|*"-p app-verge-relay "*" ps -q verge-relay"*) printf 'verge-container\n'; exit 0;;
-  *"-p app-verge4 "*" port --protocol udp verge4 443"*|*"-p app-verge2 "*" port --protocol udp verge2 443"*|*"-p app-verge3 "*" port --protocol udp verge3 443"*|*"-p app-verge5 "*" port --protocol udp verge5 443"*) printf '%s\n' "${DIRECT_PORT_BIND:-0.0.0.0:443}"; exit 0;;
+  *"-p app-verge4 "*" ps -q verge4"*|*"-p app-verge2 "*" ps -q verge2"*|*"-p app-verge3 "*" ps -q verge3"*|*"-p app-verge5 "*" ps -q verge5"*|*"-p app-verge6 "*" ps -q verge6"*|*"-p app-verge-relay "*" ps -q verge-relay"*) printf 'verge-container\n'; exit 0;;
+  *"-p app-verge4 "*" port --protocol udp verge4 443"*|*"-p app-verge2 "*" port --protocol udp verge2 443"*|*"-p app-verge3 "*" port --protocol udp verge3 443"*|*"-p app-verge5 "*" port --protocol udp verge5 443"*|*"-p app-verge6 "*" port --protocol udp verge6 443"*) printf '%s\n' "${DIRECT_PORT_BIND:-0.0.0.0:443}"; exit 0;;
   *"-p app-verge-relay "*" port --protocol udp verge-relay 2053"*) printf '%s\n' "${VERGE_RELAY_PORT_BIND:-0.0.0.0:2053}"; exit 0;;
   *" ps --all -q observer-log-shipper"*) printf 'observer-log-shipper\n'; exit 0;;
   *" ps --all -q observer-controller"*) printf 'observer-controller\n'; exit 0;;
@@ -206,6 +207,7 @@ case "$*" in
   *app-paperlex*) printf 'paperlex\npaperlex-redis\n';;
   *app-filer*) printf 'filer\n';;
   *app-openclouds*) printf 'openclouds\n';;
+  *app-gtea*) printf 'gtea\n';;
   *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
@@ -216,6 +218,7 @@ case "$*" in
   *app-verge-relay*) printf 'verge-relay\n';;
   *app-verge3*) printf 'verge3\n';;
   *app-verge5*) printf 'verge5\n';;
+  *app-verge6*) printf 'verge6\n';;
   *app-verge2*) printf 'verge2\n';;
   *app-verge4*) printf 'verge4\n';;
 esac
@@ -229,7 +232,7 @@ case "$*" in
     if [ "${OBSERVER_SMOKE_EMPTY:-0}" = 1 ]; then
       printf '%s\n' '{"total":0,"hits":[]}'
     else
-      printf '%s\n' '{"total":6,"hits":[{"node_id":"leader"},{"node_id":"worker-1"},{"node_id":"worker-2"},{"node_id":"worker-3"},{"node_id":"worker-4"},{"node_id":"worker-5"}]}'
+      printf '%s\n' '{"total":7,"hits":[{"node_id":"leader"},{"node_id":"worker-1"},{"node_id":"worker-2"},{"node_id":"worker-3"},{"node_id":"worker-4"},{"node_id":"worker-5"},{"node_id":"worker-6"}]}'
     fi
     exit 0
     ;;
