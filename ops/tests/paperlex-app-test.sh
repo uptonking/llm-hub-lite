@@ -13,8 +13,14 @@ grep -q '^NODES=worker-2$' "$repo_root/config/cluster/apps/paperlex.policy"
 
 # Verify Compose limits and constraints
 # shellcheck disable=SC2016
-grep -Fq 'mem_limit: ${PAPERLEX_MEMORY_LIMIT:-1024m}' "$app/compose.yml"
+grep -Fq 'mem_limit: ${PAPERLEX_MEMORY_LIMIT:-1280m}' "$app/compose.yml"
 grep -Fq 'PAPERLESS_DBENGINE: sqlite' "$app/compose.yml"
+# shellcheck disable=SC2016
+grep -Fq 'PAPERLESS_DB_TIMEOUT: ${PAPERLEX_DB_TIMEOUT:-60}' "$app/compose.yml"
+# shellcheck disable=SC2016
+grep -Fq 'PAPERLESS_OCR_MODE: ${PAPERLEX_OCR_MODE:-auto}' "$app/compose.yml"
+[[ -x "$app/init-superuser.sh" ]]
+grep -Fq 'init-superuser.sh:/custom-cont-init.d/01-ensure-superuser.sh:ro' "$app/compose.yml"
 
 # Verify Caddy reverse proxies
 grep -Fq 'reverse_proxy paperlex:8000' "$app/route.follower.caddy"

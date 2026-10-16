@@ -31,7 +31,7 @@ services:
     image: ${PAPERLEX_IMAGE:?PAPERLEX_IMAGE must be digest-pinned}
     restart: unless-stopped
     stop_grace_period: 60s
-    mem_limit: ${PAPERLEX_MEMORY_LIMIT:-1024m}
+    mem_limit: ${PAPERLEX_MEMORY_LIMIT:-1280m}
     cpus: ${PAPERLEX_CPUS:-0.85}
     pids_limit: ${PAPERLEX_PIDS_LIMIT:-256}
     labels:
@@ -41,10 +41,10 @@ services:
     environment:
       PAPERLESS_REDIS: redis://paperlex-redis:6379
       PAPERLESS_DBENGINE: sqlite
+      PAPERLESS_DB_TIMEOUT: ${PAPERLEX_DB_TIMEOUT:-60}
       PAPERLESS_URL: ${PAPERLEX_SITE:?PAPERLEX_SITE must be set}
       PAPERLESS_CSRF_TRUSTED_ORIGINS: ${PAPERLEX_SITE:?PAPERLEX_SITE must be set}
       PAPERLESS_ALLOWED_HOSTS: ${PAPERLEX_SITE_HOST:?PAPERLEX_SITE_HOST must be set},${NODE_PAPERLEX_ORIGIN_HOST:-localhost},paperlex,localhost,127.0.0.1
-      PAPERLESS_TRUSTED_PROXIES: "*"
       PAPERLESS_USE_X_FORWARD_HOST: "true"
       PAPERLESS_USE_X_FORWARD_PORT: "true"
       PAPERLESS_PROXY_SSL_HEADER: '["HTTP_X_FORWARDED_PROTO", "https"]'
@@ -54,7 +54,8 @@ services:
       PAPERLESS_ADMIN_MAIL: ${PAPERLEX_ADMIN_MAIL:-admin@aichorage.de}
       PAPERLESS_TIME_ZONE: ${PAPERLEX_TIME_ZONE:-Asia/Shanghai}
       PAPERLESS_OCR_LANGUAGE: ${PAPERLEX_OCR_LANGUAGE:-eng}
-      PAPERLESS_OCR_MODE: ${PAPERLEX_OCR_MODE:-skip}
+      PAPERLESS_OCR_MODE: ${PAPERLEX_OCR_MODE:-auto}
+      PAPERLESS_ARCHIVE_FILE_GENERATION: ${PAPERLEX_ARCHIVE_FILE_GENERATION:-never}
       PAPERLESS_WEBSERVER_WORKERS: ${PAPERLEX_WEBSERVER_WORKERS:-1}
       PAPERLESS_TASK_WORKERS: ${PAPERLEX_TASK_WORKERS:-1}
       PAPERLESS_THREADS_PER_WORKER: ${PAPERLEX_THREADS_PER_WORKER:-1}
@@ -71,6 +72,7 @@ services:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/paperlex/media:/usr/src/paperless/media
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/paperlex/consume:/usr/src/paperless/consume
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/paperlex/export:/usr/src/paperless/export
+      - ./init-superuser.sh:/custom-cont-init.d/01-ensure-superuser.sh:ro
     networks:
       paperlex_private:
       platform_edge:
