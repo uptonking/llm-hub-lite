@@ -207,6 +207,7 @@ case "$*" in
   *app-paperlex*) printf 'paperlex\npaperlex-redis\n';;
   *app-filer*) printf 'filer\n';;
   *app-openclouds*) printf 'openclouds\n';;
+  *app-gtea*) printf 'gtea\n';;
   *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
