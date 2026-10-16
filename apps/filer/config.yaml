@@ -13,9 +13,6 @@ server:
       retentionDays: 7
       flushIntervalSeconds: 10
       maxBufferSize: 2000
-    quotas:
-      flushIntervalSeconds: 10
-      flushMaxBuffers: 500
   indexSqlConfig:
     walMode: false
     batchSize: 1000
@@ -54,12 +51,10 @@ server:
           create: true
           delete: true
 auth:
+  adminUsername: "admin"
+  adminPassword: "${FILER_ADMIN_PASSWORD}"
   methods:
     password:
       enabled: true
       signup: false
       minLength: 8
-      adminUsername: "admin"
-      adminPassword: "${FILER_ADMIN_PASSWORD}"
-shareDefaults:
-  quotaLimitBytes: 1073741824
