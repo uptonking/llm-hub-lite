@@ -1,0 +1,11 @@
+{$NODE_GTEA_ORIGIN_HOST} {
+  tls internal
+  import common_proxy
+  reverse_proxy gtea:3000 {
+    import forward_verified_client_ip
+    flush_interval -1
+    header_up Host {$GTEA_SITE_HOST}
+    header_up X-Forwarded-Host {$GTEA_SITE_HOST}
+    header_up X-Forwarded-Proto https
+  }
+}

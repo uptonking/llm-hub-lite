@@ -32,7 +32,7 @@ grep -Fq 'request_header @null_origin -Origin' "$app/route.leader.caddy"
 # shellcheck disable=SC2016
 grep -Fq 'reverse_proxy {$PAPERLEX_UPSTREAM}' "$app/route.leader.caddy"
 
-for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
 	prefix="${node/-/}"
 	grep -q "^NODE_PAPERLEX_ORIGIN_HOST=${prefix}-paperlex-origin.aichorage.de$" \
 		"$repo_root/config/cluster/nodes/$node.env"
@@ -45,7 +45,8 @@ for workflow in \
 	consumer-stop-paperlex-worker-1.yml \
 	consumer-stop-paperlex-worker-3.yml \
 	consumer-stop-paperlex-worker-4.yml \
-	consumer-stop-paperlex-worker-5.yml; do
+	consumer-stop-paperlex-worker-5.yml \
+	consumer-stop-paperlex-worker-6.yml; do
 	[[ -f "$repo_root/.woodpecker/$workflow" ]]
 done
 

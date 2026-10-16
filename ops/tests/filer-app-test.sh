@@ -35,7 +35,7 @@ grep -Fq 'health_uri /health' "$app/route.leader.caddy"
 grep -Fq 'reverse_proxy {$FILER_UPSTREAM}' "$app/route.leader.caddy"
 
 # Verify origin hosts across all cluster nodes
-for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
 	prefix="${node/-/}"
 	grep -q "^NODE_FILER_ORIGIN_HOST=${prefix}-filer-origin.aichorage.de$" \
 		"$repo_root/config/cluster/nodes/$node.env"
@@ -50,7 +50,8 @@ for workflow in \
 	consumer-stop-filer-worker-1.yml \
 	consumer-stop-filer-worker-3.yml \
 	consumer-stop-filer-worker-4.yml \
-	consumer-stop-filer-worker-5.yml; do
+	consumer-stop-filer-worker-5.yml \
+	consumer-stop-filer-worker-6.yml; do
 	[[ -f "$repo_root/.woodpecker/$workflow" ]]
 done
 

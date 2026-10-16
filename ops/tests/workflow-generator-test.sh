@@ -209,7 +209,7 @@ if grep -Fq 'push-audit' "$base/workflows/control-sync-leader.yml"; then
 	printf 'Leader control-sync must not depend on informational push-audit\n' >&2
 	exit 1
 fi
-for node in worker-1 worker-2 worker-3 worker-4 worker-5; do
+for node in worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
 	grep -Fq $'depends_on:\n  - control-sync-leader' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'deploy-controller.sh control-verify' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'grep -q "control-verify)" /opt/platform/control/current/ops/deploy-controller.sh' "$base/workflows/control-sync-$node.yml"
@@ -384,6 +384,8 @@ sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/filer.p
 mv "$draining_secrets/filer.policy" "$draining_secrets/config/cluster/apps/filer.policy"
 sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/openclouds.policy" >"$draining_secrets/openclouds.policy"
 mv "$draining_secrets/openclouds.policy" "$draining_secrets/config/cluster/apps/openclouds.policy"
+sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/gtea.policy" >"$draining_secrets/gtea.policy"
+mv "$draining_secrets/gtea.policy" "$draining_secrets/config/cluster/apps/gtea.policy"
 generate_fixture "$draining_secrets"
 [[ -f "$draining_secrets/workflows/consumer-stop-aichorouter-worker-2.yml" ]]
 if find "$draining_secrets/workflows" -name 'consumer-secrets-*-worker-2.yml' | grep -q .; then
@@ -419,6 +421,8 @@ for lifecycle_state in joining draining; do
 	mv "$evacuating/filer.policy" "$evacuating/config/cluster/apps/filer.policy"
 	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/openclouds.policy" >"$evacuating/openclouds.policy"
 	mv "$evacuating/openclouds.policy" "$evacuating/config/cluster/apps/openclouds.policy"
+	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/gtea.policy" >"$evacuating/gtea.policy"
+	mv "$evacuating/gtea.policy" "$evacuating/config/cluster/apps/gtea.policy"
 	generate_fixture "$evacuating"
 	[[ ! -e "$evacuating/workflows/foundation-upgrade-worker-2.yml" ]]
 	[[ ! -e "$evacuating/workflows/runner-upgrade-worker-2.yml" ]]

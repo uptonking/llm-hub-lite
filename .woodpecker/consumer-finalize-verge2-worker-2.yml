@@ -18,6 +18,7 @@ depends_on:
   - consumer-stop-verge2-worker-3
   - consumer-stop-verge2-worker-4
   - consumer-stop-verge2-worker-5
+  - consumer-stop-verge2-worker-6
   - control-sync-worker-2
   - name: foundation-reconcile-worker-2
     optional: true

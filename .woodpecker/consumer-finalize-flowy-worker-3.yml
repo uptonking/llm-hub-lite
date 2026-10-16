@@ -18,6 +18,7 @@ depends_on:
   - consumer-stop-flowy-worker-2
   - consumer-stop-flowy-worker-4
   - consumer-stop-flowy-worker-5
+  - consumer-stop-flowy-worker-6
   - control-sync-worker-3
   - name: foundation-reconcile-worker-3
     optional: true

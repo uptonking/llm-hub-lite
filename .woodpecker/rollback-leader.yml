@@ -5,7 +5,7 @@ when:
     evaluate: 'MANUAL_WORKFLOW == "rollback-leader"'
 
 depends_on:
-  - rollback-worker-5
+  - rollback-worker-6
 
 labels:
   node: leader
