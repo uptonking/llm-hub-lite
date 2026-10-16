@@ -106,9 +106,11 @@ wrappers=(platformctl restart-platform backup-platform restore-platform configur
 projects=(foundation-caddy foundation-beszel-controller foundation-beszel-worker
 	foundation-woodpecker-controller foundation-woodpecker-worker foundation-woodpecker-deployer
 	foundation-observer-controller foundation-observer-collector app-librechat app-newapi
-	app-aichorouter app-cpapi app-pigeon app-wabase app-paperlex)
+	app-aichorouter app-cpapi app-pigeon app-wabase app-paperlex app-filer app-ladocs
+	app-flowy app-verge app-verge2 app-verge3 app-verge4 app-verge5 app-verge-relay
+	app-auther app-cursorapi app-cpamp app-aichor app-aichor1)
 containers=() networks=(platform_edge foundation-woodpecker_private foundation-observer_private app-librechat_private
-	app-newapi_private app-aichorouter_private app-cpapi_private app-pigeon_private app-wabase_private app-observer_private app-paperlex_private) images=(llm-hub-lite/deploy-runner:current)
+	app-newapi_private app-aichorouter_private app-cpapi_private app-pigeon_private app-wabase_private app-observer_private app-paperlex_private app-filer_private app-ladocs_private app-flowy_private app-verge_private app-verge2_private app-verge3_private app-verge4_private app-verge5_private app-verge-relay_private app-auther_private app-cursorapi_private app-cpamp_private app-aichor_private app-aichor1_private) images=(llm-hub-lite/deploy-runner:current)
 
 collect_systemd_units() {
 	local path base
@@ -135,11 +137,12 @@ collect_manifest_images() {
 
 collect_descriptor_networks() {
 	local manifest project
-	for manifest in "$PLATFORM_ROOT/source"/apps/*/manifest.env; do
+	for manifest in "$PLATFORM_ROOT/source"/apps/*/manifest.env "$PLATFORM_ROOT/control/current"/apps/*/manifest.env "$CONFIG_ROOT"/descriptors/*/manifest.env; do
 		[[ -r "$manifest" ]] || continue
 		project="$(sed -n 's/^COMPOSE_PROJECT=//p' "$manifest" | tail -n1)"
 		[[ "$project" =~ ^app-[a-z0-9-]+$ ]] || continue
 		append_unique networks "${project}_private"
+		append_unique projects "$project"
 	done
 }
 

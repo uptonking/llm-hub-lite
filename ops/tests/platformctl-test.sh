@@ -204,6 +204,7 @@ case "$*" in
   *app-auther*) printf 'auther\n';;
   *app-ladocs*) printf 'postgresql\nredis\nyhub-valkey\nminio\nladocs-backend\nyhub\ny-provider\nladocs-frontend\n';;
   *app-paperlex*) printf 'paperlex\npaperlex-redis\n';;
+  *app-filer*) printf 'filer\n';;
   *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;

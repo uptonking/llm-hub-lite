@@ -195,12 +195,13 @@ for manifest in "$current"/apps/*/manifest.env; do
 	config_rel="$(sed -n 's/^RUNTIME_CONFIG_FILE=//p' "$manifest" | tail -n1)"
 	data_rel="$(sed -n 's/^DATA_ROOT_REL=//p' "$manifest" | tail -n1)"
 	data_root="$(sed -n 's/^DATA_ROOT=//p' /opt/apps/llm-hub-lite/shared/.env.prod | tail -n1)"; data_root="${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}"
-	runtime=''; rendered=''; data="$data_root/$data_rel"
+	runtime=''; rendered=''; data=''
 	[ -z "$runtime_rel" ] || runtime="/etc/llm-hub-lite/$runtime_rel"
 	[ -z "$config_rel" ] || rendered="/etc/llm-hub-lite/$config_rel"
+	[ -z "$data_rel" ] || data="$data_root/$data_rel"
 	[ -z "$runtime_rel" ] || [ -s "$runtime" ] || { printf 'direct runtime env is missing: %s\n' "$runtime" >&2; exit 1; }
 	[ -z "$config_rel" ] || [ -s "$rendered" ] || { printf 'direct rendered runtime config is missing: %s\n' "$rendered" >&2; exit 1; }
-	[ -d "$data" ] || { printf 'direct data directory is missing: %s\n' "$data" >&2; exit 1; }
+	[ -z "$data_rel" ] || [ -d "$data" ] || { printf 'direct data directory is missing: %s\n' "$data" >&2; exit 1; }
 	printf '%s\t%s\t%s\t%s\n' "$app" "$runtime" "$rendered" "$data"
 done
 REMOTE_DIRECT_STATE
@@ -209,7 +210,7 @@ REMOTE_DIRECT_STATE
 migration_verify_target_direct_state() {
 	local ip="$1" port="$2" known_hosts="$3"
 	local ssh_cmd=(-p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o ConnectTimeout=10)
-	ssh "${ssh_cmd[@]}" "root@$ip" 'set -Eeuo pipefail; current=/opt/platform/control/current; node_id=$(sed -n "s/^NODE_ID=//p" /etc/llm-hub-lite/node.env | tail -n1); data_root=$(sed -n "s/^DATA_ROOT=//p" /opt/apps/llm-hub-lite/shared/.env.prod | tail -n1); data_root=${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}; csv_has(){ case ",$1," in *",$2,"*) return 0;; *) return 1;; esac; }; safe_rel(){ case "$1" in ""|/*|*..*) return 1;; esac; }; found=0; for manifest in "$current"/apps/*/manifest.env; do [ -f "$manifest" ] || continue; app=${manifest%/manifest.env}; app=${app##*/}; rel=$(sed -n "s/^POLICY_FILE=//p" "$manifest" | tail -n1); policy="$current/config/$rel"; [ "$(sed -n "s/^ENABLED=//p" "$policy" | tail -n1)" = true ] || continue; [ "$(sed -n "s/^INGRESS_MODE=//p" "$manifest" | tail -n1)" = direct ] || continue; nodes=$(sed -n "s/^NODES=//p" "$policy" | tail -n1); csv_has "$nodes" "$node_id" || continue; runtime_rel=$(sed -n "s/^RUNTIME_ENV_FILE=//p" "$manifest" | tail -n1); config_rel=$(sed -n "s/^RUNTIME_CONFIG_FILE=//p" "$manifest" | tail -n1); [ -z "$config_rel" ] && config_rel="runtime/$app/config.yaml"; safe_rel "$runtime_rel" || { printf "unsafe direct runtime env path: %s\\n" "$runtime_rel" >&2; exit 1; }; safe_rel "$config_rel" || { printf "unsafe direct rendered config path: %s\\n" "$config_rel" >&2; exit 1; }; data_rel=$(sed -n "s/^DATA_ROOT_REL=//p" "$manifest" | tail -n1); runtime="/etc/llm-hub-lite/$runtime_rel"; rendered="/etc/llm-hub-lite/$config_rel"; data="$data_root/$data_rel"; [ -z "$runtime_rel" ] || [ -s "$runtime" ] || { printf "direct runtime env missing: %s\\n" "$runtime" >&2; exit 1; }; [ -z "$config_rel" ] || [ -s "$rendered" ] || { printf "direct rendered runtime config missing: %s\\n" "$rendered" >&2; exit 1; }; [ -d "$data" ] || { printf "direct data directory missing: %s\\n" "$data" >&2; exit 1; }; platformctl direct-smoke "$app"; found=1; done; [ "$found" -eq 1 ] || { printf "no active direct applications found on target\\n" >&2; exit 1; }'
+	ssh "${ssh_cmd[@]}" "root@$ip" 'set -Eeuo pipefail; current=/opt/platform/control/current; node_id=$(sed -n "s/^NODE_ID=//p" /etc/llm-hub-lite/node.env | tail -n1); data_root=$(sed -n "s/^DATA_ROOT=//p" /opt/apps/llm-hub-lite/shared/.env.prod | tail -n1); data_root=${data_root:-/opt/apps/llm-hub-lite/shared/data/prod}; csv_has(){ case ",$1," in *",$2,"*) return 0;; *) return 1;; esac; }; safe_rel(){ case "$1" in ""|/*|*..*) return 1;; esac; }; found=0; for manifest in "$current"/apps/*/manifest.env; do [ -f "$manifest" ] || continue; app=${manifest%/manifest.env}; app=${app##*/}; rel=$(sed -n "s/^POLICY_FILE=//p" "$manifest" | tail -n1); policy="$current/config/$rel"; [ "$(sed -n "s/^ENABLED=//p" "$policy" | tail -n1)" = true ] || continue; [ "$(sed -n "s/^INGRESS_MODE=//p" "$manifest" | tail -n1)" = direct ] || continue; nodes=$(sed -n "s/^NODES=//p" "$policy" | tail -n1); csv_has "$nodes" "$node_id" || continue; runtime_rel=$(sed -n "s/^RUNTIME_ENV_FILE=//p" "$manifest" | tail -n1); config_rel=$(sed -n "s/^RUNTIME_CONFIG_FILE=//p" "$manifest" | tail -n1); [ -z "$runtime_rel" ] || safe_rel "$runtime_rel" || { printf "unsafe direct runtime env path: %s\n" "$runtime_rel" >&2; exit 1; }; [ -z "$config_rel" ] || safe_rel "$config_rel" || { printf "unsafe direct rendered config path: %s\n" "$config_rel" >&2; exit 1; }; data_rel=$(sed -n "s/^DATA_ROOT_REL=//p" "$manifest" | tail -n1); [ -z "$data_rel" ] || safe_rel "$data_rel" || { printf "unsafe direct data path: %s\n" "$data_rel" >&2; exit 1; }; runtime="/etc/llm-hub-lite/$runtime_rel"; rendered="/etc/llm-hub-lite/$config_rel"; data=""; [ -z "$data_rel" ] || data="$data_root/$data_rel"; [ -z "$runtime_rel" ] || [ -s "$runtime" ] || { printf "direct runtime env missing: %s\n" "$runtime" >&2; exit 1; }; [ -z "$config_rel" ] || [ -s "$rendered" ] || { printf "direct rendered runtime config missing: %s\n" "$rendered" >&2; exit 1; }; [ -z "$data_rel" ] || [ -d "$data" ] || { printf "direct data directory missing: %s\n" "$data" >&2; exit 1; }; platformctl direct-smoke "$app"; found=1; done; [ "$found" -eq 1 ] || { printf "no active direct applications found on target\n" >&2; exit 1; }'
 }
 
 migration_verify_source_direct_state() {
@@ -221,9 +222,9 @@ migration_verify_source_direct_state() {
 		[[ "$runtime$rendered$data" != *"'"* && "$runtime$rendered$data" != *$'\n'* && "$runtime$rendered$data" != *$'\r'* ]] || return 1
 		[[ -z "$runtime" || "$runtime" == /etc/llm-hub-lite/* ]] || return 1
 		[[ -z "$rendered" || "$rendered" == /etc/llm-hub-lite/runtime/* ]] || return 1
-		[[ "$data" == /opt/apps/llm-hub-lite/* ]] || return 1
-		ssh "${ssh_cmd[@]}" "root@$ip" "if [ -n '$runtime' ]; then test -s '$runtime' || exit 1; fi; if [ -n '$rendered' ]; then test -s '$rendered' || exit 1; fi; test -d '$data'" || return 1
-		printf 'migration: direct state: %s runtime=%s config=%s data=%s\n' "$app" "${runtime:-none}" "${rendered:-none}" "$data"
+		[[ -z "$data" || "$data" == /opt/apps/llm-hub-lite/* ]] || return 1
+		ssh "${ssh_cmd[@]}" "root@$ip" "if [ -n '$runtime' ]; then test -s '$runtime' || exit 1; fi; if [ -n '$rendered' ]; then test -s '$rendered' || exit 1; fi; if [ -n '$data' ]; then test -d '$data' || exit 1; fi" || return 1
+		printf 'migration: direct state: %s runtime=%s config=%s data=%s\n' "$app" "${runtime:-none}" "${rendered:-none}" "${data:-none}"
 	done <<<"$direct_state"
 }
 migration_valid_phase() {
