@@ -34,3 +34,18 @@ identity_providers:
         authorization_policy: one_factor
         consent_mode: implicit
         token_endpoint_auth_method: client_secret_post
+      - client_id: openclouds
+        client_name: OpenClouds
+        public: true
+        authorization_policy: one_factor
+        consent_mode: implicit
+        redirect_uris:
+          - 'https://openclouds.aichorage.de/'
+          - 'https://openclouds.aichorage.de/oidc-callback.html'
+          - 'https://openclouds.aichorage.de/oidc-silent-redirect.html'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+          - 'groups'
+        token_endpoint_auth_method: none

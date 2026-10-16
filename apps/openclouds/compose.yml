@@ -1,0 +1,76 @@
+name: app-openclouds
+services:
+  openclouds:
+    image: ${OPENCLOUDS_IMAGE:?OPENCLOUDS_IMAGE must be digest-pinned}
+    user: "0:0"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: ${OPENCLOUDS_MEMORY_LIMIT:-768m}
+    cpus: ${OPENCLOUDS_CPUS:-0.75}
+    pids_limit: ${OPENCLOUDS_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: openclouds
+      com.aichorage.component: app-openclouds
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      OC_URL: ${OPENCLOUDS_SITE:-https://openclouds.aichorage.de}
+      PROXY_HTTP_ADDR: "0.0.0.0:9200"
+      PROXY_DEBUG_ADDR: "0.0.0.0:9205"
+      PROXY_TLS: "false"
+      OC_INSECURE: "false"
+      OC_LOG_LEVEL: "info"
+      PROXY_ENABLE_BASIC_AUTH: "false"
+      IDM_CREATE_DEMO_USERS: "false"
+      IDM_ADMIN_PASSWORD: ${OPENCLOUDS_ADMIN_PASSWORD:?OPENCLOUDS_ADMIN_PASSWORD must be set}
+      # Storage Backend (PosixFS)
+      STORAGE_USERS_DRIVER: "posix"
+      STORAGE_USERS_POSIX_ROOT: "/var/lib/opencloud/storage/users"
+      STORAGE_USERS_ID_CACHE_STORE: "nats-js-kv"
+      STORAGE_USERS_POSIX_SCAN_FS: "true"
+      STORAGE_USERS_POSIX_WATCH_FS: "false"
+      # External OIDC with Auther (Authelia)
+      OC_EXCLUDE_RUN_SERVICES: "idp,search,activitylog,userlog,thumbnails,app-provider,app-registry,ocm"
+      OC_OIDC_ISSUER: "https://auther.aichorage.de"
+      IDP_DOMAIN: "auther.aichorage.de"
+      OC_OIDC_CLIENT_ID: "openclouds"
+      PROXY_OIDC_ACCESS_TOKEN_VERIFY_METHOD: "none"
+      PROXY_OIDC_SKIP_VERIFICATION: "false"
+      PROXY_OIDC_REWRITE_WELLKNOWN: "true"
+      PROXY_AUTOPROVISION_ACCOUNTS: "true"
+      PROXY_USER_OIDC_CLAIM: "preferred_username"
+      PROXY_AUTOPROVISION_CLAIM_USERNAME: "preferred_username"
+      PROXY_USER_CS3_CLAIM: "username"
+      PROXY_ROLE_ASSIGNMENT_DRIVER: "default"
+      GRAPH_ASSIGN_DEFAULT_USER_ROLE: "true"
+      GRAPH_USERNAME_MATCH: "none"
+      # Optimizations for minimal single-node footprint
+      FRONTEND_CHECK_FOR_UPDATES: "false"
+      GOMEMLIMIT: "512MiB"
+      GOGC: "80"
+      OC_MAX_CONCURRENCY: "2"
+      STORAGE_USERS_EVENTS_NUM_CONSUMERS: "1"
+      PROXY_CSP_CONFIG_FILE_LOCATION: "/etc/opencloud/csp.yaml"
+      OPENCLOUDS_DEFAULT_QUOTA_BYTES: ${OPENCLOUDS_DEFAULT_QUOTA_BYTES:-5368709120}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/openclouds/config:/etc/opencloud
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/openclouds/data:/var/lib/opencloud
+      - ./csp.yaml:/etc/opencloud-template/csp.yaml:ro
+      - ./entrypoint.sh:/entrypoint.sh:ro
+    networks:
+      openclouds_private:
+      platform_edge:
+        aliases: [openclouds]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:9205/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+networks:
+  openclouds_private:
+    name: app-openclouds_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

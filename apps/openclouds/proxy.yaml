@@ -1,0 +1,11 @@
+# Proxy configuration for OpenClouds
+# Default Quota per User Role is configured to 5GB (5368709120 bytes)
+role_quotas:
+  # User Role
+  'd7beeea8-8ff4-406b-8fb6-ab2dd81e6b11': 5368709120
+  # SpaceAdmin Role
+  '2aadd357-682c-406b-8874-293091995fdd': 5368709120
+  # Admin Role
+  '71881883-1768-46bd-a24d-a356a2afdf7f': 5368709120
+  # Guest / UserLight Role
+  '38071a68-456a-4553-846a-fa67bf5596cc': 5368709120
