@@ -16,7 +16,7 @@ grep -q '^NODES=worker-4$' "$repo_root/config/cluster/apps/outline.policy"
 # Verify Compose limits, services, and constraints
 grep -Fq 'user: "0:0"' "$app/compose.yml"
 # shellcheck disable=SC2016
-grep -Fq 'mem_limit: ${OUTLINE_MEMORY_LIMIT:-512m}' "$app/compose.yml"
+grep -Fq 'mem_limit: ${OUTLINE_MEMORY_LIMIT:-640m}' "$app/compose.yml"
 # shellcheck disable=SC2016
 grep -Fq 'cpus: ${OUTLINE_CPUS:-0.75}' "$app/compose.yml"
 # shellcheck disable=SC2016

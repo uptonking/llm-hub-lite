@@ -60,7 +60,7 @@ services:
     user: "0:0"
     restart: unless-stopped
     stop_grace_period: 30s
-    mem_limit: ${OUTLINE_MEMORY_LIMIT:-512m}
+    mem_limit: ${OUTLINE_MEMORY_LIMIT:-640m}
     cpus: ${OUTLINE_CPUS:-0.75}
     pids_limit: ${OUTLINE_PIDS_LIMIT:-256}
     labels:
