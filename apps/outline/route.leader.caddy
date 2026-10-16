@@ -1,6 +1,7 @@
 {$OUTLINE_SITE} {
   import common_proxy
   reverse_proxy {$OUTLINE_UPSTREAM} {
+    flush_interval -1
     transport http {
       tls_insecure_skip_verify
       response_header_timeout 24h

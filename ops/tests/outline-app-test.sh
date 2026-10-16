@@ -10,13 +10,15 @@ grep -q '^STATE_MODE=files$' "$app/manifest.env"
 grep -q '^HEALTH_URL=/_health$' "$app/manifest.env"
 grep -q '^HEALTH_PORT=3000$' "$app/manifest.env"
 grep -q '^HEALTH_EXPECT=OK$' "$app/manifest.env"
+grep -q '^RECOVERY_REQUIRED_PATHS=postgres/pgdata/PG_VERSION$' "$app/manifest.env"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/outline.policy"
 grep -q '^NODES=worker-4$' "$repo_root/config/cluster/apps/outline.policy"
 
 # Verify Compose limits, services, and constraints
 grep -Fq 'user: "0:0"' "$app/compose.yml"
+grep -Fq -- '- ./build/server/index.js' "$app/compose.yml"
 # shellcheck disable=SC2016
-grep -Fq 'mem_limit: ${OUTLINE_MEMORY_LIMIT:-640m}' "$app/compose.yml"
+grep -Fq 'mem_limit: ${OUTLINE_MEMORY_LIMIT:-768m}' "$app/compose.yml"
 # shellcheck disable=SC2016
 grep -Fq 'cpus: ${OUTLINE_CPUS:-0.75}' "$app/compose.yml"
 # shellcheck disable=SC2016
@@ -42,6 +44,7 @@ grep -Fq 'reverse_proxy outline:3000' "$app/route.follower.caddy"
 grep -Fq 'tls internal' "$app/route.follower.caddy"
 grep -Fq 'flush_interval -1' "$app/route.follower.caddy"
 grep -Fq 'health_uri /_health' "$app/route.leader.caddy"
+grep -Fq 'flush_interval -1' "$app/route.leader.caddy"
 # shellcheck disable=SC2016
 grep -Fq 'reverse_proxy {$OUTLINE_UPSTREAM}' "$app/route.leader.caddy"
 
