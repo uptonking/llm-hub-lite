@@ -380,6 +380,8 @@ sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/relaich
 mv "$draining_secrets/relaichor.policy" "$draining_secrets/config/cluster/apps/relaichor.policy"
 sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/paperlex.policy" >"$draining_secrets/paperlex.policy"
 mv "$draining_secrets/paperlex.policy" "$draining_secrets/config/cluster/apps/paperlex.policy"
+sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/filer.policy" >"$draining_secrets/filer.policy"
+mv "$draining_secrets/filer.policy" "$draining_secrets/config/cluster/apps/filer.policy"
 generate_fixture "$draining_secrets"
 [[ -f "$draining_secrets/workflows/consumer-stop-aichorouter-worker-2.yml" ]]
 if find "$draining_secrets/workflows" -name 'consumer-secrets-*-worker-2.yml' | grep -q .; then
@@ -411,6 +413,8 @@ for lifecycle_state in joining draining; do
 	mv "$evacuating/relaichor.policy" "$evacuating/config/cluster/apps/relaichor.policy"
 	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/paperlex.policy" >"$evacuating/paperlex.policy"
 	mv "$evacuating/paperlex.policy" "$evacuating/config/cluster/apps/paperlex.policy"
+	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/filer.policy" >"$evacuating/filer.policy"
+	mv "$evacuating/filer.policy" "$evacuating/config/cluster/apps/filer.policy"
 	generate_fixture "$evacuating"
 	[[ ! -e "$evacuating/workflows/foundation-upgrade-worker-2.yml" ]]
 	[[ ! -e "$evacuating/workflows/runner-upgrade-worker-2.yml" ]]

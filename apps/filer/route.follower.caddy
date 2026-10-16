@@ -1,0 +1,13 @@
+{$NODE_FILER_ORIGIN_HOST} {
+  # Private Leader-to-follower origin.
+  tls internal
+  import common_proxy
+  reverse_proxy filer:80 {
+    flush_interval -1
+    header_up Host {$FILER_SITE_HOST}
+    header_up X-Forwarded-Host {$FILER_SITE_HOST}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+}

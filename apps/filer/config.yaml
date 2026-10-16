@@ -1,0 +1,65 @@
+http:
+  port: 80
+  baseURL: "/"
+  listen: "0.0.0.0"
+server:
+  disablePreviews: true
+  disablePreviewResize: true
+  disableUpdateCheck: true
+  numImageProcessors: 1
+  database:
+    path: "/home/filebrowser/data/database.sqlite"
+    activity:
+      retentionDays: 7
+      flushIntervalSeconds: 10
+      maxBufferSize: 2000
+    quotas:
+      flushIntervalSeconds: 10
+      flushMaxBuffers: 500
+  indexSqlConfig:
+    walMode: false
+    batchSize: 1000
+    cacheSizeMB: 16
+    startupIntegrityCheck: "probe"
+  filesystem:
+    createFilePermission: "644"
+    createDirectoryPermission: "755"
+  logging:
+    - levels: "info|error|warning"
+      output: "stdout"
+      apiFilter: "disabled"
+  sources:
+    - path: "/srv/shared"
+      name: "Shared"
+      config:
+        defaultEnabled: true
+        createUserDir: false
+        defaultUserScope: "/"
+        defaultPermissions:
+          view: true
+          download: true
+          modify: true
+          create: true
+          delete: true
+    - path: "/srv/personal"
+      name: "Personal"
+      config:
+        defaultEnabled: true
+        createUserDir: true
+        defaultUserScope: "/"
+        defaultPermissions:
+          view: true
+          download: true
+          modify: true
+          create: true
+          delete: true
+auth:
+  methods:
+    password:
+      enabled: true
+      signup: false
+      minLength: 8
+      adminUsername: "admin"
+      adminPassword: "${FILER_ADMIN_PASSWORD}"
+shareDefaults:
+  quotaLimitBytes: 1073741824
