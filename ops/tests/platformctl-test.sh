@@ -129,6 +129,10 @@ LADOCS_MINIO_ROOT_PASSWORD=fedcba9876543210fedcba9876543210
 LADOCS_Y_PROVIDER_API_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 LADOCS_OIDC_RP_CLIENT_SECRET=test-ladocs-oidc-client-secret-0123456789abcdef
 EOF
+cat >"$tmp/config/paperlex.env" <<'EOF'
+PAPERLEX_SECRET_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+PAPERLEX_ADMIN_PASSWORD=0123456789abcdef0123456789abcdef
+EOF
 cat >"$tmp/config/node.env" <<EOF
 NODE_ID=leader
 LEADER_PUBLIC_IP=192.0.2.10
@@ -148,6 +152,7 @@ NODE_PIGEON_ORIGIN_HOST=worker2-pigeon.example.invalid
 NODE_WAPDF_ORIGIN_HOST=worker2-wapdf.example.invalid
 NODE_RELAICHOR_ORIGIN_HOST=worker2-relaichor.example.invalid
 NODE_RELAICHOR1_ORIGIN_HOST=worker2-relaichor1.example.invalid
+NODE_PAPERLEX_ORIGIN_HOST=worker2-paperlex.example.invalid
 EOF
 cat >"$tmp/bin/platform-compose" <<'EOF'
 #!/bin/sh
@@ -198,6 +203,7 @@ case "$*" in
   *app-aichor1*) printf 'aichor1\n';;
   *app-auther*) printf 'auther\n';;
   *app-ladocs*) printf 'postgresql\nredis\nyhub-valkey\nminio\nladocs-backend\nyhub\ny-provider\nladocs-frontend\n';;
+  *app-paperlex*) printf 'paperlex\npaperlex-redis\n';;
   *app-aichor*) printf 'aichor\n';;
   *app-cursorapi*) printf 'cursorapi\nhealth-probe\n';;
   *app-pigeon*) printf 'pigeon\nhealth-probe\n';;
@@ -288,6 +294,7 @@ case "$url" in
   *cursorapi*/healthz) printf 'ok\n';;
   *aichorouter*/api/status) printf '{"success":true}\n';;
   *wapdf*/) printf 'BentoPDF - Free Online PDF Tools\n';;
+  *paperlex*/accounts/login/) printf 'Paperless-ngx\n';;
   *) printf 'OK\n';;
 esac
 EOF

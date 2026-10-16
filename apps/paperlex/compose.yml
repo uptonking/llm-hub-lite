@@ -1,0 +1,89 @@
+name: app-paperlex
+services:
+  paperlex-redis:
+    image: ${PAPERLEX_REDIS_IMAGE:?PAPERLEX_REDIS_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${PAPERLEX_REDIS_MEMORY_LIMIT:-64m}
+    cpus: ${PAPERLEX_REDIS_CPUS:-0.15}
+    pids_limit: 64
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: paperlex
+      com.aichorage.component: app-paperlex-redis
+    command:
+      - redis-server
+      - --maxmemory
+      - ${PAPERLEX_REDIS_MAX_MEMORY:-48mb}
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    networks: [paperlex_private]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+  paperlex:
+    image: ${PAPERLEX_IMAGE:?PAPERLEX_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: ${PAPERLEX_MEMORY_LIMIT:-1024m}
+    cpus: ${PAPERLEX_CPUS:-0.85}
+    pids_limit: ${PAPERLEX_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: paperlex
+      com.aichorage.component: app-paperlex
+    environment:
+      PAPERLESS_REDIS: redis://paperlex-redis:6379
+      PAPERLESS_DBENGINE: sqlite
+      PAPERLESS_URL: ${PAPERLEX_SITE:?PAPERLEX_SITE must be set}
+      PAPERLESS_CSRF_TRUSTED_ORIGINS: ${PAPERLEX_SITE:?PAPERLEX_SITE must be set}
+      PAPERLESS_ALLOWED_HOSTS: ${PAPERLEX_SITE_HOST:?PAPERLEX_SITE_HOST must be set},${NODE_PAPERLEX_ORIGIN_HOST:-localhost},paperlex,localhost,127.0.0.1
+      PAPERLESS_TRUSTED_PROXIES: "*"
+      PAPERLESS_USE_X_FORWARD_HOST: "true"
+      PAPERLESS_USE_X_FORWARD_PORT: "true"
+      PAPERLESS_PROXY_SSL_HEADER: '["HTTP_X_FORWARDED_PROTO", "https"]'
+      PAPERLESS_SECRET_KEY: ${PAPERLEX_SECRET_KEY:?PAPERLEX_SECRET_KEY must be set}
+      PAPERLESS_ADMIN_USER: ${PAPERLEX_ADMIN_USER:-admin}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLEX_ADMIN_PASSWORD:?PAPERLEX_ADMIN_PASSWORD must be set}
+      PAPERLESS_ADMIN_MAIL: ${PAPERLEX_ADMIN_MAIL:-admin@aichorage.de}
+      PAPERLESS_TIME_ZONE: ${PAPERLEX_TIME_ZONE:-Asia/Shanghai}
+      PAPERLESS_OCR_LANGUAGE: ${PAPERLEX_OCR_LANGUAGE:-eng}
+      PAPERLESS_OCR_MODE: ${PAPERLEX_OCR_MODE:-skip}
+      PAPERLESS_WEBSERVER_WORKERS: ${PAPERLEX_WEBSERVER_WORKERS:-1}
+      PAPERLESS_TASK_WORKERS: ${PAPERLEX_TASK_WORKERS:-1}
+      PAPERLESS_THREADS_PER_WORKER: ${PAPERLEX_THREADS_PER_WORKER:-1}
+      PAPERLESS_TIKA_ENABLED: ${PAPERLEX_TIKA_ENABLED:-false}
+      PAPERLESS_AI_ENABLED: ${PAPERLEX_AI_ENABLED:-false}
+      PAPERLESS_CONSUMER_POLLING_INTERVAL: ${PAPERLEX_CONSUMER_POLLING_INTERVAL:-0}
+      PAPERLESS_ENABLE_UPDATE_CHECK: ${PAPERLEX_ENABLE_UPDATE_CHECK:-false}
+      PAPERLESS_ACCOUNT_ALLOW_SIGNUPS: ${PAPERLEX_ACCOUNT_ALLOW_SIGNUPS:-false}
+    depends_on:
+      paperlex-redis:
+        condition: service_healthy
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/paperlex/data:/usr/src/paperless/data
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/paperlex/media:/usr/src/paperless/media
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/paperlex/consume:/usr/src/paperless/consume
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/paperlex/export:/usr/src/paperless/export
+    networks:
+      paperlex_private:
+      platform_edge:
+        aliases: [paperlex]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:8000/accounts/login/ | grep -Fq 'Paperless-ngx'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+networks:
+  paperlex_private:
+    name: app-paperlex_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

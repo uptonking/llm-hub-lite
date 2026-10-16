@@ -1,0 +1,13 @@
+{$NODE_PAPERLEX_ORIGIN_HOST} {
+  # Private Leader-to-follower origin.
+  tls internal
+  import common_proxy
+  reverse_proxy paperlex:8000 {
+    flush_interval -1
+    header_up Host {$PAPERLEX_SITE_HOST}
+    header_up X-Forwarded-Host {$PAPERLEX_SITE_HOST}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+}
