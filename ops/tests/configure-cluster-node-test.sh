@@ -35,6 +35,8 @@ make_fixture() {
 	mv "$fixture/config/cluster/apps/verge-relay.policy.tmp" "$fixture/config/cluster/apps/verge-relay.policy"
 	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/wabase.policy" >"$fixture/config/cluster/apps/wabase.policy.tmp"
 	mv "$fixture/config/cluster/apps/wabase.policy.tmp" "$fixture/config/cluster/apps/wabase.policy"
+	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/outline.policy" >"$fixture/config/cluster/apps/outline.policy.tmp"
+	mv "$fixture/config/cluster/apps/outline.policy.tmp" "$fixture/config/cluster/apps/outline.policy"
 	printf '%s\n' "$fixture"
 }
 run_add() {

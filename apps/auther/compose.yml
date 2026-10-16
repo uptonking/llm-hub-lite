@@ -38,6 +38,7 @@ services:
       # Consumed by entrypoint.sh only.
       AUTHER_BOOTSTRAP_ADMIN_PASSWORD: ${AUTHER_BOOTSTRAP_ADMIN_PASSWORD:?AUTHER_BOOTSTRAP_ADMIN_PASSWORD must be set}
       AUTHER_OIDC_LADOCS_CLIENT_SECRET: ${AUTHER_OIDC_LADOCS_CLIENT_SECRET:?AUTHER_OIDC_LADOCS_CLIENT_SECRET must be set}
+      AUTHER_OIDC_OUTLINE_CLIENT_SECRET: ${AUTHER_OIDC_OUTLINE_CLIENT_SECRET:?AUTHER_OIDC_OUTLINE_CLIENT_SECRET must be set}
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/auther:/config
       - ./configuration.yml:/config-template/configuration.yml:ro

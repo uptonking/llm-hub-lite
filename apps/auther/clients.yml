@@ -22,3 +22,15 @@ identity_providers:
         authorization_policy: one_factor
         consent_mode: implicit
         token_endpoint_auth_method: client_secret_post
+      - client_id: outline
+        client_name: Outline
+        client_secret: '__AUTHER_OIDC_OUTLINE_CLIENT_SECRET__'
+        redirect_uris:
+          - 'https://outline.aichorage.de/auth/oidc.callback'
+        scopes:
+          - 'openid'
+          - 'email'
+          - 'profile'
+        authorization_policy: one_factor
+        consent_mode: implicit
+        token_endpoint_auth_method: client_secret_post

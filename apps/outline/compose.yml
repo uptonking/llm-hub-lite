@@ -1,0 +1,127 @@
+name: app-outline
+services:
+  outline-postgres:
+    image: ${OUTLINE_POSTGRES_IMAGE:?OUTLINE_POSTGRES_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${OUTLINE_POSTGRES_MEMORY_LIMIT:-192m}
+    cpus: ${OUTLINE_POSTGRES_CPUS:-0.4}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: outline
+      com.aichorage.component: app-outline-postgres
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_DB: outline
+      POSTGRES_USER: outline
+      POSTGRES_PASSWORD: ${OUTLINE_DB_PASSWORD:?OUTLINE_DB_PASSWORD must be set}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${OUTLINE_POSTGRES_SHARED_BUFFERS:-32MB}
+      - -c
+      - max_connections=30
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/outline/postgres:/var/lib/postgresql/data
+    networks: [outline_private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d outline -U outline"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+  outline-redis:
+    image: ${OUTLINE_REDIS_IMAGE:?OUTLINE_REDIS_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    mem_limit: ${OUTLINE_REDIS_MEMORY_LIMIT:-64m}
+    cpus: 0.2
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: outline
+      com.aichorage.component: app-outline-redis
+    command:
+      - redis-server
+      - --maxmemory
+      - ${OUTLINE_REDIS_MAX_MEMORY:-48mb}
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    networks: [outline_private]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+  outline:
+    image: ${OUTLINE_IMAGE:?OUTLINE_IMAGE must be digest-pinned}
+    user: "0:0"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: ${OUTLINE_MEMORY_LIMIT:-512m}
+    cpus: ${OUTLINE_CPUS:-0.75}
+    pids_limit: ${OUTLINE_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: outline
+      com.aichorage.component: app-outline
+    environment:
+      NODE_ENV: production
+      URL: ${OUTLINE_SITE:-https://outline.aichorage.de}
+      PORT: 3000
+      SECRET_KEY: ${OUTLINE_SECRET_KEY:?OUTLINE_SECRET_KEY must be set}
+      UTILS_SECRET: ${OUTLINE_UTILS_SECRET:?OUTLINE_UTILS_SECRET must be set}
+      DATABASE_URL: postgres://outline:${OUTLINE_DB_PASSWORD:?OUTLINE_DB_PASSWORD must be set}@outline-postgres:5432/outline
+      PGSSLMODE: disable
+      REDIS_URL: redis://outline-redis:6379
+      DATABASE_CONNECTION_POOL_MIN: 0
+      DATABASE_CONNECTION_POOL_MAX: 3
+      WEB_CONCURRENCY: 1
+      WORKER_CONCURRENCY_EVENTS: 1
+      WORKER_CONCURRENCY_TASKS: 1
+      NODE_OPTIONS: --max-old-space-size=384
+      FORCE_HTTPS: "false"
+      FILE_STORAGE: local
+      FILE_STORAGE_LOCAL_ROOT_DIR: /var/lib/outline/data
+      FILE_STORAGE_UPLOAD_MAX_SIZE: ${OUTLINE_MAX_UPLOAD_SIZE:-262144000}
+      ENABLE_UPDATES: "false"
+      TELEMETRY: "false"
+      LOG_LEVEL: info
+      DEBUG: ""
+      DEFAULT_LANGUAGE: ${OUTLINE_DEFAULT_LANGUAGE:-zh_CN}
+      RATE_LIMITER_ENABLED: "true"
+      OIDC_CLIENT_ID: outline
+      OIDC_CLIENT_SECRET: ${OUTLINE_OIDC_CLIENT_SECRET:?OUTLINE_OIDC_CLIENT_SECRET must be set}
+      OIDC_AUTH_URI: https://auther.aichorage.de/api/oidc/authorization
+      OIDC_TOKEN_URI: https://auther.aichorage.de/api/oidc/token
+      OIDC_USERINFO_URI: https://auther.aichorage.de/api/oidc/userinfo
+      OIDC_LOGOUT_URI: https://auther.aichorage.de/api/oidc/logout
+      OIDC_DISPLAY_NAME: Auther
+      OIDC_SCOPES: openid profile email
+      OIDC_USERNAME_CLAIM: preferred_username
+      OIDC_DISABLE_REDIRECT: "false"
+    depends_on:
+      outline-postgres:
+        condition: service_healthy
+      outline-redis:
+        condition: service_healthy
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/outline/data:/var/lib/outline/data
+    networks:
+      outline_private:
+      platform_edge:
+        aliases: [outline]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/_health | grep -q 'OK'"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 45s
+networks:
+  outline_private:
+    name: app-outline_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true
