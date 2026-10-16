@@ -29,7 +29,7 @@ grep -Fq '/var/lib/opencloud' "$app/compose.yml"
 # Verify PosixFS and OIDC settings
 grep -Fq 'STORAGE_USERS_DRIVER: "posix"' "$app/compose.yml"
 grep -Fq 'OC_OIDC_ISSUER: "https://auther.aichorage.de"' "$app/compose.yml"
-grep -Fq 'OC_EXCLUDE_RUN_SERVICES: "idp,search,activitylog,userlog,thumbnails,app-provider,app-registry,ocm"' "$app/compose.yml"
+grep -Fq 'OC_EXCLUDE_RUN_SERVICES: "idp,search,activitylog,userlog,thumbnails,ocm"' "$app/compose.yml"
 grep -Fq 'FRONTEND_CHECK_FOR_UPDATES: "false"' "$app/compose.yml"
 
 # Verify Caddy reverse proxies

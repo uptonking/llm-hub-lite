@@ -31,7 +31,7 @@ services:
       STORAGE_USERS_POSIX_SCAN_FS: "true"
       STORAGE_USERS_POSIX_WATCH_FS: "false"
       # External OIDC with Auther (Authelia)
-      OC_EXCLUDE_RUN_SERVICES: "idp,search,activitylog,userlog,thumbnails,app-provider,app-registry,ocm"
+      OC_EXCLUDE_RUN_SERVICES: "idp,search,activitylog,userlog,thumbnails,ocm"
       OC_OIDC_ISSUER: "https://auther.aichorage.de"
       IDP_DOMAIN: "auther.aichorage.de"
       OC_OIDC_CLIENT_ID: "openclouds"
