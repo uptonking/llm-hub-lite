@@ -1,8 +1,6 @@
 {$PAPERLEX_SITE} {
+  header >Referrer-Policy same-origin
   import common_proxy
-  header {
-    Referrer-Policy same-origin
-  }
   @null_origin header Origin null
   request_header @null_origin -Origin
   reverse_proxy {$PAPERLEX_UPSTREAM} {

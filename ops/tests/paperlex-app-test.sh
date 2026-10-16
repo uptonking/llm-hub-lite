@@ -24,10 +24,10 @@ grep -Fq 'init-superuser.sh:/custom-cont-init.d/01-ensure-superuser.sh:ro' "$app
 
 # Verify Caddy reverse proxies
 grep -Fq 'reverse_proxy paperlex:8000' "$app/route.follower.caddy"
-grep -Fq 'Referrer-Policy same-origin' "$app/route.follower.caddy"
+grep -Fq 'header >Referrer-Policy same-origin' "$app/route.follower.caddy"
 grep -Fq 'request_header @null_origin -Origin' "$app/route.follower.caddy"
 grep -Fq 'health_uri /accounts/login/' "$app/route.leader.caddy"
-grep -Fq 'Referrer-Policy same-origin' "$app/route.leader.caddy"
+grep -Fq 'header >Referrer-Policy same-origin' "$app/route.leader.caddy"
 grep -Fq 'request_header @null_origin -Origin' "$app/route.leader.caddy"
 # shellcheck disable=SC2016
 grep -Fq 'reverse_proxy {$PAPERLEX_UPSTREAM}' "$app/route.leader.caddy"
