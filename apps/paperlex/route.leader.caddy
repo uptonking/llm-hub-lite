@@ -1,5 +1,10 @@
 {$PAPERLEX_SITE} {
   import common_proxy
+  header {
+    Referrer-Policy same-origin
+  }
+  @null_origin header Origin null
+  request_header @null_origin -Origin
   reverse_proxy {$PAPERLEX_UPSTREAM} {
     transport http {
       tls_insecure_skip_verify

@@ -2,6 +2,11 @@
   # Private Leader-to-follower origin.
   tls internal
   import common_proxy
+  header {
+    Referrer-Policy same-origin
+  }
+  @null_origin header Origin null
+  request_header @null_origin -Origin
   reverse_proxy paperlex:8000 {
     flush_interval -1
     header_up Host {$PAPERLEX_SITE_HOST}

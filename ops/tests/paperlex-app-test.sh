@@ -16,7 +16,7 @@ grep -q '^NODES=worker-2$' "$repo_root/config/cluster/apps/paperlex.policy"
 grep -Fq 'mem_limit: ${PAPERLEX_MEMORY_LIMIT:-1280m}' "$app/compose.yml"
 grep -Fq 'PAPERLESS_DBENGINE: sqlite' "$app/compose.yml"
 # shellcheck disable=SC2016
-grep -Fq 'PAPERLESS_DB_TIMEOUT: ${PAPERLEX_DB_TIMEOUT:-60}' "$app/compose.yml"
+grep -Fq 'PAPERLESS_DB_OPTIONS: ${PAPERLEX_DB_OPTIONS:-timeout=60}' "$app/compose.yml"
 # shellcheck disable=SC2016
 grep -Fq 'PAPERLESS_OCR_MODE: ${PAPERLEX_OCR_MODE:-auto}' "$app/compose.yml"
 [[ -x "$app/init-superuser.sh" ]]
@@ -24,7 +24,11 @@ grep -Fq 'init-superuser.sh:/custom-cont-init.d/01-ensure-superuser.sh:ro' "$app
 
 # Verify Caddy reverse proxies
 grep -Fq 'reverse_proxy paperlex:8000' "$app/route.follower.caddy"
+grep -Fq 'Referrer-Policy same-origin' "$app/route.follower.caddy"
+grep -Fq 'request_header @null_origin -Origin' "$app/route.follower.caddy"
 grep -Fq 'health_uri /accounts/login/' "$app/route.leader.caddy"
+grep -Fq 'Referrer-Policy same-origin' "$app/route.leader.caddy"
+grep -Fq 'request_header @null_origin -Origin' "$app/route.leader.caddy"
 # shellcheck disable=SC2016
 grep -Fq 'reverse_proxy {$PAPERLEX_UPSTREAM}' "$app/route.leader.caddy"
 
