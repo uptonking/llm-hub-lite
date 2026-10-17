@@ -280,6 +280,8 @@ grep -Fq 'consumer app target is not active: worker-2' <<<"$output"
 mv "$tmp/worker-2.state-original" "$tmp/control/current/config/cluster/nodes/worker-2.env"
 # Leader-side origin smoke skips inactive origins, but must fail closed when no
 # eligible active follower remains to check.
+cp "$tmp/control/current/config/cluster/apps/librechat.policy" "$tmp/librechat.policy.skip-test"
+sed 's/^NODES=.*/NODES=worker-1,worker-2/' "$tmp/librechat.policy.skip-test" >"$tmp/control/current/config/cluster/apps/librechat.policy"
 cp "$tmp/control/current/config/cluster/nodes/worker-1.env" "$tmp/worker-1.state-original"
 cp "$tmp/control/current/config/cluster/nodes/worker-2.env" "$tmp/worker-2.state-original"
 sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$tmp/worker-2.state-original" >"$tmp/control/current/config/cluster/nodes/worker-2.env"
@@ -293,6 +295,7 @@ fi
 grep -Fq 'consumer has no origins to check: librechat' <<<"$output"
 mv "$tmp/worker-1.state-original" "$tmp/control/current/config/cluster/nodes/worker-1.env"
 mv "$tmp/worker-2.state-original" "$tmp/control/current/config/cluster/nodes/worker-2.env"
+mv "$tmp/librechat.policy.skip-test" "$tmp/control/current/config/cluster/apps/librechat.policy"
 if observer_smoke_failure="$(OBSERVER_SMOKE_EMPTY=1 OBSERVER_SMOKE_ATTEMPTS=2 OBSERVER_SMOKE_RETRY_DELAY=0 \
 	bash "$repo_root/ops/platformctl.sh" observer-smoke 2>&1)"; then
 	printf 'Observer smoke check accepted a missing collector heartbeat\n' >&2
@@ -473,9 +476,7 @@ if grep -Fq 'header_up Host {http.request.host}' "$tmp/app/shared/runtime/config
 	exit 1
 fi
 
-# A stale singleton transition marker must fail closed. In particular, a
-# previous target may not be the Leader (or any other inactive/non-follower),
-# even when the committed singleton placement itself is valid.
+# A stale singleton transition marker must fail closed; target cannot be leader.
 mkdir -p "$tmp/config/singleton-state"
 printf 'leader\n' >"$tmp/config/singleton-state/cpapi.previous-target"
 if output="$(platform_validate_library cpapi 0 1 0 1 2>&1)"; then
@@ -485,9 +486,7 @@ fi
 grep -Fq 'singleton previous target is not an active follower: leader' <<<"$output"
 rm -f "$tmp/config/singleton-state/cpapi.previous-target"
 
-# A singleton target switch is a route transaction. Keep the old route and the
-# previous-target marker until both the new origin and public path return the
-# manifest's expected health body.
+# A singleton switch is a route transaction that preserves old route on failure.
 cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.original"
 cp "$tmp/app/shared/runtime/config/routes.d/librechat.caddy" "$tmp/librechat-route.before-switch"
 sed 's/^NODES=.*/NODES=worker-2/' "$tmp/cpapi-policy.original" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
@@ -587,15 +586,17 @@ grep -Fq 'consumer origin smoke requires an active follower: librechat/worker-1'
 mv "$tmp/worker-1.state-original" "$tmp/control/current/config/cluster/nodes/worker-1.env"
 install_test_node leader
 
-# Restore committed placement, then prove follower reconciliation preserves the
-# active-active LibreChat project while selecting singletons only on their one
-# configured follower.
+# Restore committed placement, then prove follower reconciliation selects singletons
+# only on their configured follower while skipping disabled or off-node projects.
 cp "$tmp/cpapi-policy.original" "$tmp/control/current/config/cluster/apps/cpapi.policy"
 install_test_node worker-1
 : >"$tmp/compose.log"
 bash "$repo_root/ops/platformctl.sh" sync apps >/dev/null
-for project in app-librechat app-aichorouter app-cpapi app-cursorapi app-aichor1; do
+for project in app-aichorouter app-cpapi app-cursorapi; do
 	grep -Fq "$project" "$tmp/compose.log"
+done
+for project in app-librechat app-aichor1; do
+	! grep -Fq "$project" "$tmp/compose.log"
 done
 # A staged application release must force-recreate its selected project.
 # Compose can otherwise miss inline configs.content changes and report an old
@@ -639,10 +640,6 @@ if DIRECT_PORT_BIND='127.0.0.1:443' bash "$repo_root/ops/platformctl.sh" direct-
 	exit 1
 fi
 install_test_node leader
-# The final Leader render below covers both active-active upstreams. Avoid a
-# duplicate render here; the preceding worker sync assertions already prove
-# node-local placement and health behavior.
-
 bash "$repo_root/ops/platformctl.sh" status --json | jq -e '.node == "leader" and .role == "leader"' >/dev/null
 sed 's/^ENABLED=.*/ENABLED=false/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
 mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
@@ -665,12 +662,10 @@ cp "$repo_root/.env.dev.example" "$tmp/app/shared/.env.prod"
 platform_validate_library librechat 0 1 0 1
 grep -Fq 'librechat-client:80' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 bash "$repo_root/ops/platformctl.sh" smoke "app:$tmp/control/current/apps/librechat"
-# Re-establish the Leader's installed route before simulating a target-policy
-# change. Earlier checks intentionally reuse this fixture as a Follower and
-# therefore replace its staged Caddy route with the Follower template.
+# Re-establish Leader route before simulating a target-policy change.
 install_test_node leader
 platform_validate_library librechat 0 1 0 1 '' all
-grep -Fq 'worker1-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
+! grep -Fq 'worker1-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 grep -Fq 'worker2-chat-origin.aichorage.de' "$tmp/app/shared/runtime/config/routes.d/librechat.caddy"
 cp "$tmp/control/current/config/cluster/apps/cpapi.policy" "$tmp/cpapi-policy.skip-test"
 sed 's/^NODES=.*/NODES=worker-2/' "$tmp/cpapi-policy.skip-test" >"$tmp/control/current/config/cluster/apps/cpapi.policy"
