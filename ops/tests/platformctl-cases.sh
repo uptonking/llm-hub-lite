@@ -648,12 +648,7 @@ platform_validate_library newapi 0 1 0 1
 sed 's/^ENABLED=.*/ENABLED=true/' "$tmp/control/current/config/cluster/apps/newapi.policy" >"$tmp/policy.tmp"
 mv "$tmp/policy.tmp" "$tmp/control/current/config/cluster/apps/newapi.policy"
 sed -e 's/^DOMAIN_NAME=.*/DOMAIN_NAME=aichorage.de/' -e 's#^LIBRECHAT_AWS_ENDPOINT_URL=.*#LIBRECHAT_AWS_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com#' "$repo_root/.env.dev.example" >"$tmp/app/shared/.env.prod"
-cat >"$tmp/config/aichorouter.env" <<'EOF'
-AICHOROUTER_SESSION_SECRET=test-session
-AICHOROUTER_CRYPTO_SECRET=test-crypto
-AICHOROUTER_NODE_NAME=aichorouter-test
-EOF
-install_test_node worker-1
+install_test_node worker-2
 if PLATFORM_TEST_SKIP_CLUSTER_VALIDATION=0 platform_validate_fast >/dev/null 2>&1; then
 	printf 'production LibreChat placeholder was accepted\n' >&2
 	exit 1
