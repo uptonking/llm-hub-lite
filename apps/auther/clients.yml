@@ -9,6 +9,16 @@
 # the compose environment passthrough, and push.
 identity_providers:
   oidc:
+    cors:
+      endpoints:
+        - 'authorization'
+        - 'token'
+        - 'revocation'
+        - 'introspection'
+        - 'userinfo'
+      allowed_origins_from_client_redirect_uris: true
+      allowed_origins:
+        - 'https://openclouds.aichorage.de'
     clients:
       - client_id: ladocs
         client_name: LaSuite Docs
@@ -43,6 +53,7 @@ identity_providers:
           - 'https://openclouds.aichorage.de/'
           - 'https://openclouds.aichorage.de/oidc-callback.html'
           - 'https://openclouds.aichorage.de/oidc-silent-redirect.html'
+          - 'https://openclouds.aichorage.de/web-oidc-callback'
         scopes:
           - 'openid'
           - 'profile'

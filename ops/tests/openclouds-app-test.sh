@@ -29,8 +29,15 @@ grep -Fq '/var/lib/opencloud' "$app/compose.yml"
 # Verify PosixFS and OIDC settings
 grep -Fq 'STORAGE_USERS_DRIVER: "posix"' "$app/compose.yml"
 grep -Fq 'OC_OIDC_ISSUER: "https://auther.aichorage.de"' "$app/compose.yml"
+grep -Fq 'WEB_OIDC_SCOPE: "openid profile email groups"' "$app/compose.yml"
 grep -Fq 'OC_EXCLUDE_RUN_SERVICES: "idp,search,activitylog,userlog,thumbnails,ocm"' "$app/compose.yml"
 grep -Fq 'FRONTEND_CHECK_FOR_UPDATES: "false"' "$app/compose.yml"
+
+# Verify Auther OIDC client and CORS registration
+grep -Fq 'client_id: openclouds' "$repo_root/apps/auther/clients.yml"
+grep -Fq 'https://openclouds.aichorage.de/oidc-callback.html' "$repo_root/apps/auther/clients.yml"
+grep -Fq 'allowed_origins_from_client_redirect_uris: true' "$repo_root/apps/auther/clients.yml"
+grep -Fq 'https://openclouds.aichorage.de' "$repo_root/apps/auther/clients.yml"
 
 # Verify Caddy reverse proxies
 grep -Fq 'reverse_proxy openclouds:9200' "$app/route.follower.caddy"
