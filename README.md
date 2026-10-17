@@ -56,11 +56,13 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - Caddy
     - Woodpecker agent
     - Beszel agent
-    - LibreChat
     - Aichorouter (the default singleton target)
     - CPAPI (the default singleton target)
     - Cursorapi (the default singleton target)
-    - Relaichor1 (Paseo Relay Go) singleton
+    - CPAMP (CPA-Manager-Plus Full Mode) singleton
+    - Auther (Authelia OIDC) singleton
+    - LibreChat (retained on worker-2 only; disabled on worker-1)
+    - Aichor1 and Relaichor1 retained but disabled by policy
 - Follower worker-2:
     - Caddy
     - Woodpecker agent
@@ -132,19 +134,20 @@ and it starts with a 900 MiB / 0.80 CPU profile. Change `NODES` in
 `config/cluster/apps/aichor.policy` to move it to another active follower; the
 move is fresh and does not copy sessions, credentials, or workspace contents.
 
-Aichor1 is an independent Paseo singleton at `aichor1.aichorage.de`, targeting
-worker-1 by default through `worker1-aichor1-origin.<domain>`. It has its own
-password, provider fallback secrets, Compose project, persistent
+Aichor1 is an independent Paseo singleton at `aichor1.aichorage.de`, retained
+on worker-1 but currently disabled by committed policy (`config/cluster/apps/aichor1.policy`).
+It has its own password, provider fallback secrets, Compose project, persistent
 `data/prod/aichor1` home, and daemon identity; it is not a replica or failover
-target for Aichor. Change `NODES` in `config/cluster/apps/aichor1.policy` (or
-use `ops/configure-app-placement.sh aichor1 <follower>`) to select another
-active follower. Both hosts use the shared Paseo runtime helper and the same
+target for Aichor. To re-enable it, set `ENABLED=true` in its policy. Change `NODES`
+in `config/cluster/apps/aichor1.policy` (or use `ops/configure-app-placement.sh aichor1 <follower>`)
+to select another active follower. Both hosts use the shared Paseo runtime helper and the same
 digest-pinned bundled-agent image, so a future Paseo host only needs a new
 manifest/config/Compose/routes/policy set with a unique prefix and data root.
 
 Two standalone relay choices are available for mobile pairing:
-`relaichor.aichorage.de` (Elixir relay, worker-2) and
-`relaichor1.aichorage.de` (Go relay, worker-1). Enter either host and port
+`relaichor.aichorage.de` (Elixir relay, active on worker-2) and
+`relaichor1.aichorage.de` (Go relay, worker-1, currently disabled by committed policy in
+`config/cluster/apps/relaichor1.policy`). Enter either host and port
 (`relaichor.aichorage.de:443` or `relaichor1.aichorage.de:443`) in Aichor or
 Aichor3's relay settings with TLS enabled. The relay services are independent;
 changing the endpoint in a Paseo app does not move or restart either service.

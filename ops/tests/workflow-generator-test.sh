@@ -70,13 +70,13 @@ for file in \
 	consumer-secrets-aichor-worker-2.yml consumer-stop-aichor-worker-1.yml \
 	consumer-stop-aichor-worker-3.yml consumer-stop-aichor-worker-4.yml \
 	consumer-finalize-aichor-worker-2.yml \
-	consumer-stage-aichor1-worker-1.yml consumer-publish-aichor1.yml \
-	consumer-secrets-aichor1-worker-1.yml consumer-stop-aichor1-worker-2.yml \
+	consumer-publish-aichor1.yml \
+	consumer-stop-aichor1-worker-1.yml consumer-stop-aichor1-worker-2.yml \
 	consumer-stop-aichor1-worker-3.yml consumer-stop-aichor1-worker-4.yml \
-	consumer-finalize-aichor1-worker-1.yml \
 	consumer-stage-aichorouter-worker-1.yml consumer-publish-aichorouter.yml consumer-stop-aichorouter-worker-2.yml \
 	consumer-finalize-aichorouter-worker-1.yml \
-	consumer-stage-librechat-worker-1.yml consumer-stage-librechat-worker-2.yml consumer-publish-librechat.yml \
+	consumer-stage-librechat-worker-2.yml consumer-publish-librechat.yml \
+	consumer-stop-librechat-worker-1.yml \
 	consumer-stage-wapdf-worker-2.yml consumer-publish-wapdf.yml consumer-stop-wapdf-worker-1.yml \
 	consumer-stop-wapdf-worker-3.yml consumer-stop-wapdf-worker-4.yml consumer-finalize-wapdf-worker-2.yml \
 	consumer-stage-searx-worker-2.yml consumer-publish-searx.yml consumer-stop-searx-worker-1.yml \
@@ -91,12 +91,7 @@ for file in \
 		exit 1
 	}
 done
-grep -Fq 'configure-app-secrets aichor1 --target-node worker-1 --ensure-generated' "$base/workflows/consumer-stage-aichor1-worker-1.yml"
-grep -Fq 'GH_TOKEN:' "$base/workflows/consumer-stage-aichor1-worker-1.yml"
-grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-stage-aichor1-worker-1.yml"
-grep -Fq 'GH_TOKEN:' "$base/workflows/consumer-secrets-aichor1-worker-1.yml"
-grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-secrets-aichor1-worker-1.yml"
-grep -Fq 'consumer-stage-aichor1-worker-1' "$base/workflows/consumer-publish-aichor1.yml"
+grep -Fq 'consumer-publish-aichor1' "$base/workflows/consumer-stop-aichor1-worker-1.yml"
 grep -Fq '/usr/local/bin/configure-app-secrets aichor --target-node worker-2 --ensure-generated' "$base/workflows/consumer-stage-aichor-worker-2.yml"
 grep -Fq 'GH_TOKEN:' "$base/workflows/consumer-stage-aichor-worker-2.yml"
 grep -Fq 'from_secret: GH_TOKEN' "$base/workflows/consumer-stage-aichor-worker-2.yml"
@@ -185,13 +180,8 @@ for file in "$base"/workflows/consumer-{stage,publish,stop,finalize}-*.yml "$bas
 done
 [[ ! -e "$base/workflows/consumer-stage-newapi-worker-1.yml" ]]
 [[ ! -e "$base/workflows/consumer-stage-pigeon-worker-2.yml" ]]
-[[ ! -e "$base/workflows/consumer-stop-librechat-worker-1.yml" ]]
+[[ -f "$base/workflows/consumer-stop-librechat-worker-1.yml" ]]
 [[ ! -e "$base/workflows/consumer-secrets-wapdf-worker-2.yml" ]]
-if grep -Fq 'consumer-stage-librechat-worker-1' "$base/workflows/consumer-stage-librechat-worker-2.yml"; then
-	printf 'active-active stages must fan out without stage dependencies\n' >&2
-	exit 1
-fi
-grep -Fq 'consumer-stage-librechat-worker-1' "$base/workflows/consumer-publish-librechat.yml"
 grep -Fq 'consumer-stage-librechat-worker-2' "$base/workflows/consumer-publish-librechat.yml"
 grep -Fq $'depends_on:\n  - consumer-stage-aichorouter-worker-1' "$base/workflows/consumer-publish-aichorouter.yml"
 grep -Fq $'depends_on:\n  - consumer-publish-aichorouter' "$base/workflows/consumer-stop-aichorouter-worker-2.yml"
@@ -204,7 +194,7 @@ if grep -Fq 'SINGLETON_FINAL_STOP=1' "$base/workflows/consumer-stop-aichorouter-
 	exit 1
 fi
 grep -Fq $'depends_on:\n  - consumer-publish-newapi' "$base/workflows/consumer-stop-newapi-worker-2.yml"
-grep -Fq 'CONSUMER_APP_ID=librechat /usr/local/bin/platform-submit consumer-stage' "$base/workflows/consumer-stage-librechat-worker-1.yml"
+grep -Fq 'CONSUMER_APP_ID=librechat /usr/local/bin/platform-submit consumer-stage' "$base/workflows/consumer-stage-librechat-worker-2.yml"
 if grep -Fq 'push-audit' "$base/workflows/control-sync-leader.yml"; then
 	printf 'Leader control-sync must not depend on informational push-audit\n' >&2
 	exit 1
@@ -240,19 +230,19 @@ for secret in FLOWY_S3_ENDPOINT FLOWY_S3_BUCKET FLOWY_S3_ACCESS_KEY_ID FLOWY_S3_
 done
 grep -Fq 'FLOWY_FILE_STORAGE_LOCATION=S3' "$base/apps/flowy/config.env"
 [[ -f "$base/workflows/consumer-secrets-librechat-leader.yml" ]]
-[[ -f "$base/workflows/consumer-secrets-librechat-worker-1.yml" ]]
+[[ ! -e "$base/workflows/consumer-secrets-librechat-worker-1.yml" ]]
 [[ -f "$base/workflows/consumer-secrets-librechat-worker-2.yml" ]]
 [[ ! -e "$base/workflows/consumer-secrets-librechat-worker-3.yml" ]]
-for node in leader worker-1 worker-2; do
+for node in leader worker-2; do
 	grep -Fq 'from_secret: LIBRECHAT_OPENROUTER_KEY' "$base/workflows/consumer-secrets-librechat-$node.yml"
 done
-if grep -Fq 'from_secret: librechat_mongo_uri' "$base/workflows/consumer-secrets-librechat-worker-1.yml"; then
+if grep -Fq 'from_secret: librechat_mongo_uri' "$base/workflows/consumer-secrets-librechat-worker-2.yml"; then
 	printf 'mapped LibreChat secret workflow must preserve unmapped host-local secrets\n' >&2
 	exit 1
 fi
 for file in \
 	consumer-secrets-librechat-leader.yml \
-	consumer-secrets-librechat-worker-1.yml \
+	consumer-secrets-librechat-worker-2.yml \
 	foundation-upgrade-leader.yml \
 	runner-upgrade-leader.yml \
 	rollback-leader.yml; do
@@ -350,7 +340,7 @@ expect_invalid "$leader_target" 'consumer node must be an active follower: cpapi
 draining="$(make_fixture draining)"
 sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$draining/config/cluster/nodes/worker-1.env" >"$draining/worker-1.env"
 mv "$draining/worker-1.env" "$draining/config/cluster/nodes/worker-1.env"
-expect_invalid "$draining" 'consumer node must be an active follower: aichor1/worker-1'
+expect_invalid "$draining" 'consumer node must be an active follower: aichorouter/worker-1'
 
 draining_leader="$(make_fixture draining-leader)"
 sed 's/^NODE_STATE=.*/NODE_STATE=draining/' "$draining_leader/config/cluster/nodes/leader.env" >"$draining_leader/leader.env"

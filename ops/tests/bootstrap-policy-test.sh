@@ -139,7 +139,7 @@ image_selection="$(IMAGE_FUNCTION="$image_function" SOURCE_ROOT="$repo_root" boo
 grep -Fqx 'CADDY_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'BESZEL_AGENT_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'WOODPECKER_AGENT_IMAGE=required' <<<"$image_selection"
-grep -Fqx 'LIBRECHAT_API_IMAGE=required' <<<"$image_selection"
+grep -Fqx 'LIBRECHAT_API_IMAGE=skipped' <<<"$image_selection"
 grep -Fqx 'NEW_API_IMAGE=skipped' <<<"$image_selection"
 grep -Fqx 'CPAPI_IMAGE=required' <<<"$image_selection"
 grep -Fqx 'AICHOROUTER_IMAGE=required' <<<"$image_selection"
@@ -331,8 +331,10 @@ follower_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summa
 	print_bootstrap_summary
 ')"
 grep -Fq 'Foundation: beszel-worker, caddy, observer-collector, woodpecker-worker' <<<"$follower_summary"
-grep -Fq 'Consumers: Aichor1 (Paseo), Aichorouter, Auther (Authelia OIDC), CPAMP, CPAPI, Cursor API Proxy, LibreChat, Relaichor1 (Paseo Relay Go)' <<<"$follower_summary"
-grep -Fq 'LibreChat origin: https://worker-chat-origin.example.test' <<<"$follower_summary"
+grep -Fq 'Consumers: Aichorouter, Auther (Authelia OIDC), CPAMP, CPAPI, Cursor API Proxy' <<<"$follower_summary"
+grep -Fq 'Aichor1 (Paseo) (disabled by policy)' <<<"$follower_summary"
+grep -Fq 'LibreChat (not on this node)' <<<"$follower_summary"
+grep -Fq 'Relaichor1 (Paseo Relay Go) (disabled by policy)' <<<"$follower_summary"
 grep -Fq 'Daily deployments are workflow-driven' <<<"$follower_summary"
 wrapper_declaration="$(sed -n '/^for script in /p' "$bootstrap")"
 while IFS= read -r executable; do

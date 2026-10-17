@@ -104,7 +104,7 @@ for pat in 'PASEO_PASSWORD: ${AICHOR1_PASSWORD:?AICHOR1_PASSWORD must be set}' \
 done
 grep -Fq 'reverse_proxy aichor1:6767' "$repo_root/apps/aichor1/route.follower.caddy"
 grep -Fq '{$AICHOR1_SITE}' "$repo_root/apps/aichor1/route.leader.caddy"
-grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/aichor1.policy"
+grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/aichor1.policy"
 grep -q '^NODES=worker-1$' "$repo_root/config/cluster/apps/aichor1.policy"
 grep -q '^NODE_AICHOR1_ORIGIN_HOST=worker1-aichor1-origin.aichorage.de$' "$repo_root/config/cluster/nodes/worker-1.env"
 for pat in '^APP_ID=searx$' '^UPSTREAM_MODE=singleton$' '^STATE_MODE=files$' \
@@ -304,7 +304,7 @@ grep -q '^NODES=worker-1$' "$repo_root/config/cluster/apps/cpapi.policy"
 grep -q '^NODES=worker-1$' "$repo_root/config/cluster/apps/cursorapi.policy"
 grep -q '^NODES=worker-2$' "$repo_root/config/cluster/apps/pigeon.policy"
 grep -q '^UPSTREAM_MODE=active-active$' "$repo_root/apps/librechat/manifest.env"
-grep -q '^NODES=worker-1,worker-2$' "$repo_root/config/cluster/apps/librechat.policy"
+grep -q '^NODES=worker-2$' "$repo_root/config/cluster/apps/librechat.policy"
 grep -q '^UPSTREAM_MODE=active-active$' "$repo_root/apps/newapi/manifest.env"
 grep -q '^NODES=worker-1,worker-2$' "$repo_root/config/cluster/apps/newapi.policy"
 for component in caddy beszel-controller beszel-worker woodpecker-controller woodpecker-deployer woodpecker-worker observer-controller observer-collector; do
@@ -546,11 +546,7 @@ grep -Fq 'CONSUMER_APP_ID=wapdf /usr/local/bin/platform-submit consumer-stage' "
 grep -Fq 'consumer-stage-wapdf-worker-2' "$repo_root/.woodpecker/consumer-publish-wapdf.yml"
 grep -Fq 'consumer-publish-wapdf' "$repo_root/.woodpecker/consumer-stop-wapdf-worker-1.yml"
 [[ ! -e "$repo_root/.woodpecker/consumer-secrets-wapdf-worker-2.yml" ]]
-if grep -Fq 'consumer-stage-librechat-worker-1' "$repo_root/.woodpecker/consumer-stage-librechat-worker-2.yml"; then
-	printf 'active-active stages must be parallel\n' >&2
-	exit 1
-fi
-grep -Fq 'consumer-stage-librechat-worker-1' "$repo_root/.woodpecker/consumer-publish-librechat.yml"
+[[ -f "$repo_root/.woodpecker/consumer-stop-librechat-worker-1.yml" ]]
 grep -Fq 'consumer-stage-librechat-worker-2' "$repo_root/.woodpecker/consumer-publish-librechat.yml"
 grep -q '^NEW_API_NODE_TYPE=master$' "$repo_root/config/cluster/nodes/worker-1.env"
 grep -q '^NEW_API_NODE_TYPE=slave$' "$repo_root/config/cluster/nodes/worker-2.env"

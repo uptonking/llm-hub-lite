@@ -13,7 +13,6 @@ when:
       on_empty: false
 
 depends_on:
-  - consumer-stage-relaichor1-worker-1
   - control-sync-leader
   - name: foundation-reconcile-leader
     optional: true

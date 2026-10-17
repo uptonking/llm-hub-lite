@@ -3,10 +3,11 @@
 ## Purpose
 
 Self-hosted, reproducible multi-node Docker platform for Caddy, Woodpecker CI, Beszel, and LibreChat.
-LibreChat is the enabled active-active follower consumer. Aichorouter, CPAPI, Cursorapi, CPAMP,
-and Aichor1 are enabled singleton consumers targeted to configured followers; Aichor1 (Paseo) is
-at `aichor1.aichorage.de` on worker-1, and CPAMP (CPA-Manager-Plus Full Mode) is the management/observability
-panel for CPAPI at `cpamp.aichorage.de` on worker-1.
+LibreChat is the enabled follower consumer targeted to worker-2 (disabled on worker-1 by committed
+policy). Aichorouter, CPAPI, Cursorapi, and CPAMP are enabled singleton consumers targeted to configured
+followers; CPAMP (CPA-Manager-Plus Full Mode) is the management/observability panel for CPAPI at
+`cpamp.aichorage.de` on worker-1. Aichor1 (Paseo) and Relaichor1 (Paseo Relay Go) on worker-1 are retained
+but disabled by committed policy.
 Auther (Authelia OIDC) is an enabled leader-proxy singleton on worker-1 at `auther.aichorage.de`; it is the
 platform's general-purpose OpenID Connect provider (issuer `https://auther.aichorage.de`), backed by Authelia's
 file authentication backend and SQLite storage, exposing `/.well-known/openid-configuration`, `/jwks.json`, and

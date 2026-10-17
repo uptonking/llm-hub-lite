@@ -9,7 +9,7 @@ grep -q '^UPSTREAM_MODE=singleton$' "$app/manifest.env"
 grep -q '^STATE_MODE=ephemeral$' "$app/manifest.env"
 grep -q '^HEALTH_URL=/health$' "$app/manifest.env"
 grep -q '^HEALTH_MODE=process$' "$app/manifest.env"
-grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/relaichor1.policy"
+grep -q '^ENABLED=false$' "$repo_root/config/cluster/apps/relaichor1.policy"
 grep -q '^NODES=worker-1$' "$repo_root/config/cluster/apps/relaichor1.policy"
 grep -q '^RELAICHOR1_MEMORY_LIMIT=256m$' "$app/config.env"
 grep -q '^RELAICHOR1_CPUS=0.20$' "$app/config.env"
@@ -26,16 +26,15 @@ for node in leader worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
 		"$repo_root/config/cluster/nodes/$node.env"
 done
 for workflow in \
-	consumer-stage-relaichor1-worker-1.yml \
 	consumer-publish-relaichor1.yml \
-	consumer-finalize-relaichor1-worker-1.yml \
+	consumer-stop-relaichor1-worker-1.yml \
 	consumer-stop-relaichor1-worker-2.yml \
 	consumer-stop-relaichor1-worker-3.yml \
 	consumer-stop-relaichor1-worker-4.yml; do
 	[[ -f "$repo_root/.woodpecker/$workflow" ]]
 done
-if find "$repo_root/.woodpecker" -maxdepth 1 -name 'consumer-stage-relaichor1-worker-*.yml' ! -name '*worker-1.yml' | grep -q .; then
-	printf 'Relaichor1 generated a stage workflow outside its singleton target\n' >&2
+if find "$repo_root/.woodpecker" -maxdepth 1 -name 'consumer-stage-relaichor1-worker-*.yml' | grep -q .; then
+	printf 'Relaichor1 generated an unexpected stage workflow while disabled\n' >&2
 	exit 1
 fi
 printf 'Relaichor1 application tests passed\n'
