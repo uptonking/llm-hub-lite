@@ -10,6 +10,11 @@ grep -q '^STATE_MODE=sqlite$' "$app/manifest.env"
 grep -q '^HEALTH_URL=/api/v1/version$' "$app/manifest.env"
 grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/gtea.policy"
 grep -q '^NODES=worker-2$' "$repo_root/config/cluster/apps/gtea.policy"
+grep -q '^GTEA_DISABLE_REGISTRATION=true$' "$app/config.env"
+# shellcheck disable=SC2016
+grep -Fq 'DISABLE_REGISTRATION: ${GTEA_DISABLE_REGISTRATION:-true}' "$app/compose.yml"
+# shellcheck disable=SC2016
+grep -Fq 'GITEA__service__DISABLE_REGISTRATION: ${GTEA_DISABLE_REGISTRATION:-true}' "$app/compose.yml"
 
 # Verify Compose limits and constraints
 # shellcheck disable=SC2016
