@@ -66,4 +66,15 @@ except Exception:
 	fi
 ) &
 
+# Ensure example directory permissions and compatibility symlink
+EXAMPLE_DIR="/var/www/onlyoffice/documentserver-example/public/files"
+EXAMPLE_LIB_DIR="/var/lib/onlyoffice/documentserver-example"
+mkdir -p "$EXAMPLE_DIR" "$EXAMPLE_LIB_DIR"
+chown -R ds:ds "$EXAMPLE_DIR" "$EXAMPLE_LIB_DIR"
+chmod -R 775 "$EXAMPLE_DIR"
+if [ ! -L "$EXAMPLE_LIB_DIR/files" ]; then
+	rm -rf "$EXAMPLE_LIB_DIR/files"
+	ln -s "$EXAMPLE_DIR" "$EXAMPLE_LIB_DIR/files"
+fi
+
 exec /app/ds/run-document-server.sh "$@"

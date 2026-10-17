@@ -35,6 +35,10 @@ steps:
     pull: true
     environment:
       PLATFORM_CONTROLLER_IMAGE: ghcr.io/uptonking/llm-hub-lite-deploy-runner:v0.4.0@sha256:1038afc7446cdba70318586753adba3d4a2c78e1f5e878d8adfa68e06ac2af25
+      ONOFFICE_EXAMPLE_AUTH_USER:
+        from_secret: onoffice_example_auth_user
+      ONOFFICE_EXAMPLE_AUTH_HASH:
+        from_secret: onoffice_example_auth_hash
       ONOFFICE_JWT_SECRET:
         from_secret: onoffice_jwt_secret
     volumes:

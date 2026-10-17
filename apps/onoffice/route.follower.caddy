@@ -2,6 +2,13 @@
   # Private Leader-to-follower origin.
   tls internal
   import common_proxy
+  @example_upload {
+    method POST
+    path /example/upload /example/upload/* /example/create /example/create/*
+  }
+  basic_auth @example_upload {
+    {$ONOFFICE_EXAMPLE_AUTH_USER} {$ONOFFICE_EXAMPLE_AUTH_HASH}
+  }
   reverse_proxy onoffice:80 {
     flush_interval -1
     header_up Host {$ONOFFICE_SITE_HOST}

@@ -33,6 +33,7 @@ services:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/postgresql:/var/lib/postgresql
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/rabbitmq:/var/lib/rabbitmq
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/redis:/var/lib/redis
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/example:/var/www/onlyoffice/documentserver-example/public/files
       - ./entrypoint.sh:/app/ds/entrypoint.sh:ro
     networks:
       platform_edge:

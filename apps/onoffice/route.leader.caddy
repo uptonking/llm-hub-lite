@@ -1,5 +1,12 @@
 {$ONOFFICE_SITE} {
   import common_proxy
+  @example_upload {
+    method POST
+    path /example/upload /example/upload/* /example/create /example/create/*
+  }
+  basic_auth @example_upload {
+    {$ONOFFICE_EXAMPLE_AUTH_USER} {$ONOFFICE_EXAMPLE_AUTH_HASH}
+  }
   reverse_proxy {$ONOFFICE_UPSTREAM} {
     transport http {
       tls_insecure_skip_verify
