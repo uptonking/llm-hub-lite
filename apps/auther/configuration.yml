@@ -23,7 +23,6 @@ session:
   cookies:
     - domain: aichorage.de
       authelia_url: https://auther.aichorage.de
-      default_redirection_url: https://www.aichorage.de
       expiration: 1h
       inactivity: 30m
       remember_me: 30d
