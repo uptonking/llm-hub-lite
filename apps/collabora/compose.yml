@@ -16,11 +16,11 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       server_name: collabora.aichorage.de
-      aliasgroup1: https://openclouds.aichorage.de
+      aliasgroup1: https://openclouds.aichorage.de,https://openclouds.aichorage.de:443
       username: ${COLLABORA_ADMIN_USER:-admin}
       password: ${COLLABORA_ADMIN_PASSWORD:?COLLABORA_ADMIN_PASSWORD must be set}
       extra_params: >-
-        --o:ssl.enable=false --o:ssl.termination=true --o:welcome.enable=false --o:net.frame_ancestors=openclouds.aichorage.de collabora.aichorage.de --o:net.lok_allow.host[14]=openclouds.aichorage.de --o:net.content_security_policy=frame-ancestors 'self' https://openclouds.aichorage.de https://collabora.aichorage.de --o:ai.enabled=true --o:ai.allow_user_settings=true --o:languagetool.enabled=false --o:languagetool.allow_user_settings=false --o:deepl.enabled=false --o:grammalecte.enabled=false --o:grammalecte.allow_user_settings=false --o:duden.enabled=false --o:duden.allow_user_settings=false --o:num_prespawn_children=1 --o:fetch_update_check=0 --o:allow_update_popup=false
+        --o:ssl.enable=false --o:ssl.termination=true --o:welcome.enable=false --o:net.content_security_policy=frame-ancestors 'self' https://openclouds.aichorage.de https://collabora.aichorage.de openclouds.aichorage.de collabora.aichorage.de; --o:net.lok_allow.host[14]=openclouds.aichorage.de --o:net.lok_allow.host[15]=openclouds.aichorage.de:443 --o:ai.enabled=true --o:ai.allow_user_settings=true --o:languagetool.enabled=false --o:languagetool.allow_user_settings=false --o:deepl.enabled=false --o:grammalecte.enabled=false --o:grammalecte.allow_user_settings=false --o:duden.enabled=false --o:duden.allow_user_settings=false --o:num_prespawn_children=1 --o:fetch_update_check=0 --o:allow_update_popup=false
     networks:
       platform_edge:
         aliases: [collabora]

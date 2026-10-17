@@ -40,7 +40,7 @@ services:
       COLLABORATION_APP_NAME: "CollaboraOnline"
       COLLABORATION_APP_PRODUCT: "Collabora"
       COLLABORATION_APP_ADDR: ${COLLABORA_SITE:-https://collabora.aichorage.de}
-      COLLABORATION_APP_ICON: ${COLLABORA_SITE:-https://collabora.aichorage.de}/favicon.ico
+      COLLABORATION_APP_DESCRIPTION: "Collabora Online"
       COLLABORATION_APP_INSECURE: "false"
       COLLABORATION_CS3API_DATAGATEWAY_INSECURE: "false"
       COLLABORATION_APP_PROOF_DISABLE: "true"
