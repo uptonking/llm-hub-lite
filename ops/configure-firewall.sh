@@ -14,6 +14,10 @@ source "$config_file"
 : "${CLUSTER_POLICY_FILE:=$CONTROL_ROOT/current/config/cluster/policy.env}"
 REQUEST_FILE="${FIREWALL_RECONCILE_REQUEST_FILE:-/etc/llm-hub-lite/firewall-reconcile.request}"
 value() { sed -n "s/^$1=//p" "$2" | tail -n1; }
+csv_has() {
+	local csv=",${1//[[:space:]]/},"
+	[[ "$csv" == *",$2,"* ]]
+}
 valid_ipv4() {
 	local ip="$1" octet
 	local -a octets
@@ -108,9 +112,61 @@ reconcile_ssh_hardening() {
 	[[ -x "$harden_ssh" ]] || return 0
 	PLATFORM_SSH_HARDENING_QUIET=1 "$harden_ssh"
 }
-# The role split below returns early for the Leader, so the role-independent
-# SSH policy has to be reconciled before it rather than at the end of the file.
+reconcile_app_fail2ban() {
+	command -v fail2ban-client >/dev/null 2>&1 || return 0
+	[[ -d /etc/fail2ban/filter.d && -d /etc/fail2ban/jail.d ]] || return 0
+	local manifest app_dir app_id app_policy app_enabled app_nodes is_active filter_file target_filter jail_file target_jail monitored_log
+	local reloaded=0
+	while IFS= read -r manifest; do
+		[[ -f "$manifest" ]] || continue
+		app_dir="$(dirname "$manifest")"
+		app_id="$(basename "$app_dir")"
+		[[ -d "$app_dir/fail2ban" ]] || continue
+		app_policy="$CONTROL_ROOT/current/config/cluster/apps/$app_id.policy"
+		app_enabled="$(value ENABLED "$app_policy")"
+		app_nodes="$(value NODES "$app_policy")"
+		is_active=0
+		[[ "$app_enabled" == true ]] && csv_has "$app_nodes" "$node_id" && is_active=1
+
+		for filter_file in "$app_dir/fail2ban"/*.filter.conf; do
+			[[ -f "$filter_file" ]] || continue
+			target_filter="/etc/fail2ban/filter.d/$(basename "${filter_file%.filter.conf}.local")"
+			if [[ "$is_active" -eq 1 ]]; then
+				if ! cmp -s "$filter_file" "$target_filter" 2>/dev/null; then
+					install -m 0644 "$filter_file" "$target_filter"
+					reloaded=1
+				fi
+			fi
+		done
+
+		for jail_file in "$app_dir/fail2ban"/*.jail.conf; do
+			[[ -f "$jail_file" ]] || continue
+			target_jail="/etc/fail2ban/jail.d/$(basename "${jail_file%.jail.conf}.local")"
+			if [[ "$is_active" -eq 1 ]]; then
+				monitored_log="$(sed -n 's/^[[:space:]]*logpath[[:space:]]*=[[:space:]]*//p' "$jail_file" | head -n1)"
+				if [[ -n "$monitored_log" && ! -f "$monitored_log" ]]; then
+					mkdir -p "$(dirname "$monitored_log")" 2>/dev/null || true
+					touch "$monitored_log" 2>/dev/null || true
+				fi
+				if ! cmp -s "$jail_file" "$target_jail" 2>/dev/null; then
+					install -m 0644 "$jail_file" "$target_jail"
+					reloaded=1
+				fi
+			elif [[ -f "$target_jail" ]]; then
+				rm -f -- "$target_jail"
+				reloaded=1
+			fi
+		done
+	done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+
+	if [[ "$reloaded" -eq 1 ]]; then
+		fail2ban-client reload >/dev/null 2>&1 || true
+	fi
+}
+# The role split below returns early for the Leader, so role-independent
+# security policies have to be reconciled before it rather than at the end of the file.
 reconcile_ssh_hardening
+reconcile_app_fail2ban
 clear_follower_ufw_rules
 ufw allow 443/tcp comment 'HTTPS' >/dev/null
 ufw allow 443/udp comment 'HTTP/3' >/dev/null

@@ -10,12 +10,17 @@ if [ -n "${GTEA_ADMIN_USER:-}" ] && [ -n "${GTEA_ADMIN_PASSWORD:-}" ]; then
 		while ! curl -fsS http://127.0.0.1:3000/api/v1/version >/dev/null 2>&1; do
 			sleep 2
 		done
-		su-exec git gitea admin user create \
+		if ! su-exec git gitea admin user create \
 			--admin \
 			--username "$GTEA_ADMIN_USER" \
 			--password "$GTEA_ADMIN_PASSWORD" \
 			--email "${GTEA_ADMIN_EMAIL:-admin@aichorage.de}" \
-			--must-change-password=false >/dev/null 2>&1 || true
+			--must-change-password=false >/dev/null 2>&1; then
+			su-exec git gitea admin user change-password \
+				--username "$GTEA_ADMIN_USER" \
+				--password "$GTEA_ADMIN_PASSWORD" \
+				--must-change-password=false >/dev/null 2>&1 || true
+		fi
 	) &
 fi
 

@@ -64,4 +64,40 @@ for workflow in \
 	[[ -f "$repo_root/.woodpecker/$workflow" ]]
 done
 
+grep -Fq 'GITEA__packages__ENABLED: "false"' "$app/compose.yml"
+grep -Fq 'GITEA__actions__ENABLED: "false"' "$app/compose.yml"
+grep -Fq 'GITEA__mailer__ENABLED: "false"' "$app/compose.yml"
+grep -Fq 'change-password' "$app/entrypoint.sh"
+grep -Fq 'flush_interval -1' "$app/route.leader.caddy"
+grep -Fq 'router: completed' "$app/fail2ban/gitea.filter.conf"
+
+# Verify Fail2ban automated reconciliation hooks in configure-firewall
+grep -Fq 'reconcile_app_fail2ban' "$repo_root/ops/configure-firewall.sh"
+grep -Fq 'fail2ban-client reload' "$repo_root/ops/configure-firewall.sh"
+
+# Verify Fail2ban regex parsing and match behavior for web auth, git over HTTPS, and REST API
+python3 - <<'EOF'
+import re
+
+with open("apps/gtea/fail2ban/gitea.filter.conf", "r", encoding="utf-8") as fh:
+    content = fh.read()
+
+regexes = [line.split("=", 1)[-1].strip() for line in content.splitlines() if "^.*" in line]
+assert len(regexes) == 2, f"Expected 2 failregex patterns, got {len(regexes)}"
+
+# Test 1: Web UI login failure
+web_line = "2026/10/17 16:02:40 ...ers/web/auth/auth.go:218:SignInPost() [W] Failed authentication attempt for admin from 192.0.2.182:0: user password invalid"
+pat1 = regexes[0].replace("<HOST>", r"(?P<host>[0-9.]+)")
+assert re.search(pat1, web_line), "Web auth failure must match regex 1"
+
+# Test 2: Git over HTTPS 401 Unauthorized
+git_line = "2026/10/17 16:04:54 ...eb/routing/logger.go:102:func1() [I] router: completed GET /admin/ci-test-repo.git/info/refs?service=git-upload-pack for 192.0.2.182:0, 401 Unauthorized in 113.1ms"
+pat2 = regexes[1].replace("<HOST>", r"(?P<host>[0-9.]+)")
+assert re.search(pat2, git_line), "Git 401 failure must match regex 2"
+
+# Test 3: REST API 401 Unauthorized
+api_line = "2026/10/17 16:02:08 ...eb/routing/logger.go:102:func1() [I] router: completed GET /api/v1/user for 192.0.2.182:0, 401 Unauthorized in 62.8ms @ v1/api.go:756(v1.Routes.apiAuth)"
+assert re.search(pat2, api_line), "API 401 failure must match regex 2"
+EOF
+
 printf 'Gtea application tests passed\n'

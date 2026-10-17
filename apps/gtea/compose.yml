@@ -45,6 +45,11 @@ services:
       GITEA__log_0x2E_file__MAX_DAYS: "7"
       GITEA__audit__RECORD_OUTPUT: ${GTEA_AUDIT_RECORD_OUTPUT:-database}
       GITEA__audit__RETENTION_DAYS: ${GTEA_AUDIT_RETENTION_DAYS:-30}
+      GITEA__packages__ENABLED: "false"
+      GITEA__actions__ENABLED: "false"
+      GITEA__mailer__ENABLED: "false"
+      GITEA__service__ENABLE_CAPTCHA: "false"
+      GITEA__repository__DEFAULT_BRANCH: "main"
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/gtea/data:/data
       - ./entrypoint.sh:/entrypoint.sh:ro
