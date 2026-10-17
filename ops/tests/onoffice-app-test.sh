@@ -31,6 +31,21 @@ grep -Fq '/var/lib/postgresql' "$app/compose.yml"
 grep -Fq '/var/lib/rabbitmq' "$app/compose.yml"
 grep -Fq '/var/lib/redis' "$app/compose.yml"
 grep -Fq 'test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:80/healthcheck | grep -Fq '\''true'\''"]' "$app/compose.yml"
+grep -Fq 'entrypoint: ["/bin/bash", "/app/ds/entrypoint.sh"]' "$app/compose.yml"
+grep -Fq './entrypoint.sh:/app/ds/entrypoint.sh:ro' "$app/compose.yml"
+[[ -x "$app/entrypoint.sh" ]]
+grep -Fq 'AI_GUID=' "$app/entrypoint.sh"
+grep -Fq 'documentserver-pluginsmanager --install="ai"' "$app/entrypoint.sh"
+grep -Fq 'services.CoAuthoring' "$app/entrypoint.sh" || grep -Fq 'CoAuthoring' "$app/entrypoint.sh"
+
+# Verify Filer integration
+grep -Fq 'trustProxyHeaders: true' "$repo_root/apps/filer/config.yaml"
+# shellcheck disable=SC2016
+grep -Fq 'externalUrl: "${FILER_SITE}"' "$repo_root/apps/filer/config.yaml"
+# shellcheck disable=SC2016
+grep -Fq 'url: "${ONOFFICE_SITE}"' "$repo_root/apps/filer/config.yaml"
+# shellcheck disable=SC2016
+grep -Fq 'secret: "${FILEBROWSER_ONLYOFFICE_SECRET}"' "$repo_root/apps/filer/config.yaml"
 
 # Verify Caddy reverse proxies
 grep -Fq 'reverse_proxy onoffice:80' "$app/route.follower.caddy"

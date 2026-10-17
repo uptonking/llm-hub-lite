@@ -2,6 +2,7 @@ name: app-onoffice
 services:
   onoffice:
     image: ${ONOFFICE_IMAGE:?ONOFFICE_IMAGE must be digest-pinned}
+    entrypoint: ["/bin/bash", "/app/ds/entrypoint.sh"]
     restart: unless-stopped
     stop_grace_period: 60s
     mem_limit: ${ONOFFICE_MEMORY_LIMIT:-2048m}
@@ -32,6 +33,7 @@ services:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/postgresql:/var/lib/postgresql
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/rabbitmq:/var/lib/rabbitmq
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/redis:/var/lib/redis
+      - ./entrypoint.sh:/app/ds/entrypoint.sh:ro
     networks:
       platform_edge:
         aliases: [onoffice]
