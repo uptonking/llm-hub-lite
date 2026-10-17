@@ -18,11 +18,15 @@ grep -q '^DEPLOYMENT_SECRET_KEYS=ONOFFICE_EXAMPLE_AUTH_USER,ONOFFICE_EXAMPLE_AUT
 
 # Verify Compose limits, volumes, and options
 # shellcheck disable=SC2016
-grep -Fq 'mem_limit: ${ONOFFICE_MEMORY_LIMIT:-2048m}' "$app/compose.yml"
+grep -Fq 'mem_limit: ${ONOFFICE_MEMORY_LIMIT:-3072m}' "$app/compose.yml"
 # shellcheck disable=SC2016
-grep -Fq 'cpus: ${ONOFFICE_CPUS:-1.5}' "$app/compose.yml"
+grep -Fq 'cpus: ${ONOFFICE_CPUS:-2.5}' "$app/compose.yml"
 # shellcheck disable=SC2016
-grep -Fq 'pids_limit: ${ONOFFICE_PIDS_LIMIT:-512}' "$app/compose.yml"
+grep -Fq 'pids_limit: ${ONOFFICE_PIDS_LIMIT:-1024}' "$app/compose.yml"
+grep -Fq 'NGINX_WORKER_PROCESSES: "2"' "$app/compose.yml"
+grep -Fq 'ONOFFICE_MEMORY_LIMIT=3072m' "$app/config.env"
+grep -Fq 'ONOFFICE_CPUS=2.5' "$app/config.env"
+grep -Fq 'ONOFFICE_PIDS_LIMIT=1024' "$app/config.env"
 grep -Fq 'WOPI_ENABLED: "true"' "$app/compose.yml"
 grep -Fq 'GENERATE_FONTS: "true"' "$app/compose.yml"
 grep -Fq 'EXAMPLE_ENABLED: "true"' "$app/compose.yml"
@@ -40,6 +44,7 @@ grep -Fq './entrypoint.sh:/app/ds/entrypoint.sh:ro' "$app/compose.yml"
 grep -Fq 'AI_GUID=' "$app/entrypoint.sh"
 grep -Fq 'documentserver-pluginsmanager --install="ai"' "$app/entrypoint.sh"
 grep -Fq 'services.CoAuthoring' "$app/entrypoint.sh" || grep -Fq 'CoAuthoring' "$app/entrypoint.sh"
+grep -Fq 'maxprocesscount' "$app/entrypoint.sh"
 grep -Fq 'documentserver-example' "$app/entrypoint.sh"
 grep -Fq 'chmod -R 775' "$app/entrypoint.sh"
 

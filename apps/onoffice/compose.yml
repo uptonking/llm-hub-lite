@@ -5,9 +5,9 @@ services:
     entrypoint: ["/bin/bash", "/app/ds/entrypoint.sh"]
     restart: unless-stopped
     stop_grace_period: 60s
-    mem_limit: ${ONOFFICE_MEMORY_LIMIT:-2048m}
-    cpus: ${ONOFFICE_CPUS:-1.5}
-    pids_limit: ${ONOFFICE_PIDS_LIMIT:-512}
+    mem_limit: ${ONOFFICE_MEMORY_LIMIT:-3072m}
+    cpus: ${ONOFFICE_CPUS:-2.5}
+    pids_limit: ${ONOFFICE_PIDS_LIMIT:-1024}
     labels:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: onoffice
@@ -25,7 +25,7 @@ services:
       EXAMPLE_ENABLED: "true"
       ADMINPANEL_ENABLED: "true"
       METRICS_ENABLED: "false"
-      NGINX_WORKER_PROCESSES: "1"
+      NGINX_WORKER_PROCESSES: "2"
       DS_LOG_LEVEL: "WARN"
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/data:/var/www/onlyoffice/Data

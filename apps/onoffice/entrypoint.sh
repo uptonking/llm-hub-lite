@@ -54,6 +54,11 @@ try:
             changed = True
     ai['allowedCorsOrigins'] = cors
 
+    converter = d.setdefault('FileConverter', {}).setdefault('converter', {})
+    if converter.get('maxprocesscount') != 2:
+        converter['maxprocesscount'] = 2
+        changed = True
+
     if changed:
         with open(p, 'w') as f:
             json.dump(d, f, indent=2)
@@ -61,7 +66,7 @@ try:
 except Exception:
     pass
 " | grep -Fq "PROVISION_RELOAD_NEEDED" && {
-			supervisorctl restart ds:docservice >/dev/null 2>&1 || true
+			supervisorctl restart ds:docservice ds:converter >/dev/null 2>&1 || true
 		}
 	fi
 ) &
