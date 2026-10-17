@@ -1,0 +1,11 @@
+{$NODE_ONOFFICE_ORIGIN_HOST} {
+  # Private Leader-to-follower origin.
+  tls internal
+  import common_proxy
+  reverse_proxy onoffice:80 {
+    flush_interval -1
+    header_up Host {$ONOFFICE_SITE_HOST}
+    header_up X-Forwarded-Host {$ONOFFICE_SITE_HOST}
+    header_up X-Forwarded-Proto https
+  }
+}

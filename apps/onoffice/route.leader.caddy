@@ -1,0 +1,22 @@
+{$ONOFFICE_SITE} {
+  import common_proxy
+  reverse_proxy {$ONOFFICE_UPSTREAM} {
+    transport http {
+      tls_insecure_skip_verify
+    }
+    health_uri /healthcheck
+    health_interval 10s
+    health_timeout 5s
+    health_fails 3
+    health_passes 1
+    flush_interval -1
+    header_up Host {http.reverse_proxy.upstream.hostport}
+    header_up X-Forwarded-Host {$ONOFFICE_SITE_HOST}
+    header_up X-Forwarded-Proto {scheme}
+    import forward_verified_client_ip
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "onoffice unavailable" 503
+  }
+}

@@ -1,0 +1,47 @@
+name: app-onoffice
+services:
+  onoffice:
+    image: ${ONOFFICE_IMAGE:?ONOFFICE_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: ${ONOFFICE_MEMORY_LIMIT:-2048m}
+    cpus: ${ONOFFICE_CPUS:-1.5}
+    pids_limit: ${ONOFFICE_PIDS_LIMIT:-512}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: onoffice
+      com.aichorage.component: app-onoffice
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      WOPI_ENABLED: "true"
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONOFFICE_JWT_SECRET:?ONOFFICE_JWT_SECRET must be set}
+      JWT_HEADER: "Authorization"
+      JWT_IN_BODY: "true"
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      USE_UNAUTHORIZED_STORAGE: "true"
+      GENERATE_FONTS: "true"
+      EXAMPLE_ENABLED: "true"
+      ADMINPANEL_ENABLED: "true"
+      METRICS_ENABLED: "false"
+      NGINX_WORKER_PROCESSES: "1"
+      DS_LOG_LEVEL: "WARN"
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/data:/var/www/onlyoffice/Data
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/lib:/var/lib/onlyoffice
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/postgresql:/var/lib/postgresql
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/rabbitmq:/var/lib/rabbitmq
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/onoffice/redis:/var/lib/redis
+    networks:
+      platform_edge:
+        aliases: [onoffice]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:80/healthcheck | grep -Fq 'true'"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 120s
+networks:
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

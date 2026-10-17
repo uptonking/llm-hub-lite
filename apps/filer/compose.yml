@@ -19,6 +19,8 @@ services:
       FILEBROWSER_ADMIN_PASSWORD: ${FILER_ADMIN_PASSWORD:?FILER_ADMIN_PASSWORD must be set}
       FILEBROWSER_CONFIG: /home/filebrowser/config/config.yaml
       FILEBROWSER_DATABASE_PATH: /home/filebrowser/data/database.sqlite
+      ONOFFICE_SITE: ${ONOFFICE_SITE:-https://onoffice.aichorage.de}
+      FILEBROWSER_ONLYOFFICE_SECRET: ${FILEBROWSER_ONLYOFFICE_SECRET:-}
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/filer/data:/home/filebrowser/data
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/filer/storage/shared:/srv/shared

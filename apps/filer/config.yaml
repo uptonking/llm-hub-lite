@@ -63,3 +63,7 @@ auth:
       adminPassword: "${FILER_ADMIN_PASSWORD}"
 shareDefaults:
   quotaLimitBytes: 1073741824
+integrations:
+  office:
+    url: "${ONOFFICE_SITE:-https://onoffice.aichorage.de}"
+    secret: "${FILEBROWSER_ONLYOFFICE_SECRET}"
