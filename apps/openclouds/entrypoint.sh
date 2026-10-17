@@ -15,8 +15,8 @@ role_quotas:
   '38071a68-456a-4553-846a-fa67bf5596cc': $quota
 EOF
 
-# Ensure CSP configuration is seeded
-if [ ! -f /etc/opencloud/csp.yaml ] && [ -f /etc/opencloud-template/csp.yaml ]; then
+# Ensure CSP configuration is synced from template
+if [ -f /etc/opencloud-template/csp.yaml ]; then
 	cp /etc/opencloud-template/csp.yaml /etc/opencloud/csp.yaml
 fi
 

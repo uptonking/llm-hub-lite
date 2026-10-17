@@ -1,0 +1,11 @@
+{$NODE_COLLABORA_ORIGIN_HOST} {
+  # Private Leader-to-follower origin.
+  tls internal
+  import common_proxy
+  reverse_proxy collabora:9980 {
+    flush_interval -1
+    header_up Host {$COLLABORA_SITE_HOST}
+    header_up X-Forwarded-Host {$COLLABORA_SITE_HOST}
+    header_up X-Forwarded-Proto https
+  }
+}

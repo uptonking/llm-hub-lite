@@ -31,6 +31,10 @@ grep -Fq 'STORAGE_USERS_DRIVER: "posix"' "$app/compose.yml"
 grep -Fq 'OC_OIDC_ISSUER: "https://auther.aichorage.de"' "$app/compose.yml"
 grep -Fq 'WEB_OIDC_SCOPE: "openid profile email groups"' "$app/compose.yml"
 grep -Fq 'OC_EXCLUDE_RUN_SERVICES: "idp,search,activitylog,userlog,thumbnails,ocm"' "$app/compose.yml"
+grep -Fq 'OC_ADD_RUN_SERVICES: "collaboration"' "$app/compose.yml"
+grep -Fq 'COLLABORATION_APP_NAME: "CollaboraOnline"' "$app/compose.yml"
+grep -Fq 'COLLABORATION_APP_PROOF_DISABLE: "true"' "$app/compose.yml"
+grep -Fq 'https://collabora.aichorage.de/' "$app/csp.yaml"
 grep -Fq 'FRONTEND_CHECK_FOR_UPDATES: "false"' "$app/compose.yml"
 
 # Verify Auther OIDC client and CORS registration

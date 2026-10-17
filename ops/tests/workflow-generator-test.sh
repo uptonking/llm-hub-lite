@@ -386,6 +386,8 @@ sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/openclo
 mv "$draining_secrets/openclouds.policy" "$draining_secrets/config/cluster/apps/openclouds.policy"
 sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/gtea.policy" >"$draining_secrets/gtea.policy"
 mv "$draining_secrets/gtea.policy" "$draining_secrets/config/cluster/apps/gtea.policy"
+sed 's/^NODES=.*/NODES=worker-1/' "$draining_secrets/config/cluster/apps/collabora.policy" >"$draining_secrets/collabora.policy"
+mv "$draining_secrets/collabora.policy" "$draining_secrets/config/cluster/apps/collabora.policy"
 generate_fixture "$draining_secrets"
 [[ -f "$draining_secrets/workflows/consumer-stop-aichorouter-worker-2.yml" ]]
 if find "$draining_secrets/workflows" -name 'consumer-secrets-*-worker-2.yml' | grep -q .; then
@@ -423,6 +425,8 @@ for lifecycle_state in joining draining; do
 	mv "$evacuating/openclouds.policy" "$evacuating/config/cluster/apps/openclouds.policy"
 	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/gtea.policy" >"$evacuating/gtea.policy"
 	mv "$evacuating/gtea.policy" "$evacuating/config/cluster/apps/gtea.policy"
+	sed 's/^NODES=.*/NODES=worker-1/' "$evacuating/config/cluster/apps/collabora.policy" >"$evacuating/collabora.policy"
+	mv "$evacuating/collabora.policy" "$evacuating/config/cluster/apps/collabora.policy"
 	generate_fixture "$evacuating"
 	[[ ! -e "$evacuating/workflows/foundation-upgrade-worker-2.yml" ]]
 	[[ ! -e "$evacuating/workflows/runner-upgrade-worker-2.yml" ]]
