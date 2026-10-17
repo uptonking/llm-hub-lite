@@ -24,7 +24,7 @@ grep -Fq 'cap_add:' "$app/compose.yml"
 grep -Fq -- '- SYS_ADMIN' "$app/compose.yml"
 grep -Fq 'server_name: collabora.aichorage.de' "$app/compose.yml"
 grep -Fq 'aliasgroup1: https://openclouds.aichorage.de,https://openclouds.aichorage.de:443' "$app/compose.yml"
-grep -Fq -e '--o:net.content_security_policy=frame-ancestors' "$app/compose.yml"
+grep -Fq 'content_security_policy: "frame-ancestors' "$app/compose.yml"
 grep -Fq -e '--o:net.lok_allow.host[15]=openclouds.aichorage.de:443' "$app/compose.yml"
 if grep -Fq -e '--o:net.frame_ancestors' "$app/compose.yml"; then exit 1; fi
 grep -Fq -e '--o:ai.enabled=true' "$app/compose.yml"
