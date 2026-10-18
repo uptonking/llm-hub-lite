@@ -9,7 +9,7 @@ make_fixture() {
 	local name="$1" fixture
 	fixture="$tmp/$name"
 	mkdir -p "$fixture/ops"
-	cp "$repo_root/ops/configure-app-placement.sh" "$repo_root/ops/generate-woodpecker-workflows.sh" "$repo_root/ops/images.apps.prod.env" "$fixture/ops/"
+	cp "$repo_root/ops/configure-app-placement.sh" "$repo_root"/ops/generate-woodpecker-workflows*.sh "$repo_root/ops/images.apps.prod.env" "$fixture/ops/"
 	cp -R "$repo_root/apps" "$repo_root/config" "$fixture/"
 	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/outline.policy" >"$fixture/config/cluster/apps/outline.policy.tmp"
 	mv "$fixture/config/cluster/apps/outline.policy.tmp" "$fixture/config/cluster/apps/outline.policy"

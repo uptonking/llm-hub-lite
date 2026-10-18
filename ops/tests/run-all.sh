@@ -11,25 +11,35 @@ profile="${1:-fast}"
 
 case "$profile" in
 fast)
-	# The release/image tests require docker and take ~45s, so keep them out
-	# of the default local loop.
+	# Schedule longest-processing-time suites first so worker slots stay
+	# saturated, with faster suites filling the tail.
 	tests=(
-		app-identity-migration-test backup-test change-vps-test clean-vps-test configure-app-placement-test configure-cluster-node-test controller-test
-		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
-		observer-ingest-test observer-log-proxy-test observer-vector-test
-		platform-submit-test restore-test secret-validation-test stack-test
-		aichor-release-test aichor-runtime-test paseo-runtime-test aichor-pi-config-test cursorapi-release-test relaichor-app-test relaichor1-app-test paperlex-app-test filer-app-test outline-app-test openclouds-app-test collabora-app-test onoffice-app-test gtea-app-test relaichor-release-test woodpecker-agent-repair-test woodpecker-webhook-repair-test woodpecker-plan-test workflow-generator-test bootstrap-policy-test
+		workflow-generator-test stack-test configure-cluster-node-test configure-app-placement-test
+		controller-test backup-test app-identity-migration-test change-vps-test clean-vps-test
+		enroll-beszel-test firewall-test git-auth-test ip-privacy-test observer-ingest-test
+		observer-log-proxy-test observer-vector-test platform-submit-test restore-test
+		secret-validation-test aichor-release-test aichor-runtime-test paseo-runtime-test
+		aichor-pi-config-test cursorapi-release-test relaichor-app-test relaichor1-app-test
+		paperlex-app-test filer-app-test outline-app-test openclouds-app-test collabora-app-test
+		onoffice-app-test gtea-app-test relaichor-release-test woodpecker-agent-repair-test
+		woodpecker-webhook-repair-test woodpecker-plan-test bootstrap-policy-test
 	)
 	;;
 full)
+	# Schedule the longest-running test suites first (platformctl-test,
+	# deployment-rollback-test, workflow-generator-test, stack-test) so they
+	# execute in parallel from the beginning, avoiding idle worker starvation.
 	tests=(
-		app-identity-migration-test backup-test bootstrap-policy-test change-vps-test clean-vps-test configure-app-placement-test configure-cluster-node-test
-		controller-test aichor-release-test aichor-runtime-test paseo-runtime-test aichor-pi-config-test cursorapi-release-test relaichor-app-test relaichor1-app-test paperlex-app-test filer-app-test outline-app-test openclouds-app-test collabora-app-test onoffice-app-test gtea-app-test relaichor-release-test deployment-rollback-test
-
-		enroll-beszel-test firewall-test git-auth-test ip-privacy-test
-		observer-ingest-test observer-log-proxy-test observer-vector-test
-		platform-submit-test platformctl-test restore-test secret-validation-test woodpecker-agent-repair-test woodpecker-webhook-repair-test
-		stack-test woodpecker-plan-test workflow-generator-test
+		platformctl-test deployment-rollback-test workflow-generator-test stack-test
+		configure-cluster-node-test configure-app-placement-test controller-test backup-test
+		app-identity-migration-test bootstrap-policy-test change-vps-test clean-vps-test
+		aichor-release-test aichor-runtime-test paseo-runtime-test aichor-pi-config-test
+		cursorapi-release-test relaichor-app-test relaichor1-app-test paperlex-app-test
+		filer-app-test outline-app-test openclouds-app-test collabora-app-test onoffice-app-test
+		gtea-app-test relaichor-release-test enroll-beszel-test firewall-test git-auth-test
+		ip-privacy-test observer-ingest-test observer-log-proxy-test observer-vector-test
+		platform-submit-test restore-test secret-validation-test woodpecker-agent-repair-test
+		woodpecker-webhook-repair-test woodpecker-plan-test
 	)
 	;;
 *)
@@ -41,13 +51,45 @@ esac
 # Keep argument validation cheap and deterministic; CI/local callers can use
 # TEST_PARALLELISM=1 when diagnosing an order-sensitive failure.
 
+detect_parallelism() {
+	local cpus='' os
+	os="$(uname -s 2>/dev/null || printf unknown)"
+	if command -v getconf >/dev/null 2>&1; then
+		cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+	fi
+	if [[ ! "$cpus" =~ ^[1-9][0-9]*$ ]] && command -v nproc >/dev/null 2>&1; then
+		cpus="$(nproc 2>/dev/null || true)"
+	fi
+	if [[ ! "$cpus" =~ ^[1-9][0-9]*$ ]] && command -v sysctl >/dev/null 2>&1; then
+		cpus="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+	fi
+	if [[ "$cpus" =~ ^[1-9][0-9]*$ ]]; then
+		local p="$cpus"
+		case "$os" in
+		Darwin)
+			# macOS fork/exec overhead and kernel IPC thrash when more than
+			# 3 suites run subshell-heavy validation simultaneously on a laptop.
+			((p > 3)) && p=3
+			;;
+		*)
+			# Linux clones processes efficiently; cap at 4 to prevent I/O contention.
+			((p > 4)) && p=4
+			;;
+		esac
+		((p < 2)) && p=2
+		printf '%s\n' "$p"
+	else
+		case "$os" in
+		Darwin) printf '2\n' ;;
+		*) printf '4\n' ;;
+		esac
+	fi
+}
+
 start_all="$(date +%s)"
 parallelism="${TEST_PARALLELISM:-}"
 if [[ -z "$parallelism" ]]; then
-	case "$(uname -s 2>/dev/null || printf unknown)" in
-	Darwin) parallelism=2 ;;
-	*) parallelism=4 ;;
-	esac
+	parallelism="$(detect_parallelism)"
 fi
 [[ "$parallelism" =~ ^[1-9][0-9]*$ && "$parallelism" -le 16 ]] || {
 	printf 'TEST_PARALLELISM must be an integer between 1 and 16\n' >&2

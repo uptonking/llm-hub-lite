@@ -158,6 +158,18 @@ env_value() {
 	done <"$f"
 	printf '%s\n' "$value"
 }
+env_value_into() {
+	local __var="$1" __k="$2" __f="${3:-$APP_ENV}" __line __val=''
+	[[ -f "$__f" ]] || {
+		printf -v "$__var" ''
+		return 0
+	}
+	while IFS= read -r __line || [[ -n "$__line" ]]; do
+		[[ "$__line" == "$__k="* ]] || continue
+		__val="${__line#*=}"
+	done <"$__f"
+	printf -v "$__var" '%s' "$__val"
+}
 set_runtime_key() {
 	local file="$1" key="$2" value="$3" tmp
 	install -d -m 700 "$(dirname "$file")"
@@ -184,8 +196,18 @@ path_bytes() {
 redact_observer_output() {
 	sed -E 's/o2oi_[A-Za-z0-9]{32}/<redacted>/g; s/(Basic )[A-Za-z0-9+\/_=-]+/\1<redacted>/g; s/([Aa]uthorization:)[^,}]*/\1<redacted>/g'
 }
-policy_value() { env_value "$1" "$CLUSTER_POLICY_FILE"; }
-node_value() { env_value "$1" "$NODE_CONFIG_FILE"; }
+policy_value_into() { env_value_into "$1" "$2" "$CLUSTER_POLICY_FILE"; }
+policy_value() {
+	local __v
+	policy_value_into __v "$1"
+	printf '%s\n' "$__v"
+}
+node_value_into() { env_value_into "$1" "$2" "$NODE_CONFIG_FILE"; }
+node_value() {
+	local __v
+	node_value_into __v "$1"
+	printf '%s\n' "$__v"
+}
 csv_has() {
 	local c=",${1//[[:space:]]/},"
 	[[ "$c" == *",$2,"* ]]
@@ -307,33 +329,60 @@ ensure_network() {
 		docker network create "$n" >/dev/null 2>&1 || docker network inspect "$n" >/dev/null 2>&1 || return 1
 	done
 }
-node_id() { printf '%s\n' "${NODE_ID:-$(node_value NODE_ID)}" | sed '/^$/s//leader/'; }
-leader_node_id() { printf '%s\n' "$(policy_value LEADER_NODE_ID)"; }
-node_role() { [[ "$(node_id)" == "$(leader_node_id)" ]] && printf 'leader\n' || printf 'follower\n'; }
+node_id() {
+	local v="${NODE_ID:-}"
+	if [[ -z "$v" ]]; then
+		env_value_into v NODE_ID "$NODE_CONFIG_FILE"
+	fi
+	[[ -n "$v" ]] || v=leader
+	printf '%s\n' "$v"
+}
+leader_node_id() {
+	local v
+	env_value_into v LEADER_NODE_ID "$CLUSTER_POLICY_FILE"
+	printf '%s\n' "$v"
+}
+node_role() {
+	local nid lid
+	nid="$(node_id)"
+	lid="$(leader_node_id)"
+	[[ "$nid" == "$lid" ]] && printf 'leader\n' || printf 'follower\n'
+}
 node_state() {
-	local file="$CONTROL_ROOT/current/config/cluster/nodes/$(node_id).env"
-	printf '%s\n' "$(env_value NODE_STATE "$file")"
+	local nid file
+	nid="$(node_id)"
+	file="$CONTROL_ROOT/current/config/cluster/nodes/$nid.env"
+	env_value NODE_STATE "$file"
 }
 node_descriptor_file() {
 	printf '%s/config/cluster/nodes/%s.env\n' "$CONTROL_ROOT/current" "$1"
 }
 node_known() {
-	local id="$1" file
+	local id="$1" file node_ids file_id
 	[[ -n "$id" && "$id" =~ ^[a-z][a-z0-9-]*$ ]] || return 1
-	csv_has "$(policy_value NODE_IDS)" "$id" || return 1
-	file="$(node_descriptor_file "$id")"
-	[[ -f "$file" && "$(env_value NODE_ID "$file")" == "$id" ]]
+	env_value_into node_ids NODE_IDS "$CLUSTER_POLICY_FILE"
+	csv_has "$node_ids" "$id" || return 1
+	file="$CONTROL_ROOT/current/config/cluster/nodes/$id.env"
+	[[ -f "$file" ]] || return 1
+	env_value_into file_id NODE_ID "$file"
+	[[ "$file_id" == "$id" ]]
 }
 node_state_for() {
-	env_value NODE_STATE "$(node_descriptor_file "$1")"
+	local file="$CONTROL_ROOT/current/config/cluster/nodes/$1.env"
+	env_value NODE_STATE "$file"
 }
 node_role_for() {
-	[[ "$1" == "$(leader_node_id)" ]] && printf 'leader\n' || printf 'follower\n'
+	local lid
+	lid="$(leader_node_id)"
+	[[ "$1" == "$lid" ]] && printf 'leader\n' || printf 'follower\n'
 }
 active_follower_node() {
-	local id="$1"
+	local id="$1" lid st
 	node_known "$id" || return 1
-	[[ "$id" != "$(leader_node_id)" && "$(node_state_for "$id")" == active ]]
+	lid="$(leader_node_id)"
+	[[ "$id" != "$lid" ]] || return 1
+	env_value_into st NODE_STATE "$CONTROL_ROOT/current/config/cluster/nodes/$id.env"
+	[[ "$st" == active ]]
 }
 foundation_component_active_for_node() {
 	local component="$1" id="$2" manifest roles
@@ -368,49 +417,75 @@ app_runtime_env_file() {
 }
 app_runtime_config_file() {
 	local d="$1" rel app
-	app="$(basename "$d")"
+	app="${d##*/}"
 	rel="$(descriptor_value "$d" RUNTIME_CONFIG_FILE)"
 	[[ -n "$rel" ]] || rel="runtime/$app/config.yaml"
 	safe_relative "$rel" || die "unsafe RUNTIME_CONFIG_FILE in $d/manifest.env"
 	printf '%s/%s\n' "$CONFIG_ROOT" "$rel"
 }
 app_config_file() { printf '%s/%s\n' "$1" "$(descriptor_value "$1" CONFIG_FILE)"; }
-app_override_file_for_node() { printf '%s/config/cluster/overrides/%s/%s.env\n' "$CONTROL_ROOT/current" "$2" "$(basename "$1")"; }
+app_override_file_for_node() { printf '%s/config/cluster/overrides/%s/%s.env\n' "$CONTROL_ROOT/current" "$2" "${1##*/}"; }
 app_override_file() { app_override_file_for_node "$1" "$(node_id)"; }
+app_policy_file_into() {
+	local __rel
+	descriptor_value_into __rel "$2" POLICY_FILE
+	if [[ -z "$__rel" ]]; then
+		printf -v "$1" ''
+		return 0
+	fi
+	printf -v "$1" '%s/%s' "$CONTROL_ROOT/current/config" "$__rel"
+}
 app_policy_file() {
-	local d="$1" rel
-	rel="$(descriptor_value "$d" POLICY_FILE)"
-	[[ -n "$rel" ]] || return 0
-	printf '%s/%s\n' "$CONTROL_ROOT/current/config" "$rel"
+	local __f
+	app_policy_file_into __f "$1"
+	[[ -n "$__f" ]] && printf '%s\n' "$__f"
+}
+app_policy_value_into() {
+	local __pfile
+	app_policy_file_into __pfile "$2"
+	env_value_into "$1" "$3" "$__pfile"
 }
 app_policy_value() {
-	local d="$1" key="$2"
-	env_value "$key" "$(app_policy_file "$d")"
+	local __v
+	app_policy_value_into __v "$1" "$2"
+	printf '%s\n' "$__v"
 }
-app_nodes() { app_policy_value "$1" NODES; }
+app_nodes_into() { app_policy_value_into "$1" "$2" NODES; }
+app_nodes() {
+	local __v
+	app_nodes_into __v "$1"
+	printf '%s\n' "$__v"
+}
+app_upstream_mode_into() { descriptor_value_into "$1" "$2" UPSTREAM_MODE; }
+app_ingress_mode_into() {
+	local __mode
+	descriptor_value_into __mode "$2" INGRESS_MODE
+	printf -v "$1" '%s' "${__mode:-leader-proxy}"
+}
 app_target_node() {
-	local d="$1" nodes
-	nodes="$(app_nodes "$d")"
-	[[ "$(app_upstream_mode "$d")" == singleton && -n "$nodes" && "$nodes" != *,* ]] || return 1
+	local d="$1" nodes mode
+	app_nodes_into nodes "$d"
+	descriptor_value_into mode "$d" UPSTREAM_MODE
+	[[ "$mode" == singleton && -n "$nodes" && "$nodes" != *,* ]] || return 1
 	printf '%s\n' "$nodes"
 }
 recovery_state_check_descriptor() {
 	local d="$1" paths rel root entry path
-	paths="$(descriptor_value "$d" RECOVERY_REQUIRED_PATHS)"
+	descriptor_value_into paths "$d" RECOVERY_REQUIRED_PATHS
 	[[ -n "$paths" ]] || return 0
-	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
-	safe_relative "$rel" || die "unsafe DATA_ROOT_REL in $(basename "$d")/manifest.env"
+	descriptor_value_into rel "$d" DATA_ROOT_REL
+	safe_relative "$rel" || die "unsafe DATA_ROOT_REL in ${d##*/}/manifest.env"
 	root="$(data_root)/$rel"
-	[[ -d "$root" ]] || die "recovery data directory is missing for $(basename "$d"): $root"
+	[[ -d "$root" ]] || die "recovery data directory is missing for ${d##*/}: $root"
 	while IFS= read -r entry; do
 		[[ -n "$entry" ]] || continue
-		safe_relative "$entry" || die "unsafe RECOVERY_REQUIRED_PATHS entry in $(basename "$d")/manifest.env: $entry"
+		safe_relative "$entry" || die "unsafe RECOVERY_REQUIRED_PATHS entry in ${d##*/}/manifest.env: $entry"
 		path="$root/$entry"
-		[[ -e "$path" && ! -L "$path" ]] || die "required recovery state is missing for $(basename "$d"): $entry"
+		[[ -e "$path" && ! -L "$path" ]] || die "required recovery state is missing for ${d##*/}: $entry"
 		if [[ -f "$path" ]]; then
-			[[ -s "$path" ]] || die "required recovery state is empty for $(basename "$d"): $entry"
+			[[ -s "$path" ]] || die "required recovery state is empty for ${d##*/}: $entry"
 		fi
-	done <<<"$(printf '%s\n' "$paths" | tr ',' '\n')"
+	done <<<"${paths//,/$'\n'}"
 }
 validate_recovery_state() {
 	local d
@@ -667,11 +742,12 @@ descriptor_ids() {
 	if ((DESCRIPTOR_CACHE_LOADED == 0)); then
 		if [[ ! -f "$DESCRIPTOR_CACHE_FILE" ]]; then
 			# A failed discovery must not leave a partial cache that later calls trust.
-			local tmp_cache="${DESCRIPTOR_CACHE_FILE}.tmp"
-			if ! find -L "$APPS_ROOT" -mindepth 2 -maxdepth 2 -type f -name manifest.env -exec dirname {} \; 2>/dev/null | sort >"$tmp_cache"; then
-				rm -f -- "$tmp_cache"
-				return 1
-			fi
+			local tmp_cache="${DESCRIPTOR_CACHE_FILE}.tmp" d
+			: >"$tmp_cache"
+			for d in "$APPS_ROOT"/*/manifest.env; do
+				[[ -f "$d" ]] || continue
+				printf '%s\n' "${d%/manifest.env}" >>"$tmp_cache"
+			done
 			mv -f -- "$tmp_cache" "$DESCRIPTOR_CACHE_FILE"
 		fi
 		DESCRIPTOR_CACHE_CONTENT="$(<"$DESCRIPTOR_CACHE_FILE")"
@@ -690,23 +766,26 @@ cluster_validation_descriptor_ids() {
 	fi
 	descriptor_ids
 }
+descriptor_value_into() {
+	local __v
+	env_value_into __v "$3" "$2/manifest.env"
+	if [[ "$__v" == \'* ]]; then __v="${__v#\'}"; fi
+	if [[ "$__v" == *\' ]]; then __v="${__v%\'}"; fi
+	printf -v "$1" '%s' "$__v"
+}
 descriptor_value() {
 	local value
-	value="$(env_value "$2" "$1/manifest.env")"
-	# Manifest values are env-style text; allow a single-quoted value to carry
-	# JSON fragments such as HEALTH_EXPECT without leaking the delimiters into
-	# HTTP smoke comparisons.
-	if [[ "$value" == \'* ]]; then value="${value#\'}"; fi
-	if [[ "$value" == *\' ]]; then value="${value%\'}"; fi
+	descriptor_value_into value "$1" "$2"
 	printf '%s\n' "$value"
 }
 app_public_host() {
-	local d="$1" wanted="$2" key host
+	local d="$1" wanted="$2" endpoints key host
+	descriptor_value_into endpoints "$d" PUBLIC_ENDPOINTS
 	while IFS='|' read -r key host; do
 		[[ "$key" == "$wanted" ]] || continue
 		printf '%s\n' "$host"
 		return 0
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" PUBLIC_ENDPOINTS)" | tr ';' '\n')"
+	done <<<"${endpoints//;/$'\n'}"
 }
 app_public_endpoint_env() {
 	local d="$1" key host domain scheme public_host file tmp
@@ -774,23 +853,13 @@ deployment_secrets_ready() {
 	done <<<"$(descriptor_deployment_secret_keys "$d")"
 }
 app_declared() {
-	local d
-	# Use a here-string instead of a process substitution. These helpers are
-	# called from descriptor iteration bodies; nested process substitutions leak
-	# the outer pipe on Bash 3.2 and can wait forever for EOF.
-	while IFS= read -r d; do [[ "$(basename "$d")" == "$1" ]] && return 0; done <<<"$(descriptor_ids)"
-	return 1
+	[[ -n "${1:-}" && -f "$APPS_ROOT/$1/manifest.env" ]]
 }
 app_policy_enabled() {
-	local d
-	while IFS= read -r d; do
-		[[ "$(basename "$d")" == "$1" ]] || continue
-		if [[ "$(app_policy_value "$d" ENABLED)" == true ]]; then
-			return 0
-		fi
-		return 1
-	done <<<"$(descriptor_ids)"
-	return 1
+	local d="$APPS_ROOT/$1" enabled
+	[[ -f "$d/manifest.env" ]] || return 1
+	app_policy_value_into enabled "$d" ENABLED
+	[[ "$enabled" == true ]]
 }
 app_compose() {
 	local d="$1" runtime_env config_file override_file endpoint_env
@@ -915,7 +984,9 @@ render_template() {
 	tmp=""
 	while IFS= read -r k; do
 		v="$(effective_value "$k")"
-		e="$(printf '%s' "$v" | sed 's/[&|\\]/\\&/g')"
+		e="${v//\\/\\\\}"
+		e="${e//&/\\&}"
+		e="${e//|/\\|}"
 		printf 's|{\\$%s}|%s|g\n' "$k" "$e" >>"$script"
 	done <<<"$(grep -oE '\{\$[A-Z0-9_]+\}' "$f" | sed 's/[^A-Z0-9_]//g' | sort -u)"
 	if [[ -s "$script" ]]; then
@@ -1166,17 +1237,20 @@ write_validation_stamp() {
 	mv -f -- "$tmp" "$VALIDATION_STAMP_FILE"
 }
 validate_cluster() {
-	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor direct_seen='' listeners listener proto host_port container_port key caddy_udp_fallback leader_public_ip ranges range from to target range_target_ok
+	local node file state migration backup backup_enabled d groups public_key origin_key host node_count=0 master_count=0 origins='' newapi_enabled=0 newapi_descriptor direct_seen='' listeners listener proto host_port container_port key caddy_udp_fallback leader_public_ip ranges range from to target range_target_ok cluster_node_ids seen_cluster_nodes='' d_nodes d_name
 	need_file "$CLUSTER_POLICY_FILE"
 	need_file "$NODE_CONFIG_FILE"
 	[[ "$(policy_value CLUSTER_CONFIG_VERSION)" == 3 ]] || die 'unsupported cluster policy version'
-	csv_has "$(policy_value NODE_IDS)" "$(node_id)" || die 'node is absent from cluster policy'
+	policy_value_into cluster_node_ids NODE_IDS
+	csv_has "$cluster_node_ids" "$(node_id)" || die 'node is absent from cluster policy'
 	[[ "$(node_id)" == "$(env_value NODE_ID "$NODE_CONFIG_FILE")" ]] || die 'runtime node identity disagrees with node inventory'
 	[[ "$(node_role)" == leader || "$(node_role)" == follower ]] || die 'invalid derived node role'
-	leader_public_ip="$(node_value LEADER_PUBLIC_IP)"
+	node_value_into leader_public_ip LEADER_PUBLIC_IP
 	valid_ipv4 "$leader_public_ip" || die 'runtime LEADER_PUBLIC_IP must be a valid IPv4 address'
 	while IFS= read -r node; do
 		[[ -n "$node" ]] || continue
+		csv_has "$seen_cluster_nodes" "$node" && die 'NODE_IDS contains duplicate entries'
+		seen_cluster_nodes="${seen_cluster_nodes:+$seen_cluster_nodes,}$node"
 		node_count=$((node_count + 1))
 		file="$CONTROL_ROOT/current/config/cluster/nodes/$node.env"
 		need_file "$file"
@@ -1194,30 +1268,33 @@ validate_cluster() {
 		fi
 		if [[ "$node" != "$(leader_node_id)" ]]; then
 			while IFS= read -r d; do
-				app_policy_enabled "$(basename "$d")" || continue
+				d_name="${d##*/}"
+				app_policy_enabled "$d_name" || continue
 				[[ "$(app_placement "$d")" == consumer ]] || continue
-				csv_has "$(app_nodes "$d")" "$node" || continue
-				groups="$(descriptor_value "$d" ROUTE_GROUPS)"
+				app_nodes_into d_nodes "$d"
+				csv_has "$d_nodes" "$node" || continue
+				descriptor_value_into groups "$d" ROUTE_GROUPS
 				while IFS='|' read -r public_key origin_key _; do
 					[[ -n "$public_key" ]] || continue
 					host="$(env_value "$origin_key" "$file")"
 					valid_dns_name "$host" || die "invalid origin host $origin_key for $node"
 					csv_has "$origins" "$host" && die "duplicate consumer origin host: $host"
 					origins="${origins:+$origins,}$host"
-				done <<<"$(printf '%s\n' "$groups" | tr ';' '\n')"
+				done <<<"${groups//;/$'\n'}"
 			done <<<"$(cluster_validation_descriptor_ids)"
 		fi
-	done <<<"$(printf '%s\n' "$(policy_value NODE_IDS)" | tr ',' '\n' | sed '/^$/d')"
-	[[ "$node_count" -eq "$(printf '%s\n' "$(policy_value NODE_IDS)" | tr ',' '\n' | sed '/^$/d' | sort -u | wc -l | tr -d ' ')" ]] || die 'NODE_IDS contains duplicate entries'
-	csv_has "$(policy_value NODE_IDS)" "$(leader_node_id)" || die 'LEADER_NODE_ID is absent from NODE_IDS'
-	caddy_udp_fallback="$(policy_value CADDY_HTTPS_UDP_FALLBACK_PORT)"
+	done <<<"${cluster_node_ids//,/$'\n'}"
+	csv_has "$cluster_node_ids" "$(leader_node_id)" || die 'LEADER_NODE_ID is absent from NODE_IDS'
+	policy_value_into caddy_udp_fallback CADDY_HTTPS_UDP_FALLBACK_PORT
 	caddy_udp_fallback="${caddy_udp_fallback:-8443}"
 	[[ "$caddy_udp_fallback" =~ ^[1-9][0-9]*$ && "$caddy_udp_fallback" -le 65535 ]] || die 'CADDY_HTTPS_UDP_FALLBACK_PORT must be a valid port'
 	while IFS= read -r d; do
 		[[ -n "$d" ]] || continue
 		[[ "$(app_ingress_mode "$d")" == direct ]] || continue
-		[[ "$(app_policy_enabled "$(basename "$d")")" == true ]] || continue
-		listeners="$(descriptor_value "$d" DIRECT_LISTENERS)"
+		d_name="${d##*/}"
+		[[ "$(app_policy_enabled "$d_name")" == true ]] || continue
+		descriptor_value_into listeners "$d" DIRECT_LISTENERS
+		app_nodes_into d_nodes "$d"
 		while IFS= read -r node; do
 			[[ -n "$node" ]] || continue
 			while IFS= read -r listener; do
@@ -1232,8 +1309,8 @@ validate_cluster() {
 				if [[ "$node" != "$(leader_node_id)" && "$proto" == udp && "$host_port" == "$caddy_udp_fallback" ]]; then
 					die "direct UDP listener conflicts with Caddy fallback: $key"
 				fi
-			done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
-			ranges="$(descriptor_value "$d" DIRECT_PORT_RANGES)"
+			done <<<"${listeners//,/$'\n'}"
+			descriptor_value_into ranges "$d" DIRECT_PORT_RANGES
 			while IFS= read -r range; do
 				[[ -n "$range" ]] || continue
 				IFS=':' read -r proto from to _ <<<"$range"
@@ -1241,8 +1318,8 @@ validate_cluster() {
 				key="$node/$proto/$from-$to"
 				! csv_has "$direct_seen" "$key" || die "duplicate direct port range reservation: $key"
 				direct_seen="${direct_seen:+$direct_seen,}$key"
-			done <<<"$(printf '%s\n' "$ranges" | tr ',' '\n')"
-		done <<<"$(printf '%s\n' "$(app_nodes "$d")" | tr ',' '\n')"
+			done <<<"${ranges//,/$'\n'}"
+		done <<<"${d_nodes//,/$'\n'}"
 	done <<<"$(cluster_validation_descriptor_ids)"
 	app_policy_enabled newapi && newapi_enabled=1
 	newapi_descriptor="$APPS_ROOT/newapi"
@@ -1264,33 +1341,39 @@ validate_cluster() {
 		slave) ;;
 		*) die "invalid NEW_API_NODE_TYPE for $node" ;;
 		esac
-	done <<<"$(printf '%s\n' "$(policy_value NODE_IDS)" | tr ',' '\n' | sed '/^$/d')"
+	done <<<"${cluster_node_ids//,/$'\n'}"
 	((newapi_enabled == 0 || master_count == 1)) || die 'exactly one follower must use NEW_API_NODE_TYPE=master'
 }
 validate_descriptor() {
-	local d="$1" k v rel ephemeral_rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys deployment_keys optional_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port recovery_path
+	local d="$1" k v rel ephemeral_rel alias services health_service compose_file yaml_file nginx_file rule secret_key min_length value mode nodes node node_count=0 seen_nodes='' primary_key primary enabled all_secret_keys generated_keys deployment_keys optional_keys endpoint_key endpoint_host endpoint_keys='' endpoint_hosts='' route_public_keys='' default_key default_value default_extra node_default_keys='' conditional_rule conditional_value conditional_keys conditional_key conditional_seen='' regex bytes sqlite_entries='' migration_from migration_value ingress listeners listener proto host_port container_port allowlist health_port recovery_path recovery_paths='' app_id='' env_keys='' node_defaults='' cluster_secret_keys='' node_secret_keys='' gen_bytes='' min_lengths='' cond_secret_keys='' secret_regexes='' route_groups='' sqlite_paths='' sqlite_globs='' cluster_node_ids='' endpoints='' selector_key='' storage=''
 	for k in MANIFEST_VERSION APP_ID PLACEMENT UPSTREAM_MODE POLICY_FILE CONFIG_FILE PUBLIC_ENDPOINTS COMPOSE_FILE COMPOSE_PROJECT SERVICE_NAME NETWORK_ALIAS IMAGE_KEYS HEALTH_URL SMOKE_URL_KEY SMOKE_LOCAL HEALTH_MODE; do
-		v="$(descriptor_value "$d" "$k")"
+		descriptor_value_into v "$d" "$k"
 		[[ -n "$v" ]] || die "$k is required in $d/manifest.env"
 	done
-	case "$(descriptor_value "$d" SMOKE_LOCAL)" in public | healthcheck) ;; *) die "SMOKE_LOCAL must be public or healthcheck in $d/manifest.env" ;; esac
-	case "$(descriptor_value "$d" HEALTH_MODE)" in healthcheck | process) ;; *) die "HEALTH_MODE must be healthcheck or process in $d/manifest.env" ;; esac
-	case "$(descriptor_value "$d" DIRECT_PROBE)" in '' | socket | healthcheck) ;; *) die "DIRECT_PROBE must be socket or healthcheck in $d/manifest.env" ;; esac
-	[[ "$(descriptor_value "$d" MANIFEST_VERSION)" == 5 ]] || die 'unsupported app manifest version'
-	[[ "$(descriptor_value "$d" PLACEMENT)" == consumer ]] || die "app PLACEMENT must be consumer: $d"
+	descriptor_value_into v "$d" SMOKE_LOCAL
+	case "$v" in public | healthcheck) ;; *) die "SMOKE_LOCAL must be public or healthcheck in $d/manifest.env" ;; esac
+	descriptor_value_into v "$d" HEALTH_MODE
+	case "$v" in healthcheck | process) ;; *) die "HEALTH_MODE must be healthcheck or process in $d/manifest.env" ;; esac
+	descriptor_value_into v "$d" DIRECT_PROBE
+	case "$v" in '' | socket | healthcheck) ;; *) die "DIRECT_PROBE must be socket or healthcheck in $d/manifest.env" ;; esac
+	descriptor_value_into v "$d" MANIFEST_VERSION
+	[[ "$v" == 5 ]] || die 'unsupported app manifest version'
+	descriptor_value_into v "$d" PLACEMENT
+	[[ "$v" == consumer ]] || die "app PLACEMENT must be consumer: $d"
 	ingress="$(app_ingress_mode "$d")"
 	case "$ingress" in
 	leader-proxy | direct | direct-and-proxy) ;;
 	*) die "unsupported INGRESS_MODE in $d/manifest.env" ;;
 	esac
-	if [[ "$(descriptor_value "$d" UPSTREAM_MODE)" == singleton && "$ingress" != direct ]]; then
-		health_port="$(descriptor_value "$d" HEALTH_PORT)"
+	descriptor_value_into v "$d" UPSTREAM_MODE
+	if [[ "$v" == singleton && "$ingress" != direct ]]; then
+		descriptor_value_into health_port "$d" HEALTH_PORT
 		[[ "$health_port" =~ ^[1-9][0-9]*$ && "$health_port" -le 65535 ]] || die "HEALTH_PORT must be a valid TCP port for singleton app: $d"
 	fi
 	if [[ "$ingress" == direct || "$ingress" == direct-and-proxy ]]; then
-		listeners="$(descriptor_value "$d" DIRECT_LISTENERS)"
+		descriptor_value_into listeners "$d" DIRECT_LISTENERS
 		[[ -n "$listeners" ]] || die "DIRECT_LISTENERS is required for direct app: $d"
-		allowlist="$(policy_value DIRECT_PORT_ALLOWLIST)"
+		policy_value_into allowlist DIRECT_PORT_ALLOWLIST
 		while IFS= read -r listener; do
 			[[ -n "$listener" ]] || continue
 			IFS=':' read -r proto host_port container_port <<<"$listener"
@@ -1302,8 +1385,8 @@ validate_descriptor() {
 			else
 				grep -Eq "${host_port}:[[:space:]]*${container_port}/tcp|${host_port}:${container_port}/tcp" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "direct TCP listener is absent from Compose: $listener"
 			fi
-		done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
-		ranges="$(descriptor_value "$d" DIRECT_PORT_RANGES)"
+		done <<<"${listeners//,/$'\n'}"
+		descriptor_value_into ranges "$d" DIRECT_PORT_RANGES
 		while IFS= read -r range; do
 			[[ -n "$range" ]] || continue
 			IFS=':' read -r proto from to target <<<"$range"
@@ -1314,9 +1397,9 @@ validate_descriptor() {
 			while IFS= read -r listener; do
 				[[ -n "$listener" ]] || continue
 				[[ "${listener%%:*}" == "$proto" && "${listener#*:}" == "$target":* ]] && range_target_ok=1
-			done <<<"$(printf '%s\n' "$listeners" | tr ',' '\n')"
+			done <<<"${listeners//,/$'\n'}"
 			[[ "$range_target_ok" == 1 ]] || die "direct port range target is not a direct listener: $range -> $proto/$target"
-		done <<<"$(printf '%s\n' "$ranges" | tr ',' '\n')"
+		done <<<"${ranges//,/$'\n'}"
 		if [[ "$ingress" == direct ]]; then
 			[[ -z "$(descriptor_value "$d" ROUTE_GROUPS)" ]] || die "ROUTE_GROUPS is not valid for direct-only app: $d"
 		fi
@@ -1329,29 +1412,31 @@ validate_descriptor() {
 		[[ -z "$(descriptor_value "$d" DIRECT_PORT_RANGES)" ]] || die "DIRECT_PORT_RANGES is only valid for direct apps: $d"
 		[[ -z "$(descriptor_value "$d" DIRECT_FORWARD_TARGET)" ]] || die "DIRECT_FORWARD_TARGET is only valid for direct apps: $d"
 	fi
-	mode="$(descriptor_value "$d" STATE_MODE)"
+	descriptor_value_into mode "$d" STATE_MODE
 	[[ -n "$mode" ]] || mode=files
-	rel="$(descriptor_value "$d" DATA_ROOT_REL)"
+	descriptor_value_into rel "$d" DATA_ROOT_REL
 	if [[ -n "$rel" ]]; then
 		safe_relative "$rel" || die "unsafe DATA_ROOT_REL in $d/manifest.env"
 	elif [[ "$mode" != ephemeral ]]; then
 		die "DATA_ROOT_REL is required for non-ephemeral app: $d/manifest.env"
 	fi
-	ephemeral_rel="$(descriptor_value "$d" EPHEMERAL_DATA_REL)"
+	descriptor_value_into ephemeral_rel "$d" EPHEMERAL_DATA_REL
 	if [[ -n "$ephemeral_rel" ]]; then
 		[[ -n "$rel" ]] || die "EPHEMERAL_DATA_REL requires DATA_ROOT_REL in $d/manifest.env"
 		safe_relative "$ephemeral_rel" || die "unsafe EPHEMERAL_DATA_REL in $d/manifest.env"
 	fi
+	descriptor_value_into recovery_paths "$d" RECOVERY_REQUIRED_PATHS
 	while IFS= read -r recovery_path; do
 		[[ -z "$recovery_path" ]] || safe_relative "$recovery_path" || die "unsafe RECOVERY_REQUIRED_PATHS entry in $d/manifest.env: $recovery_path"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" RECOVERY_REQUIRED_PATHS)" | tr ',' '\n')"
-	enabled="$(app_policy_value "$d" ENABLED)"
+	done <<<"${recovery_paths//,/$'\n'}"
+	app_policy_value_into enabled "$d" ENABLED
 	case "$enabled" in true | false) ;; *) die "app policy ENABLED must be true or false: $d" ;; esac
-	nodes="$(app_nodes "$d")"
+	app_nodes_into nodes "$d"
 	[[ -n "$nodes" ]] || die "app policy NODES must not be empty: $d"
+	policy_value_into cluster_node_ids NODE_IDS
 	while IFS= read -r node; do
 		[[ -n "$node" ]] || die "app policy NODES contains an empty entry: $d"
-		csv_has "$(policy_value NODE_IDS)" "$node" || die "app node is absent from inventory: $node ($d)"
+		csv_has "$cluster_node_ids" "$node" || die "app node is absent from inventory: $node ($d)"
 		[[ "$node" != "$(leader_node_id)" ]] || die "consumer app cannot target the Leader: $d"
 		csv_has "$seen_nodes" "$node" && die "app policy NODES contains a duplicate: $node ($d)"
 		# Disabled applications may reserve a joining follower for a future
@@ -1361,7 +1446,7 @@ validate_descriptor() {
 		fi
 		seen_nodes="${seen_nodes:+$seen_nodes,}$node"
 		node_count=$((node_count + 1))
-	done <<<"$(printf '%s\n' "$nodes" | tr ',' '\n')"
+	done <<<"${nodes//,/$'\n'}"
 	mode="$(app_upstream_mode "$d")"
 	case "$mode" in
 	active-active)
@@ -1394,7 +1479,7 @@ validate_descriptor() {
 	esac
 	migration_from="$(descriptor_value "$d" IDENTITY_MIGRATION_FROM_APP_ID)"
 	if [[ -n "$migration_from" ]]; then
-		[[ "$mode" == singleton && "$migration_from" =~ ^[a-z][a-z0-9-]*$ && "$migration_from" != "$(basename "$d")" ]] || die "invalid identity migration source in $d/manifest.env"
+		[[ "$mode" == singleton && "$migration_from" =~ ^[a-z][a-z0-9-]*$ && "$migration_from" != "${d##*/}" ]] || die "invalid identity migration source in $d/manifest.env"
 		[[ ! -f "$APPS_ROOT/$migration_from/manifest.env" ]] || die "identity migration source is still declared as an application: $migration_from"
 		for k in IDENTITY_MIGRATION_FROM_DATA_ROOT_REL IDENTITY_MIGRATION_FROM_RUNTIME_ENV_FILE; do
 			migration_value="$(descriptor_value "$d" "$k")"
@@ -1410,10 +1495,13 @@ validate_descriptor() {
 		done
 		[[ "$(descriptor_value "$d" IDENTITY_MIGRATION_FROM_ENV_PREFIX)" != "$(descriptor_value "$d" IDENTITY_MIGRATION_TO_ENV_PREFIX)" ]] || die "identity migration environment prefixes must differ in $d/manifest.env"
 	fi
-	[[ "$(descriptor_value "$d" APP_ID)" == "$(basename "$d")" && "$(descriptor_value "$d" APP_ID)" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid APP_ID in $d/manifest.env"
+	descriptor_value_into app_id "$d" APP_ID
+	[[ "$app_id" == "${d##*/}" && "$app_id" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid APP_ID in $d/manifest.env"
+	descriptor_value_into env_keys "$d" ENV_KEYS
 	while IFS= read -r k; do
 		[[ -z "$k" || "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid ENV_KEYS entry in $d/manifest.env: $k"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" ENV_KEYS)" | tr ',' '\n')"
+	done <<<"${env_keys//,/$'\n'}"
+	descriptor_value_into node_defaults "$d" NODE_DEFAULTS
 	while IFS='|' read -r default_key default_value default_extra; do
 		[[ -z "$default_key" && -z "$default_value" ]] && continue
 		[[ "$default_key" =~ ^[A-Z][A-Z0-9_]*$ && -n "$default_value" && -z "$default_extra" ]] || die "invalid NODE_DEFAULTS entry in $d/manifest.env"
@@ -1423,41 +1511,46 @@ validate_descriptor() {
 		! csv_has "$node_default_keys" "$default_key" || die "duplicate NODE_DEFAULTS key in $d/manifest.env: $default_key"
 		printf '%s' "$default_value" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null 2>&1 && die "NODE_DEFAULTS contains control characters in $d/manifest.env: $default_key"
 		node_default_keys="${node_default_keys:+$node_default_keys,}$default_key"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" NODE_DEFAULTS)" | tr ';' '\n')"
-	all_secret_keys="$(descriptor_value "$d" CLUSTER_SECRET_KEYS),$(descriptor_value "$d" NODE_SECRET_KEYS)"
-	optional_keys="$(descriptor_value "$d" OPTIONAL_SECRET_KEYS)"
-	deployment_keys="$(descriptor_value "$d" DEPLOYMENT_SECRET_KEYS)"
+	done <<<"${node_defaults//;/$'\n'}"
+	descriptor_value_into cluster_secret_keys "$d" CLUSTER_SECRET_KEYS
+	descriptor_value_into node_secret_keys "$d" NODE_SECRET_KEYS
+	all_secret_keys="$cluster_secret_keys,$node_secret_keys"
+	descriptor_value_into optional_keys "$d" OPTIONAL_SECRET_KEYS
+	descriptor_value_into deployment_keys "$d" DEPLOYMENT_SECRET_KEYS
+	descriptor_value_into generated_keys "$d" GENERATED_SECRET_KEYS
 	while IFS= read -r secret_key; do
 		[[ -n "$secret_key" ]] || continue
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid deployment secret key in $d/manifest.env: $secret_key"
-		csv_has "$(descriptor_value "$d" CLUSTER_SECRET_KEYS)" "$secret_key" || die "deployment secret must be declared as a cluster secret in $d/manifest.env: $secret_key"
-		! csv_has "$(descriptor_value "$d" NODE_SECRET_KEYS)" "$secret_key" || die "deployment secret must not be node-local in $d/manifest.env: $secret_key"
-		! csv_has "$(descriptor_value "$d" GENERATED_SECRET_KEYS)" "$secret_key" || die "deployment secret must not be generated in $d/manifest.env: $secret_key"
-	done <<<"$(printf '%s\n' "$deployment_keys" | tr ',' '\n')"
+		csv_has "$cluster_secret_keys" "$secret_key" || die "deployment secret must be declared as a cluster secret in $d/manifest.env: $secret_key"
+		! csv_has "$node_secret_keys" "$secret_key" || die "deployment secret must not be node-local in $d/manifest.env: $secret_key"
+		! csv_has "$generated_keys" "$secret_key" || die "deployment secret must not be generated in $d/manifest.env: $secret_key"
+	done <<<"${deployment_keys//,/$'\n'}"
 	while IFS= read -r secret_key; do
 		[[ -n "$secret_key" ]] || continue
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid application secret key in $d/manifest.env: $secret_key"
-		! csv_has "$(descriptor_value "$d" ENV_KEYS)" "$secret_key" || die "secret key is also declared as non-secret configuration: $secret_key"
-	done <<<"$(printf '%s\n' "$all_secret_keys" | tr ',' '\n')"
-	generated_keys="$(descriptor_value "$d" GENERATED_SECRET_KEYS)"
+		! csv_has "$env_keys" "$secret_key" || die "secret key is also declared as non-secret configuration: $secret_key"
+	done <<<"${all_secret_keys//,/$'\n'}"
 	while IFS= read -r secret_key; do
 		[[ -n "$secret_key" ]] || continue
 		csv_has "$all_secret_keys" "$secret_key" || die "GENERATED_SECRET_KEYS references undeclared secret in $d/manifest.env: $secret_key"
-	done <<<"$(printf '%s\n' "$generated_keys" | tr ',' '\n')"
+	done <<<"${generated_keys//,/$'\n'}"
+	descriptor_value_into gen_bytes "$d" GENERATED_SECRET_BYTES
 	while IFS= read -r rule; do
 		[[ -n "$rule" ]] || continue
 		secret_key="${rule%%:*}"
 		bytes="${rule#*:}"
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ && "$bytes" =~ ^[1-9][0-9]*$ ]] || die "invalid GENERATED_SECRET_BYTES entry in $d/manifest.env: $rule"
 		csv_has "$generated_keys" "$secret_key" || die "GENERATED_SECRET_BYTES references undeclared generated secret in $d/manifest.env: $secret_key"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" GENERATED_SECRET_BYTES)" | tr ',' '\n')"
+	done <<<"${gen_bytes//,/$'\n'}"
+	descriptor_value_into min_lengths "$d" SECRET_MIN_LENGTHS
 	while IFS= read -r rule; do
 		[[ -n "$rule" ]] || continue
 		secret_key="${rule%%:*}"
 		min_length="${rule#*:}"
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ && "$min_length" =~ ^[1-9][0-9]*$ ]] || die "invalid SECRET_MIN_LENGTHS entry in $d/manifest.env: $rule"
 		csv_has "$all_secret_keys" "$secret_key" || die "SECRET_MIN_LENGTHS references undeclared secret in $d/manifest.env: $secret_key"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" SECRET_MIN_LENGTHS)" | tr ',' '\n')"
+	done <<<"${min_lengths//,/$'\n'}"
+	descriptor_value_into cond_secret_keys "$d" CONDITIONAL_SECRET_KEYS
 	while IFS= read -r conditional_rule; do
 		[[ -n "$conditional_rule" ]] || continue
 		selector_key="${conditional_rule%%=*}"
@@ -1465,7 +1558,7 @@ validate_descriptor() {
 		conditional_value="${conditional_value%%|*}"
 		conditional_keys="${conditional_rule#*|}"
 		[[ "$selector_key" =~ ^[A-Z][A-Z0-9_]*$ && -n "$conditional_value" && "$conditional_rule" == *'|'* ]] || die "invalid CONDITIONAL_SECRET_KEYS entry in $d/manifest.env: $conditional_rule"
-		csv_has "$(descriptor_value "$d" ENV_KEYS)" "$selector_key" || die "conditional selector is not declared in ENV_KEYS: $selector_key"
+		csv_has "$env_keys" "$selector_key" || die "conditional selector is not declared in ENV_KEYS: $selector_key"
 		while IFS= read -r conditional_key; do
 			[[ -n "$conditional_key" ]] || continue
 			[[ "$conditional_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid conditional secret key in $d/manifest.env: $conditional_key"
@@ -1473,22 +1566,23 @@ validate_descriptor() {
 			! csv_has "$conditional_seen" "$conditional_key" || die "duplicate conditional secret key: $conditional_key"
 			conditional_seen="${conditional_seen}${conditional_seen:+,}$conditional_key"
 			all_secret_keys="${all_secret_keys}${all_secret_keys:+,}$conditional_key"
-		done < <(printf '%s\n' "$conditional_keys" | tr ',' '\n')
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" CONDITIONAL_SECRET_KEYS)" | tr ';' '\n')"
+		done <<<"${conditional_keys//,/$'\n'}"
+	done <<<"${cond_secret_keys//;/$'\n'}"
 	while IFS= read -r secret_key; do
 		[[ -n "$secret_key" ]] || continue
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid optional secret key in $d/manifest.env: $secret_key"
 		csv_has "$all_secret_keys" "$secret_key" || die "OPTIONAL_SECRET_KEYS references undeclared secret in $d/manifest.env: $secret_key"
 		! csv_has "$generated_keys" "$secret_key" || die "optional secret must not be generated in $d/manifest.env: $secret_key"
-	done <<<"$(printf '%s\n' "$optional_keys" | tr ',' '\n')"
+	done <<<"${optional_keys//,/$'\n'}"
+	descriptor_value_into secret_regexes "$d" SECRET_REGEXES
 	while IFS= read -r rule; do
 		[[ -n "$rule" ]] || continue
 		secret_key="${rule%%:*}"
 		regex="${rule#*:}"
 		[[ "$secret_key" =~ ^[A-Z][A-Z0-9_]*$ && -n "$regex" ]] || die "invalid SECRET_REGEXES entry in $d/manifest.env: $rule"
 		csv_has "$all_secret_keys" "$secret_key" || die "SECRET_REGEXES references undeclared secret in $d/manifest.env: $secret_key"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" SECRET_REGEXES)" | tr ',' '\n')"
-	[[ "$(descriptor_value "$d" COMPOSE_PROJECT)" == "app-$(basename "$d")" ]] || die "COMPOSE_PROJECT must equal app-APP_ID in $d/manifest.env"
+	done <<<"${secret_regexes//,/$'\n'}"
+	[[ "$(descriptor_value "$d" COMPOSE_PROJECT)" == "app-${d##*/}" ]] || die "COMPOSE_PROJECT must equal app-APP_ID in $d/manifest.env"
 	alias="$(descriptor_value "$d" NETWORK_ALIAS)"
 	[[ "$alias" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid NETWORK_ALIAS in $d/manifest.env"
 	for rel in "$(descriptor_value "$d" DATA_ROOT_REL)" "$(descriptor_value "$d" EPHEMERAL_DATA_REL)" "$(descriptor_value "$d" COMPOSE_FILE)" "$(descriptor_value "$d" CONFIG_FILE)" "$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)" "$(descriptor_value "$d" ROUTE_TEMPLATE_FOLLOWER)" "$(descriptor_value "$d" RUNTIME_ENV_FILE)" "$(descriptor_value "$d" POLICY_FILE)" "$(descriptor_value "$d" RUNTIME_CONFIG_TEMPLATE)" "$(descriptor_value "$d" RUNTIME_CONFIG_FILE)"; do
@@ -1497,23 +1591,25 @@ validate_descriptor() {
 	need_file "$CONTROL_ROOT/current/config/$(descriptor_value "$d" POLICY_FILE)"
 	need_file "$(app_config_file "$d")"
 	validate_app_config_file "$d" "$(app_config_file "$d")"
+	descriptor_value_into endpoints "$d" PUBLIC_ENDPOINTS
 	while IFS='|' read -r endpoint_key endpoint_host; do
 		[[ "$endpoint_key" =~ ^[A-Z][A-Z0-9_]*$ && "$endpoint_host" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "invalid PUBLIC_ENDPOINTS in $d/manifest.env"
 		csv_has "$endpoint_keys" "$endpoint_key" && die "duplicate PUBLIC_ENDPOINTS key in $d/manifest.env: $endpoint_key"
 		csv_has "$endpoint_hosts" "$endpoint_host" && die "duplicate PUBLIC_ENDPOINTS host in $d/manifest.env: $endpoint_host"
 		endpoint_keys="${endpoint_keys:+$endpoint_keys,}$endpoint_key"
 		endpoint_hosts="${endpoint_hosts:+$endpoint_hosts,}$endpoint_host"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" PUBLIC_ENDPOINTS)" | tr ';' '\n')"
+	done <<<"${endpoints//;/$'\n'}"
+	descriptor_value_into route_groups "$d" ROUTE_GROUPS
 	while IFS='|' read -r public_key origin_key upstream_key; do
 		[[ "$ingress" == direct ]] && continue
 		[[ "$public_key" =~ ^[A-Z][A-Z0-9_]*$ && "$origin_key" =~ ^[A-Z][A-Z0-9_]*$ && "$upstream_key" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "invalid ROUTE_GROUPS in $d/manifest.env"
 		csv_has "$endpoint_keys" "$public_key" || die "ROUTE_GROUPS public key is absent from PUBLIC_ENDPOINTS in $d/manifest.env: $public_key"
 		route_public_keys="${route_public_keys:+$route_public_keys,}$public_key"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" ROUTE_GROUPS)" | tr ';' '\n')"
+	done <<<"${route_groups//;/$'\n'}"
 	while IFS='|' read -r endpoint_key _; do
 		[[ "$ingress" == direct ]] && continue
 		csv_has "$route_public_keys" "$endpoint_key" || die "PUBLIC_ENDPOINTS key is absent from ROUTE_GROUPS in $d/manifest.env: $endpoint_key"
-	done <<<"$(printf '%s\n' "$(descriptor_value "$d" PUBLIC_ENDPOINTS)" | tr ';' '\n')"
+	done <<<"${endpoints//;/$'\n'}"
 	need_file "$d/$(descriptor_value "$d" COMPOSE_FILE)"
 	if [[ "$ingress" != direct ]]; then
 		need_file "$d/$(descriptor_value "$d" ROUTE_TEMPLATE_LEADER)"
@@ -1541,11 +1637,11 @@ validate_descriptor() {
 		health_service="$(descriptor_value "$d" HEALTH_SERVICE)"
 		[[ -z "$health_service" || "$(printf '%s\n' "$services" | grep -Fx "$health_service" || true)" == "$health_service" ]] || die "HEALTH_SERVICE is absent from Compose project: $d"
 	fi
-	if [[ "$(basename "$d")" == newapi ]] && app_in_reconcile_scope "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
+	if [[ "${d##*/}" == newapi ]] && app_in_reconcile_scope "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
 		[[ "$(env_value NEW_API_SQL_DSN)" =~ ^postgres(ql)?:// ]] || die 'production New API requires a postgres:// or postgresql:// DSN'
 		[[ "$(env_value NEW_API_SQL_DSN)" != *replace-with* && "$(env_value NEW_API_SESSION_SECRET)" != *replace-with* && "$(env_value NEW_API_CRYPTO_SECRET)" != *replace-with* ]] || die 'production New API secrets and DSN must be configured'
 	fi
-	if [[ "$(basename "$d")" == librechat ]] && app_in_reconcile_scope "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
+	if [[ "${d##*/}" == librechat ]] && app_in_reconcile_scope "$d" && [[ "$(env_value DOMAIN_NAME)" != localhost ]]; then
 		for k in LIBRECHAT_MONGO_URI LIBRECHAT_REDIS_URI LIBRECHAT_JWT_SECRET LIBRECHAT_JWT_REFRESH_SECRET LIBRECHAT_ADMIN_PANEL_SESSION_SECRET LIBRECHAT_AWS_ENDPOINT_URL LIBRECHAT_AWS_ACCESS_KEY_ID LIBRECHAT_AWS_SECRET_ACCESS_KEY LIBRECHAT_AWS_BUCKET_NAME; do
 			[[ -n "$(env_value "$k")" && "$(env_value "$k")" != replace-with-* ]] || die "production LibreChat requires $k"
 		done
@@ -1556,7 +1652,7 @@ validate_descriptor() {
 			! placeholder_value "$(env_value "$k")" || die "production LibreChat placeholder is not allowed: $k"
 		done
 	fi
-	if [[ "$(basename "$d")" == librechat ]]; then
+	if [[ "${d##*/}" == librechat ]]; then
 		case "$(app_policy_value "$d" MONGO_BACKUP_ENABLED)" in true | false) ;; *) die 'LibreChat MONGO_BACKUP_ENABLED must be true or false' ;; esac
 		primary="$(app_policy_value "$d" MONGO_BACKUP_NODE_ID)"
 		csv_has "$nodes" "$primary" || die 'LibreChat MONGO_BACKUP_NODE_ID is absent from NODES'
@@ -1565,13 +1661,15 @@ validate_descriptor() {
 	sqlite)
 		[[ -n "$(descriptor_value "$d" SQLITE_PATHS)$(descriptor_value "$d" SQLITE_GLOBS)" ]] || die "SQLite app is missing SQLITE_PATHS/SQLITE_GLOBS: $d"
 		! grep -Eiq 'REDIS_CONN_STRING|SQL_DSN|postgres|redis' "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "SQLite app must not define Redis or PostgreSQL: $d"
+		descriptor_value_into sqlite_paths "$d" SQLITE_PATHS
 		while IFS= read -r k; do
 			[[ -n "$k" ]] || continue
 			safe_relative "$k" || die "unsafe SQLITE_PATHS entry in $d: $k"
 			csv_has "$sqlite_entries" "path:$k" && die "duplicate SQLITE_PATHS entry in $d: $k"
 			sqlite_entries="${sqlite_entries:+$sqlite_entries,}path:$k"
 			grep -Fq "$k" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "SQLite path is absent from Compose: $k"
-		done <<<"$(printf '%s\n' "$(descriptor_value "$d" SQLITE_PATHS)" | tr ',' '\n')"
+		done <<<"${sqlite_paths//,/$'\n'}"
+		descriptor_value_into sqlite_globs "$d" SQLITE_GLOBS
 		while IFS= read -r k; do
 			[[ -n "$k" ]] || continue
 			[[ "$k" != /* && "$k" != *..* && "$k" != *'**'* && "$k" != *$'\n'* && "$k" != *$'\r'* && "$k" != *$'\t'* && "$k" =~ ^[A-Za-z0-9][A-Za-z0-9._/?*-]*$ ]] || die "unsafe SQLITE_GLOBS entry in $d: $k"
@@ -1579,7 +1677,7 @@ validate_descriptor() {
 			sqlite_entries="${sqlite_entries:+$sqlite_entries,}glob:$k"
 			[[ "${k##*/}" == *'*'* || "${k##*/}" == *'?'* ]] || die "SQLITE_GLOBS entry must contain a filename wildcard in $d: $k"
 			[[ "${k%/*}" != *'*'* && "${k%/*}" != *'?'* ]] || die "SQLITE_GLOBS directory must be literal in $d: $k"
-		done <<<"$(printf '%s\n' "$(descriptor_value "$d" SQLITE_GLOBS)" | tr ',' '\n')"
+		done <<<"${sqlite_globs//,/$'\n'}"
 		if app_in_reconcile_scope "$d" && singleton_runtime_env_provisioned "$d"; then
 			while IFS= read -r k; do
 				[[ -n "$k" ]] || continue
@@ -1884,7 +1982,7 @@ validate_singleton_transition_state() {
 	[[ "$(node_role)" == leader ]] || return 0
 	while IFS= read -r d; do
 		[[ -n "$d" ]] || continue
-		id="$(basename "$d")"
+		id="${d##*/}"
 		app_policy_enabled "$id" || continue
 		[[ "$(app_upstream_mode "$d")" == singleton ]] || continue
 		state_file="$(singleton_state_file "$d")"
@@ -1909,12 +2007,12 @@ validate() {
 	need_file "$FOUNDATION_ROOT/caddy.yml"
 	validate_singleton_transition_state
 	while IFS= read -r d; do
-		[[ -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" || "$(basename "$d")" == "$PLATFORM_TEST_ONLY_DESCRIPTOR" ]] || continue
+		[[ -z "$PLATFORM_TEST_ONLY_DESCRIPTOR" || "${d##*/}" == "$PLATFORM_TEST_ONLY_DESCRIPTOR" ]] || continue
 		[[ -n "$d" ]] || continue
 		validate_descriptor "$d"
-		id="$(descriptor_value "$d" APP_ID)"
-		project="$(descriptor_value "$d" COMPOSE_PROJECT)"
-		alias="$(descriptor_value "$d" NETWORK_ALIAS)"
+		descriptor_value_into id "$d" APP_ID
+		descriptor_value_into project "$d" COMPOSE_PROJECT
+		descriptor_value_into alias "$d" NETWORK_ALIAS
 		csv_has "$ids" "$id" && die "duplicate app ID: $id"
 		csv_has "$projects" "$project" && die "duplicate Compose project: $project"
 		csv_has "$aliases" "$alias" && die "duplicate network alias: $alias"

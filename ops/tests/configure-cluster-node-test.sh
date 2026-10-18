@@ -9,7 +9,7 @@ make_fixture() {
 	local name="$1" fixture
 	fixture="$tmp/$name"
 	mkdir -p "$fixture/ops"
-	cp "$repo_root/ops/configure-cluster-node.sh" "$repo_root/ops/generate-woodpecker-workflows.sh" "$fixture/ops/"
+	cp "$repo_root/ops/configure-cluster-node.sh" "$repo_root"/ops/generate-woodpecker-workflows*.sh "$fixture/ops/"
 	cp "$repo_root/ops/images.apps.prod.env" "$fixture/ops/"
 	cp -R "$repo_root/apps" "$repo_root/config" "$fixture/"
 	# The repository reserves worker-3; this suite exercises adding it from a

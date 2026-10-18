@@ -9,7 +9,7 @@ make_fixture() {
 	local name="$1" root
 	root="$tmp/$name"
 	mkdir -p "$root/ops"
-	cp "$repo_root/ops/generate-woodpecker-workflows.sh" "$root/ops/"
+	cp "$repo_root"/ops/generate-woodpecker-workflows*.sh "$root/ops/"
 	cp -R "$repo_root/apps" "$root/apps"
 	cp -R "$repo_root/config" "$root/config"
 	cp "$repo_root/ops/images.apps.prod.env" "$root/ops/"

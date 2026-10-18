@@ -21,7 +21,7 @@ prod)
 	bind=0.0.0.0
 	;;
 *)
-	printf 'usage: %s {dev|prod} {validate|up|down|restart|logs|ps}\n' "$0" >&2
+	printf 'usage: %s {dev|prod} {validate|render|up|down|restart|logs|ps}\n' "$0" >&2
 	exit 2
 	;;
 esac
@@ -367,7 +367,7 @@ up() {
 	done < <(app_dirs)
 }
 base_env
-case "$action" in validate) validate ;; up | restart) up ;; down)
+case "$action" in render) render ;; validate) validate ;; up | restart) up ;; down)
 	while IFS= read -r n; do
 		fc "$n"
 		"${command[@]}" down --remove-orphans || true
