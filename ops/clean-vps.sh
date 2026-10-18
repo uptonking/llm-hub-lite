@@ -82,6 +82,10 @@ append_unique() {
 		for item in "${images[@]}"; do [[ "$item" == "$value" ]] && return 0; done
 		images+=("$value")
 		;;
+	projects)
+		for item in "${projects[@]}"; do [[ "$item" == "$value" ]] && return 0; done
+		projects+=("$value")
+		;;
 	*) die "unknown cleanup list: $name" ;;
 	esac
 }
