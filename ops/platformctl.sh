@@ -3332,10 +3332,24 @@ direct_smoke() {
 		mapped="$("${compose_command[@]}" port --protocol "$proto" "$service" "$container_port" 2>/dev/null || true)"
 		if [[ -z "$mapped" ]] && [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$container_id" 2>/dev/null || true)" == host ]]; then
 			case "$proto" in
-			udp) mapped="$(ss -H -l -n -u "sport = :$host_port" 2>/dev/null | awk '{print $4}' | head -n1)" ;;
-			tcp) mapped="$(ss -H -l -n -t "sport = :$host_port" 2>/dev/null | awk '{print $4}' | head -n1)" ;;
+			udp) mapped="$(docker exec "$container_id" netstat -u -l -n 2>/dev/null | awk -v p=":$host_port" '$4 ~ p {print $4}' | head -n1)" ;;
+			tcp) mapped="$(docker exec "$container_id" netstat -t -l -n 2>/dev/null | awk -v p=":$host_port" '$4 ~ p {print $4}' | head -n1)" ;;
 			esac
-			case "$mapped" in \*:"$host_port") mapped="0.0.0.0:$host_port" ;; esac
+			if [[ -z "$mapped" ]]; then
+				case "$proto" in
+				udp) mapped="$(ss -H -l -n -u "sport = :$host_port" 2>/dev/null | awk '{print $4}' | head -n1)" ;;
+				tcp) mapped="$(ss -H -l -n -t "sport = :$host_port" 2>/dev/null | awk '{print $4}' | head -n1)" ;;
+				esac
+			fi
+			if [[ -z "$mapped" ]]; then
+				hex_port="$(printf '%04X' "$host_port")"
+				if [[ "$proto" == udp ]] && docker exec "$container_id" cat /proc/net/udp 2>/dev/null | grep -Eq "[0-9A-F]{8}:${hex_port}[[:space:]]+[0-9A-F]{8}:[0-9A-F]{4}[[:space:]]+07"; then
+					mapped="0.0.0.0:$host_port"
+				elif [[ "$proto" == tcp ]] && docker exec "$container_id" cat /proc/net/tcp 2>/dev/null | grep -Eq "[0-9A-F]{8}:${hex_port}[[:space:]]+[0-9A-F]{8}:[0-9A-F]{4}[[:space:]]+0A"; then
+					mapped="0.0.0.0:$host_port"
+				fi
+			fi
+			case "$mapped" in \*:"$host_port" | ":::$host_port") mapped="0.0.0.0:$host_port" ;; esac
 		fi
 		printf '%s\n' "$mapped" | awk -v p=":$host_port$" '$0 ~ p {found=1} END {exit found ? 0 : 1}' || die "direct listener is not published as expected: $proto/$host_port"
 		# Direct/orphan services must bind a public wildcard. A loopback-only

@@ -8,12 +8,15 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid
+      - /run:size=16m,noexec,nosuid
     mem_limit: ${VERGE5_MEMORY_LIMIT:-512m}
     cpus: ${VERGE5_CPUS:-1.0}
     pids_limit: ${VERGE5_PIDS_LIMIT:-64}
     cap_drop: [ALL]
     cap_add:
       - NET_ADMIN
+      - NET_BIND_SERVICE
+      - NET_RAW
     security_opt: ['no-new-privileges:true']
     network_mode: host
     labels:
