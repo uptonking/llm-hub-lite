@@ -673,6 +673,21 @@ configure_low_memory_swap() {
 	install -d -m 755 /etc/sysctl.d
 	printf 'vm.swappiness=%s\n' "$LOW_MEMORY_SWAP_SWAPPINESS" >/etc/sysctl.d/99-llm-hub-lite-memory.conf
 	sysctl -p /etc/sysctl.d/99-llm-hub-lite-memory.conf >/dev/null
+	modprobe tcp_bbr >/dev/null 2>&1 || true
+	cat >/etc/sysctl.d/99-llm-hub-lite-network.conf <<'EOF'
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.ipv4.udp_rmem_min = 8192
+net.ipv4.udp_wmem_min = 8192
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 32768
+net.ipv4.tcp_fastopen = 3
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+	sysctl -p /etc/sysctl.d/99-llm-hub-lite-network.conf >/dev/null 2>&1 || true
 }
 detect_ssh_port() {
 	if [[ -z "$SSH_PORT" && -n "${SSH_CONNECTION:-}" ]]; then

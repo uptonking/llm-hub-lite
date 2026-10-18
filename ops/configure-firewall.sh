@@ -163,10 +163,33 @@ reconcile_app_fail2ban() {
 		fail2ban-client reload >/dev/null 2>&1 || true
 	fi
 }
+reconcile_network_tuning() {
+	command -v sysctl >/dev/null 2>&1 || return 0
+	[[ -d /etc/sysctl.d && -w /etc/sysctl.d ]] || return 0
+	local target_conf="/etc/sysctl.d/99-llm-hub-lite-network.conf"
+	if [[ ! -f "$target_conf" ]]; then
+		modprobe tcp_bbr >/dev/null 2>&1 || true
+		cat >"$target_conf" <<'EOF'
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.ipv4.udp_rmem_min = 8192
+net.ipv4.udp_wmem_min = 8192
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 32768
+net.ipv4.tcp_fastopen = 3
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+		sysctl -p "$target_conf" >/dev/null 2>&1 || true
+	fi
+}
 # The role split below returns early for the Leader, so role-independent
 # security policies have to be reconciled before it rather than at the end of the file.
 reconcile_ssh_hardening
 reconcile_app_fail2ban
+reconcile_network_tuning
 clear_follower_ufw_rules
 ufw allow 443/tcp comment 'HTTPS' >/dev/null
 ufw allow 443/udp comment 'HTTP/3' >/dev/null

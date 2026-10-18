@@ -15,3 +15,9 @@ masquerade:
   type: proxy
   proxy:
     url: https://www.aichorage.de/
+outbounds:
+  - name: default
+    type: direct
+    direct:
+      mode: 46
+      fastOpen: true

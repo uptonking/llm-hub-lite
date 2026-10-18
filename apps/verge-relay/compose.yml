@@ -7,6 +7,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=8m,noexec,nosuid
+      - /root:size=8m,noexec,nosuid
     mem_limit: ${VERGE_RELAY_MEMORY_LIMIT:-64m}
     cpus: ${VERGE_RELAY_CPUS:-0.25}
     pids_limit: ${VERGE_RELAY_PIDS_LIMIT:-64}
