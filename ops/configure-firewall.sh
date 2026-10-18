@@ -211,6 +211,9 @@ command -v ip >/dev/null 2>&1 || {
 	exit 1
 }
 PUBLIC_INTERFACE="$(public_interface)"
+if command -v tc >/dev/null 2>&1; then
+	tc qdisc replace dev "$PUBLIC_INTERFACE" root fq >/dev/null 2>&1 || true
+fi
 clear_port_hop_rules
 clear_forward_rules
 

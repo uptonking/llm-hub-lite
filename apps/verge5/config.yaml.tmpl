@@ -11,6 +11,14 @@ acme:
 auth:
   type: password
   password: __VERGE5_AUTH_PASSWORD__
+ignoreClientBandwidth: true
+quic:
+  initStreamReceiveWindow: 8388608
+  maxStreamReceiveWindow: 8388608
+  initConnReceiveWindow: 20971520
+  maxConnReceiveWindow: 20971520
+  maxIdleTimeout: 60s
+  keepAlivePeriod: 10s
 masquerade:
   type: proxy
   proxy:
