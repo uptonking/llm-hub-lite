@@ -1380,7 +1380,9 @@ validate_descriptor() {
 			[[ "$proto" == tcp || "$proto" == udp ]] || die "invalid direct listener protocol: $listener"
 			[[ "$host_port" =~ ^[1-9][0-9]*$ && "$container_port" =~ ^[1-9][0-9]*$ && "$host_port" -le 65535 && "$container_port" -le 65535 ]] || die "invalid direct listener: $listener"
 			csv_has "$allowlist" "$proto/$host_port" || die "direct listener is not allowlisted: $proto/$host_port"
-			if [[ "$proto" == udp ]]; then
+			if grep -Eq 'network_mode:[[:space:]]*host' "$d/$(descriptor_value "$d" COMPOSE_FILE)"; then
+				:
+			elif [[ "$proto" == udp ]]; then
 				grep -Eq "${host_port}:[[:space:]]*${container_port}/udp|${host_port}:${container_port}/udp" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "direct UDP listener is absent from Compose: $listener"
 			else
 				grep -Eq "${host_port}:[[:space:]]*${container_port}/tcp|${host_port}:${container_port}/tcp" "$d/$(descriptor_value "$d" COMPOSE_FILE)" || die "direct TCP listener is absent from Compose: $listener"
@@ -3328,6 +3330,13 @@ direct_smoke() {
 		# Compose expects the private port and protocol as separate arguments;
 		# passing `443/udp` as one token is rejected by current Compose plugins.
 		mapped="$("${compose_command[@]}" port --protocol "$proto" "$service" "$container_port" 2>/dev/null || true)"
+		if [[ -z "$mapped" ]] && [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$container_id" 2>/dev/null || true)" == host ]]; then
+			case "$proto" in
+			udp) mapped="$(ss -H -l -n -u "sport = :$host_port" 2>/dev/null | awk '{print $4}' | head -n1)" ;;
+			tcp) mapped="$(ss -H -l -n -t "sport = :$host_port" 2>/dev/null | awk '{print $4}' | head -n1)" ;;
+			esac
+			case "$mapped" in \*:"$host_port") mapped="0.0.0.0:$host_port" ;; esac
+		fi
 		printf '%s\n' "$mapped" | awk -v p=":$host_port$" '$0 ~ p {found=1} END {exit found ? 0 : 1}' || die "direct listener is not published as expected: $proto/$host_port"
 		# Direct/orphan services must bind a public wildcard. A loopback-only
 		# mapping would leave the DNS record pointing at an unreachable listener.

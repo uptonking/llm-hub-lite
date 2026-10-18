@@ -1,4 +1,4 @@
-listen: :443
+listen: :443,20000-30000
 acme:
   domains:
     - verge3.aichorage.de
@@ -19,5 +19,5 @@ outbounds:
   - name: default
     type: direct
     direct:
-      mode: 46
+      mode: 4
       fastOpen: true

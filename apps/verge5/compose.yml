@@ -9,10 +9,13 @@ services:
     tmpfs:
       - /tmp:size=16m,noexec,nosuid
     mem_limit: ${VERGE5_MEMORY_LIMIT:-512m}
-    cpus: ${VERGE5_CPUS:-0.5}
+    cpus: ${VERGE5_CPUS:-1.0}
     pids_limit: ${VERGE5_PIDS_LIMIT:-64}
     cap_drop: [ALL]
+    cap_add:
+      - NET_ADMIN
     security_opt: ['no-new-privileges:true']
+    network_mode: host
     labels:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: verge5
@@ -26,10 +29,8 @@ services:
       HYSTERIA_ACME_DIR: /var/lib/hysteria/acme
       HYSTERIA_DISABLE_UPDATE_CHECK: "true"
       HYSTERIA_LOG_LEVEL: ${VERGE5_LOG_LEVEL:-warn}
-      GOMAXPROCS: ${VERGE5_GOMAXPROCS:-1}
+      GOMAXPROCS: ${VERGE5_GOMAXPROCS:-2}
       GOMEMLIMIT: ${VERGE5_GOMEMLIMIT:-450MiB}
-    ports:
-      - "0.0.0.0:443:443/udp"
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/verge5:/var/lib/hysteria
       - ${RUNTIME_CONFIG_FILE:-/etc/llm-hub-lite/runtime/verge5/config.yaml}:/etc/hysteria/config.yaml:ro

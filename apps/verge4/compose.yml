@@ -12,7 +12,10 @@ services:
     cpus: ${VERGE4_CPUS:-0.5}
     pids_limit: ${VERGE4_PIDS_LIMIT:-64}
     cap_drop: [ALL]
+    cap_add:
+      - NET_ADMIN
     security_opt: ['no-new-privileges:true']
+    network_mode: host
     labels:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: verge4
@@ -28,8 +31,6 @@ services:
       HYSTERIA_LOG_LEVEL: ${VERGE4_LOG_LEVEL:-warn}
       GOMAXPROCS: ${VERGE4_GOMAXPROCS:-1}
       GOMEMLIMIT: ${VERGE4_GOMEMLIMIT:-450MiB}
-    ports:
-      - "0.0.0.0:443:443/udp"
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/verge4:/var/lib/hysteria
       - ${RUNTIME_CONFIG_FILE:-/etc/llm-hub-lite/runtime/verge4/config.yaml}:/etc/hysteria/config.yaml:ro
