@@ -10,7 +10,7 @@ services:
       - /tmp:size=16m,noexec,nosuid
       - /run:size=16m,noexec,nosuid
     mem_limit: ${VERGE2_MEMORY_LIMIT:-512m}
-    cpus: ${VERGE2_CPUS:-0.5}
+    cpus: ${VERGE2_CPUS:-0.75}
     pids_limit: ${VERGE2_PIDS_LIMIT:-64}
     cap_drop: [ALL]
     cap_add:
@@ -32,7 +32,7 @@ services:
       HYSTERIA_ACME_DIR: /var/lib/hysteria/acme
       HYSTERIA_DISABLE_UPDATE_CHECK: "true"
       HYSTERIA_LOG_LEVEL: ${VERGE2_LOG_LEVEL:-warn}
-      GOMAXPROCS: ${VERGE2_GOMAXPROCS:-1}
+      GOMAXPROCS: ${VERGE2_GOMAXPROCS:-2}
       GOMEMLIMIT: ${VERGE2_GOMEMLIMIT:-450MiB}
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/verge2:/var/lib/hysteria

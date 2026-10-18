@@ -167,22 +167,31 @@ reconcile_network_tuning() {
 	command -v sysctl >/dev/null 2>&1 || return 0
 	[[ -d /etc/sysctl.d && -w /etc/sysctl.d ]] || return 0
 	local target_conf="/etc/sysctl.d/99-llm-hub-lite-network.conf"
-	if [[ ! -f "$target_conf" ]]; then
-		modprobe tcp_bbr >/dev/null 2>&1 || true
-		cat >"$target_conf" <<'EOF'
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.core.rmem_default = 262144
-net.core.wmem_default = 262144
-net.ipv4.udp_rmem_min = 8192
-net.ipv4.udp_wmem_min = 8192
-net.core.netdev_max_backlog = 10000
-net.core.somaxconn = 32768
-net.ipv4.tcp_fastopen = 3
-net.core.default_qdisc = fq
+	local tmp_conf
+	modprobe tcp_bbr >/dev/null 2>&1 || true
+	tmp_conf="$(mktemp "${target_conf}.tmp.XXXXXX")"
+	cat >"$tmp_conf" <<'EOF'
 net.ipv4.tcp_congestion_control = bbr
+net.core.default_qdisc = fq
+net.ipv4.tcp_fastopen = 3
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.core.rmem_default = 1048576
+net.core.wmem_default = 1048576
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+net.ipv4.tcp_moderate_rcvbuf = 1
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 65535
 EOF
+	if ! cmp -s "$tmp_conf" "$target_conf" 2>/dev/null; then
+		mv -f -- "$tmp_conf" "$target_conf"
+		chmod 644 "$target_conf" 2>/dev/null || true
 		sysctl -p "$target_conf" >/dev/null 2>&1 || true
+	else
+		rm -f -- "$tmp_conf"
 	fi
 }
 # The role split below returns early for the Leader, so role-independent
@@ -213,6 +222,9 @@ command -v ip >/dev/null 2>&1 || {
 PUBLIC_INTERFACE="$(public_interface)"
 if command -v tc >/dev/null 2>&1; then
 	tc qdisc replace dev "$PUBLIC_INTERFACE" root fq >/dev/null 2>&1 || true
+fi
+if command -v ip >/dev/null 2>&1; then
+	ip link set dev "$PUBLIC_INTERFACE" txqueuelen 10000 >/dev/null 2>&1 || true
 fi
 clear_port_hop_rules
 clear_forward_rules

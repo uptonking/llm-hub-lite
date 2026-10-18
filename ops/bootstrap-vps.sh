@@ -675,17 +675,20 @@ configure_low_memory_swap() {
 	sysctl -p /etc/sysctl.d/99-llm-hub-lite-memory.conf >/dev/null
 	modprobe tcp_bbr >/dev/null 2>&1 || true
 	cat >/etc/sysctl.d/99-llm-hub-lite-network.conf <<'EOF'
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.core.rmem_default = 262144
-net.core.wmem_default = 262144
-net.ipv4.udp_rmem_min = 8192
-net.ipv4.udp_wmem_min = 8192
-net.core.netdev_max_backlog = 10000
-net.core.somaxconn = 32768
-net.ipv4.tcp_fastopen = 3
-net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+net.core.default_qdisc = fq
+net.ipv4.tcp_fastopen = 3
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.core.rmem_default = 1048576
+net.core.wmem_default = 1048576
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+net.ipv4.tcp_moderate_rcvbuf = 1
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 65535
 EOF
 	sysctl -p /etc/sysctl.d/99-llm-hub-lite-network.conf >/dev/null 2>&1 || true
 }
