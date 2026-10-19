@@ -34,6 +34,7 @@ services:
       HYSTERIA_LOG_LEVEL: ${VERGE2_LOG_LEVEL:-warn}
       GOMAXPROCS: ${VERGE2_GOMAXPROCS:-2}
       GOMEMLIMIT: ${VERGE2_GOMEMLIMIT:-450MiB}
+      QUIC_GO_DISABLE_GSO: "true"
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/verge2:/var/lib/hysteria
       - ${RUNTIME_CONFIG_FILE:-/etc/llm-hub-lite/runtime/verge2/config.yaml}:/etc/hysteria/config.yaml:ro

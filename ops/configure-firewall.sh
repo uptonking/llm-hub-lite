@@ -226,6 +226,9 @@ fi
 if command -v ip >/dev/null 2>&1; then
 	ip link set dev "$PUBLIC_INTERFACE" txqueuelen 10000 >/dev/null 2>&1 || true
 fi
+if command -v ethtool >/dev/null 2>&1; then
+	ethtool -K "$PUBLIC_INTERFACE" tx-udp-segmentation off >/dev/null 2>&1 || true
+fi
 clear_port_hop_rules
 clear_forward_rules
 
