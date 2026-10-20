@@ -2594,7 +2594,7 @@ diagnose_cpu_pressure() {
 }
 memory_pressure_snapshot() {
 	local id path
-	for id in $(docker ps -q 2>/dev/null || true); do
+	for id in $(docker ps --no-trunc -q 2>/dev/null || true); do
 		path="/sys/fs/cgroup/system.slice/docker-$id.scope"
 		if [[ ! -r "$path/memory.events" ]]; then
 			path="/sys/fs/cgroup/docker/$id"
