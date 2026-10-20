@@ -216,6 +216,14 @@ printf '[ 1] 443/tcp ALLOW IN Anywhere\n[ 2] 443/tcp ALLOW IN %s # edge https\n[
 : >"$FIREWALL_LOG"
 EDGE_INGRESS_SOURCES_FILE="$tmp/edge-ingress-sources.env" FIREWALL_UFW_STATUS="$tmp/ufw-status-leader" \
 	DEPLOY_CONFIG_FILE="$tmp/platform.edge.env" bash "$repo_root/ops/configure-firewall.sh" >/dev/null
+# Docker bypasses ufw's INPUT rules by DNAT, so the same allowlist has to be
+# present in DOCKER-USER.
+grep -Fqx "iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s $cf_range_one -p tcp --dport 443 -j RETURN" "$FIREWALL_LOG"
+grep -Fqx "iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s $cf_range_one -p udp --dport 443 -j RETURN" "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp --dport 80 -j RETURN' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp -j DROP' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p udp -j DROP' "$FIREWALL_LOG"
+grep -Fqx 'iptables -I DOCKER-USER 1 -j LLM_HUB_LITE_DOCKER' "$FIREWALL_LOG"
 grep -Fqx "ufw allow from $cf_range_one to any port 443 proto tcp comment edge https" "$FIREWALL_LOG"
 grep -Fqx "ufw allow from $cf_range_two to any port 443 proto udp comment edge http3" "$FIREWALL_LOG"
 grep -Fqx 'ufw allow from 198.51.100.30 to any port 443 proto tcp comment edge https' "$FIREWALL_LOG"
@@ -246,6 +254,11 @@ grep -Fqx 'ufw allow 443/tcp comment HTTPS' "$FIREWALL_LOG"
 grep -Fq 'keeping the unrestricted Leader HTTPS policy' "$tmp/leader-warning.log"
 if grep -Fq 'ufw allow from ' "$FIREWALL_LOG"; then
 	fail_firewall 'Leader narrowed HTTPS without a complete allowlist'
+fi
+grep -Fqx 'iptables -X LLM_HUB_LITE_DOCKER' "$FIREWALL_LOG"
+if grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp -j DROP' "$FIREWALL_LOG" ||
+	grep -Fqx 'iptables -I DOCKER-USER 1 -j LLM_HUB_LITE_DOCKER' "$FIREWALL_LOG"; then
+	fail_firewall 'Leader default-denied forwarded ingress without a complete allowlist'
 fi
 
 # --- Application egress profiles ---------------------------------------------

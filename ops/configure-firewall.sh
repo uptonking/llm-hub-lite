@@ -291,6 +291,35 @@ reconcile_leader_edge_ingress() {
 	done < <(leader_edge_rule_lines | sort -k1,1rn)
 	printf 'Leader HTTPS ingress restricted to %s reviewed source entries\n' "$(printf '%s\n' "$LEADER_EDGE_SOURCES" | grep -c . || true)"
 }
+# Docker publishes Caddy's ports by DNAT, so arriving packets traverse FORWARD and
+# never reach ufw's INPUT rules. The allowlist has to be enforced in DOCKER-USER as
+# well, otherwise the UFW rules above only document an intention. The Leader
+# publishes nothing else on the public interface (verified from the Docker NAT
+# chain), so this chain can default-deny the remaining forwarded traffic.
+reconcile_leader_docker_ingress() {
+	local source
+	collect_leader_edge_sources
+	while iptables -C DOCKER-USER -j "$chain" 2>/dev/null; do iptables -D DOCKER-USER -j "$chain"; done
+	if [[ -n "$LEADER_EDGE_MISSING" || -z "$LEADER_EDGE_SOURCES" ]]; then
+		iptables -F "$chain" 2>/dev/null || true
+		iptables -X "$chain" 2>/dev/null || true
+		return 0
+	fi
+	iptables -N "$chain" 2>/dev/null || true
+	iptables -F "$chain"
+	iptables -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+	# ACME http-01 renewals need a publicly reachable port 80.
+	iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p tcp --dport 80 -j RETURN
+	while IFS= read -r source; do
+		[[ -n "$source" ]] || continue
+		iptables -A "$chain" -i "$PUBLIC_INTERFACE" -s "$source" -p tcp --dport 443 -j RETURN
+		iptables -A "$chain" -i "$PUBLIC_INTERFACE" -s "$source" -p udp --dport 443 -j RETURN
+	done <<<"$LEADER_EDGE_SOURCES"
+	iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p tcp -j DROP
+	iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p udp -j DROP
+	iptables -I DOCKER-USER 1 -j "$chain"
+	printf 'Leader Docker-published ingress restricted to the reviewed source entries\n'
+}
 # Application egress profiles. An application that handles untrusted content or
 # user-supplied endpoints declares EGRESS_PROFILE in its cluster policy. The
 # profile denies that container's traffic to loopback, link-local, carrier-grade
@@ -378,12 +407,12 @@ reconcile_network_tuning
 reconcile_app_egress_profiles
 clear_follower_ufw_rules
 if [[ "$NODE_ROLE" == leader ]]; then
-	while iptables -C DOCKER-USER -j "$chain" 2>/dev/null; do iptables -D DOCKER-USER -j "$chain"; done
-	iptables -F "$chain" 2>/dev/null || true
-	iptables -X "$chain" 2>/dev/null || true
 	clear_port_hop_rules
 	clear_forward_rules
 	reconcile_leader_edge_ingress
+	if PUBLIC_INTERFACE="$(public_interface)"; then
+		reconcile_leader_docker_ingress
+	fi
 	rm -f -- "$REQUEST_FILE"
 	exit 0
 fi
