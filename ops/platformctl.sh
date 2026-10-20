@@ -2592,6 +2592,57 @@ diagnose_cpu_pressure() {
 		printf 'WARNING: CPU steal is %s%%; this is host-provider contention, not container CPU consumption.\n' "$steal_percent" >&2
 	fi
 }
+memory_pressure_snapshot() {
+	local id path
+	for id in $(docker ps -q 2>/dev/null || true); do
+		path="/sys/fs/cgroup/system.slice/docker-$id.scope"
+		if [[ ! -r "$path/memory.events" ]]; then
+			path="/sys/fs/cgroup/docker/$id"
+		fi
+		[[ -r "$path/memory.events" ]] || continue
+		printf '%s %s %s\n' "$id" \
+			"$(awk '$1 == "max" { print $2 }' "$path/memory.events" 2>/dev/null || true)" \
+			"$(awk '$1 == "pgscan_direct" { print $2 }' "$path/memory.stat" 2>/dev/null || true)"
+	done
+}
+diagnose_memory_pressure() {
+	local sample_seconds before_file after_file pressured total
+	local id before_max before_scan after_max after_scan name limit_hits reclaim_scans
+	before_file="$(mktemp)"
+	after_file="$(mktemp)"
+	memory_pressure_snapshot | sort >"$before_file"
+	if [[ ! -s "$before_file" ]]; then
+		rm -f "$before_file" "$after_file"
+		printf '\n[memory-pressure]\nstate=unavailable reason=cgroup-v2-missing\n'
+		return 0
+	fi
+	sample_seconds="${PLATFORM_MEMORY_DIAGNOSE_SAMPLE_SECONDS:-5}"
+	sleep "$sample_seconds"
+	memory_pressure_snapshot | sort >"$after_file"
+	total="$(wc -l <"$before_file" | tr -d ' ')"
+	pressured=0
+	printf '\n[memory-pressure]\nsample_seconds=%s containers=%s\n' "$sample_seconds" "$total"
+	while read -r id before_max before_scan after_max after_scan; do
+		[[ -n "$id" ]] || continue
+		[[ -n "$before_max" ]] || before_max=0
+		[[ -n "$before_scan" ]] || before_scan=0
+		[[ -n "$after_max" ]] || after_max=0
+		[[ -n "$after_scan" ]] || after_scan=0
+		if ((after_max - before_max > 0 || after_scan - before_scan > 0)); then
+			limit_hits=$((after_max - before_max))
+			reclaim_scans=$((after_scan - before_scan))
+			name="$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null || true)"
+			printf 'pressure: container=%s limit_hits=%s direct_reclaim_scans=%s\n' \
+				"${name#/}" "$limit_hits" "$reclaim_scans"
+			pressured=$((pressured + 1))
+		fi
+	done < <(join "$before_file" "$after_file" 2>/dev/null)
+	printf 'containers_under_pressure=%s\n' "$pressured"
+	if ((pressured > 0)); then
+		printf 'WARNING: %s container(s) hit their memory limit; the kernel reclaims synchronously inside those processes and stalls their requests. Raise the container memory limit above its working set.\n' "$pressured" >&2
+	fi
+	rm -f "$before_file" "$after_file"
+}
 diagnose() {
 	local scope="${1:-all}" p id
 	case "$scope" in
@@ -2601,6 +2652,7 @@ diagnose() {
 	esac
 	printf 'platformctl diagnose: node=%s role=%s scope=%s\n' "$(node_id)" "$(node_role)" "$scope"
 	diagnose_cpu_pressure
+	diagnose_memory_pressure
 	printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\nmaintenance=%s\n' \
 		"$(readlink "$CONTROL_ROOT/current" 2>/dev/null || printf '<missing>')" \
 		"$(readlink "$CONTROL_ROOT/previous" 2>/dev/null || printf '<missing>')" \

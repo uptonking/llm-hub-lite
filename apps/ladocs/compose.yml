@@ -246,7 +246,7 @@ services:
   y-provider:
     image: ${LADOCS_YPROVIDER_IMAGE:?LADOCS_YPROVIDER_IMAGE must be digest-pinned}
     restart: unless-stopped
-    mem_limit: ${LADOCS_YPROVIDER_MEMORY_LIMIT:-256m}
+    mem_limit: ${LADOCS_YPROVIDER_MEMORY_LIMIT:-384m}
     cpus: ${LADOCS_YPROVIDER_CPUS:-0.5}
     pids_limit: ${LADOCS_YPROVIDER_PIDS_LIMIT:-192}
     labels:

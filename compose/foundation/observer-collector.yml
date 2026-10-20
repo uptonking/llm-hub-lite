@@ -40,7 +40,7 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
-    mem_limit: ${OBSERVER_LOG_SHIPPER_MEMORY_LIMIT:-96m}
+    mem_limit: ${OBSERVER_LOG_SHIPPER_MEMORY_LIMIT:-192m}
     cpus: ${OBSERVER_LOG_SHIPPER_CPUS:-0.10}
     pids_limit: ${OBSERVER_LOG_SHIPPER_PIDS_LIMIT:-128}
     read_only: true

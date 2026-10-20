@@ -48,7 +48,7 @@ services:
   observer-health-probe:
     image: ${OBSERVER_HEALTH_PROBE_IMAGE:?OBSERVER_HEALTH_PROBE_IMAGE must be digest-pinned}
     restart: unless-stopped
-    mem_limit: 16m
+    mem_limit: 48m
     cpus: 0.05
     pids_limit: 32
     read_only: true
