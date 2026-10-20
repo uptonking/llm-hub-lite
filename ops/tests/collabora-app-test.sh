@@ -29,7 +29,15 @@ grep -Fq -e '--o:net.lok_allow.host[7]=openclouds.aichorage.de:443' "$app/compos
 if grep -Fq -e '--o:net.frame_ancestors' "$app/compose.yml"; then exit 1; fi
 grep -Fq -e '--o:ai.enabled=true' "$app/compose.yml"
 grep -Fq -e '--o:ai.allow_user_settings=true' "$app/compose.yml"
-grep -Fq -e '--o:ai.allowed_hosts.host[4]=aichorouter.aichorage.de' "$app/compose.yml"
+# coolwsd does not implement ai.allowed_hosts, so the option must not come back:
+# it would imply a host restriction that is never enforced. The egress profile is
+# the control that keeps a user-chosen endpoint away from internal destinations.
+if grep -Fq -e '--o:ai.allowed_hosts' "$app/compose.yml"; then
+	printf 'collabora compose declares ai.allowed_hosts, which coolwsd does not implement\n' >&2
+	exit 1
+fi
+grep -Fq -e '--o:zotero.enable=false' "$app/compose.yml"
+grep -q '^EGRESS_PROFILE=llm-client$' "$repo_root/config/cluster/apps/collabora.policy"
 grep -Fq -e '--o:per_document.max_concurrency=2' "$app/compose.yml"
 grep -Fq -e '--o:per_document.idle_timeout_secs=1800' "$app/compose.yml"
 grep -Fq -e '--o:languagetool.enabled=false' "$app/compose.yml"
@@ -44,6 +52,9 @@ grep -Fq 'reverse_proxy collabora:9980' "$app/route.follower.caddy"
 grep -Fq 'tls internal' "$app/route.follower.caddy"
 grep -Fq 'flush_interval -1' "$app/route.follower.caddy"
 grep -Fq 'health_uri /hosting/discovery' "$app/route.leader.caddy"
+# The embedded admin console is never published through the public edge.
+grep -Fq '@admin_console path /browser/dist/admin* /cool/adminws*' "$app/route.leader.caddy"
+grep -Fq 'respond @admin_console 403' "$app/route.leader.caddy"
 # shellcheck disable=SC2016
 grep -Fq 'reverse_proxy {$COLLABORA_UPSTREAM}' "$app/route.leader.caddy"
 

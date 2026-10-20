@@ -34,6 +34,9 @@ grep -Fq 'OC_EXCLUDE_RUN_SERVICES: "idp,search,activitylog,userlog,thumbnails,oc
 grep -Fq 'OC_ADD_RUN_SERVICES: "collaboration"' "$app/compose.yml"
 grep -Fq 'COLLABORATION_APP_NAME: "CollaboraOnline"' "$app/compose.yml"
 grep -Fq 'COLLABORATION_APP_PROOF_DISABLE: "true"' "$app/compose.yml"
+# The app provider registers on startup, so a long refresh interval stops the
+# 30s /hosting/discovery polling loop without breaking WOPI discovery.
+grep -Fq 'COLLABORATION_CS3API_APP_REGISTRATION_INTERVAL: "1h"' "$app/compose.yml"
 grep -Fq 'https://collabora.aichorage.de/' "$app/csp.yaml"
 grep -Fq 'FRONTEND_CHECK_FOR_UPDATES: "false"' "$app/compose.yml"
 

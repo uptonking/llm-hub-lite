@@ -1,3 +1,4 @@
 {$WOODPECKER_GRPC_SITE} {
+  import access_log
   reverse_proxy h2c://woodpecker-server:9000
 }

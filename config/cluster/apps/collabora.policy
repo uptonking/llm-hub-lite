@@ -1,2 +1,7 @@
 ENABLED=true
 NODES=worker-2
+# Deny this container's traffic to loopback, link-local, carrier-grade NAT and
+# private destinations. The application lets an authenticated user choose an
+# outbound endpoint, so the packet filter is the control that keeps a chosen URL
+# away from cloud metadata, host services and sibling containers.
+EGRESS_PROFILE=llm-client

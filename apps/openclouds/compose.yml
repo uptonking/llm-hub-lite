@@ -44,6 +44,9 @@ services:
       COLLABORATION_APP_INSECURE: "false"
       COLLABORATION_CS3API_DATAGATEWAY_INSECURE: "false"
       COLLABORATION_APP_PROOF_DISABLE: "true"
+      # The app provider registers on startup, so only refreshes are delayed.
+      # The 30s default made OpenCloud re-poll /hosting/discovery forever.
+      COLLABORATION_CS3API_APP_REGISTRATION_INTERVAL: "1h"
       OC_OIDC_ISSUER: "https://auther.aichorage.de"
       IDP_DOMAIN: "auther.aichorage.de"
       OC_OIDC_CLIENT_ID: "openclouds"

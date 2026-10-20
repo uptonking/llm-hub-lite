@@ -242,6 +242,43 @@ stale instances only after publication succeeded.
   selector intentionally runs no manual workflow. Run the selected secret
   workflow before changing singleton placement or recreating LibreChat.
 
+## Leader edge ingress, access logs, and app egress profiles
+
+Three controls live in `ops/configure-firewall.sh` and `config/Caddyfile` and roll
+out with `control-sync` plus the periodic reconcile; none of them needs SSH.
+
+- **Leader HTTPS allowlist.** The Leader accepts `443/tcp` and `443/udp` only from
+  Cloudflare's reviewed ranges (`EDGE_INGRESS_CLOUDFLARE_RANGES` in
+  `config/cluster/policy.env`) and from the root-only direct-source file
+  `/etc/llm-hub-lite/edge-ingress-sources.env` (`EDGE_INGRESS_DIRECT_SOURCES`,
+  mode 600, gitignored, included in `platformctl backup`). The Leader's own
+  public address and `172.16.0.0/12` are always admitted. Both halves must be
+  present: with either missing the reconciler keeps the previous unrestricted
+  policy and logs which half is absent, so an incomplete policy cannot take the
+  only public entry point offline. Ports 80 (ACME) and 22 (SSH) are never
+  narrowed.
+- **Access logs.** `(access_log)` in `config/Caddyfile` writes one JSON record
+  per request; `(common_proxy)` imports it, so every public and origin site is
+  covered, and Vector ships the Caddy container's stdout to OpenObserve. Both
+  hops are logged, which roughly doubles volume; watch ingest after a change.
+- **App egress profiles.** An entry in `config/cluster/apps/<app>.policy` —
+  `EGRESS_PROFILE=<profile>` plus an optional `EGRESS_ALLOW` list — makes the
+  reconciler deny that container's traffic to loopback, link-local,
+  carrier-grade NAT and private destinations, while public destinations stay
+  reachable. `llm-client` is the profile used by Collabora, whose
+  `ai.allow_user_settings` lets a signed-in user choose an outbound AI endpoint.
+  Rules are keyed on the container's current address, so `platform-submit` queues
+  a reconciliation after `consumer-stage`, `consumer-publish`, `consumer-stop`,
+  `consumer-origin` and `cluster-reconcile`; the timer is the backstop. With no
+  profile declared the chain is emptied and detached, so the capability is inert.
+
+To change the reviewed Cloudflare table, update **both** `config/Caddyfile`
+(`trusted_proxies`) and `config/cluster/policy.env`
+(`EDGE_INGRESS_CLOUDFLARE_RANGES`). `ops/check-ip-privacy.sh` fails CI when the
+two lists disagree, so the packet filter and Caddy cannot drift apart. Ship
+`config/cluster/policy.env` in its own push: the `cluster-reconcile` scope guard
+rejects a commit that mixes it with `ops/`, `config/Caddyfile` or `apps/`.
+
 ## Concrete example: editing LibreChat configuration and pushing
 
 1. The push hits `main`; the GitHub webhook notifies the Woodpecker server on

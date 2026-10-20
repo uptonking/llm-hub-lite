@@ -14,6 +14,17 @@
 	}
 }
 
+# Request access logs. Every public and origin site imports this through
+# (common_proxy), so traffic is attributable per host, path, status and verified
+# client IP on both proxy hops. Vector ships the Caddy container's stdout to
+# OpenObserve; container log rotation bounds the on-disk footprint.
+(access_log) {
+	log {
+		output stdout
+		format json
+	}
+}
+
 (common_proxy) {
 	encode zstd gzip
 	header {
@@ -21,6 +32,7 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy no-referrer
 	}
+	import access_log
 }
 
 # Rewrite every commonly consumed client-IP header from Caddy's verified

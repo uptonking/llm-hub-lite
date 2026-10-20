@@ -154,7 +154,15 @@ if [[ "$status" -ne 0 && -x /usr/local/bin/platformctl ]]; then
 	fi
 	printf '%s\n' '--- end host deployment diagnostics ---' >&2
 fi
-if [[ "$status" -eq 0 && "$mode" == cluster-reconcile ]]; then
+# Any deployment that can recreate a container must also refresh the packet
+# filter, because an application egress profile is keyed on the container's
+# current address. The path unit picks the request up immediately and the timer
+# remains the periodic backstop.
+case "$mode" in
+cluster-reconcile | consumer-stage | consumer-publish | consumer-stop | consumer-origin) reconcile_firewall=1 ;;
+*) reconcile_firewall=0 ;;
+esac
+if [[ "$status" -eq 0 && "$reconcile_firewall" -eq 1 ]]; then
 	touch /etc/llm-hub-lite/firewall-reconcile.request 2>/dev/null || printf '%s\n' 'warning: firewall reconciliation request could not be queued; timer will retry' >&2
 fi
 if [[ "$status" -eq 0 && "$mode" == direct-publish ]]; then

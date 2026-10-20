@@ -39,10 +39,15 @@ is_public_ipv4() {
 
 is_reviewed_public_infrastructure_cidr() {
 	local path="$1" ip="$2" after="$3" network prefix suffix
-	[[ "$path" == config/Caddyfile ]] || return 1
 	# Cloudflare publishes these CIDRs as shared proxy infrastructure; they
 	# identify no private node or customer endpoint. Keep the exception exact so
 	# unrelated addresses, bare network bases, and malformed prefixes still fail.
+	# The same reviewed table backs Caddy's trusted_proxies and the Leader's
+	# packet-filter allowlist, so both files qualify.
+	case "$path" in
+	config/Caddyfile | config/cluster/policy.env) ;;
+	*) return 1 ;;
+	esac
 	while IFS=' ' read -r network prefix; do
 		[[ "$ip" == "$network" && "$after" == "/$prefix"* ]] || continue
 		suffix="${after#"/$prefix"}"
@@ -79,6 +84,26 @@ while IFS= read -r record; do
 		content="$after"
 	done
 done <<<"$matches"
+
+reviewed_cloudflare_networks() {
+	sed -n 's/^EDGE_INGRESS_CLOUDFLARE_RANGES=//p' "$repo_root/config/cluster/policy.env" 2>/dev/null |
+		tr ',' '\n' | sed -n '/^\([0-9]\{1,3\}\.\)\{3\}[0-9]\{1,3\}\(\/[0-9]\{1,2\}\)\{0,1\}$/p' | sort -u || true
+}
+caddy_trusted_networks() {
+	grep -E '^[[:space:]]*trusted_proxies static ' "$repo_root/config/Caddyfile" 2>/dev/null |
+		tr ' ' '\n' | sed -n '/^\([0-9]\{1,3\}\.\)\{3\}[0-9]\{1,3\}\(\/[0-9]\{1,2\}\)\{0,1\}$/p' | sort -u || true
+}
+# The packet-filter allowlist and Caddy's trusted_proxies describe the same
+# reviewed infrastructure. If they drift, one would trust a source the other
+# rejects, so the IPv4 halves are compared as a unit whenever both are present.
+if [[ -f "$repo_root/config/Caddyfile" && -f "$repo_root/config/cluster/policy.env" ]]; then
+	policy_networks="$(reviewed_cloudflare_networks || true)"
+	caddy_networks="$(caddy_trusted_networks || true)"
+	if [[ -n "$policy_networks" && "$policy_networks" != "$caddy_networks" ]]; then
+		printf 'config/cluster/policy.env and config/Caddyfile disagree on the reviewed Cloudflare networks\n' >&2
+		violations=$((violations + 1))
+	fi
+fi
 
 ((violations == 0)) || exit 1
 printf 'IP privacy check passed (%s)\n' "$mode"

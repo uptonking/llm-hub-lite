@@ -1,5 +1,9 @@
 {$COLLABORA_SITE} {
   import common_proxy
+  # The embedded admin console is not part of the document workflow. Its
+  # credentials are container-local, so the public edge never offers it.
+  @admin_console path /browser/dist/admin* /cool/adminws*
+  respond @admin_console 403
   reverse_proxy {$COLLABORA_UPSTREAM} {
     transport http {
       tls_insecure_skip_verify

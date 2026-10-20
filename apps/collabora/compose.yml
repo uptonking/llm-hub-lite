@@ -20,8 +20,15 @@ services:
       username: ${COLLABORA_ADMIN_USER:-admin}
       password: ${COLLABORA_ADMIN_PASSWORD:?COLLABORA_ADMIN_PASSWORD must be set}
       content_security_policy: "frame-ancestors 'self' https://openclouds.aichorage.de https://collabora.aichorage.de openclouds.aichorage.de collabora.aichorage.de;"
+      # ai.allow_user_settings stays true so every user can point the assistant at
+      # their own OpenAI-compatible endpoint. coolwsd offers no host allowlist, so
+      # the compensating control is the EGRESS_PROFILE in
+      # config/cluster/apps/collabora.policy: the kernel denies this container any
+      # route to cloud metadata, host services, or sibling containers, while
+      # public destinations stay reachable. coolwsd implements no AI host
+      # allowlist of its own, so no override here should imply one.
       extra_params: >-
-        --o:ssl.enable=false --o:ssl.termination=true --o:welcome.enable=false --o:net.lok_allow.host[6]=openclouds.aichorage.de --o:net.lok_allow.host[7]=openclouds.aichorage.de:443 --o:ai.enabled=true --o:ai.allow_user_settings=true --o:ai.allowed_hosts.host[4]=aichorouter.aichorage.de --o:per_document.max_concurrency=2 --o:per_document.idle_timeout_secs=1800 --o:languagetool.enabled=false --o:languagetool.allow_user_settings=false --o:deepl.enabled=false --o:grammalecte.enabled=false --o:grammalecte.allow_user_settings=false --o:duden.enabled=false --o:duden.allow_user_settings=false --o:num_prespawn_children=1 --o:fetch_update_check=0 --o:allow_update_popup=false
+        --o:ssl.enable=false --o:ssl.termination=true --o:welcome.enable=false --o:net.lok_allow.host[6]=openclouds.aichorage.de --o:net.lok_allow.host[7]=openclouds.aichorage.de:443 --o:ai.enabled=true --o:ai.allow_user_settings=true --o:zotero.enable=false --o:per_document.max_concurrency=2 --o:per_document.idle_timeout_secs=1800 --o:languagetool.enabled=false --o:languagetool.allow_user_settings=false --o:deepl.enabled=false --o:grammalecte.enabled=false --o:grammalecte.allow_user_settings=false --o:duden.enabled=false --o:duden.allow_user_settings=false --o:num_prespawn_children=1 --o:fetch_update_check=0 --o:allow_update_popup=false
     networks:
       platform_edge:
         aliases: [collabora]

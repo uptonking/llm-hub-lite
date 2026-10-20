@@ -23,6 +23,8 @@ shared-secrets.env
 restic-*.env
 restic-password
 beszel-enrollment.env
+# Root-only allowlist of clients that may reach the Leader's HTTPS port directly.
+edge-ingress-sources.env
 
 .husky/_
 .aichor/

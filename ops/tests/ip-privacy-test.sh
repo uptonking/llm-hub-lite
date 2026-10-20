@@ -9,6 +9,7 @@ git -C "$repo_root" check-ignore --no-index -q node.env
 git -C "$repo_root" check-ignore --no-index -q shared-secrets.env
 git -C "$repo_root" check-ignore --no-index -q restic-r2.env
 git -C "$repo_root" check-ignore --no-index -q beszel-enrollment.env
+git -C "$repo_root" check-ignore --no-index -q edge-ingress-sources.env
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -72,5 +73,46 @@ if ((privacy_status == 0)); then
 	exit 1
 fi
 [[ "$(printf '%s\n' "$privacy_output" | grep -c 'globally routable IPv4 literal')" -eq 1 ]]
+
+# The rejected leak fixture must leave the index before the reviewed-table cases.
+git -C "$tmp" rm --cached -q leak.env
+rm -f "$tmp/leak.env"
+
+# The reviewed Cloudflare table is also allowed in the cluster policy, because it
+# is the packet filter's copy of the same shared proxy infrastructure.
+mkdir -p "$tmp/config/cluster"
+policy_networks="${cloudflare_networks// /,}"
+printf 'EDGE_INGRESS_CLOUDFLARE_RANGES=%s\n' "$policy_networks" >"$tmp/config/cluster/policy.env"
+printf 'trusted_proxies static %s\n' "$cloudflare_networks" >"$tmp/config/Caddyfile"
+git -C "$tmp" add config/Caddyfile config/cluster/policy.env
+bash "$tmp/ops/check-ip-privacy.sh" --cached >/dev/null
+
+# Drift between the two copies is a failure even when both agree internally.
+printf 'trusted_proxies static %s\n' "$(printf '%s.%s.%s.%s/13' 104 16 0 0)" >"$tmp/config/Caddyfile"
+git -C "$tmp" add config/Caddyfile
+set +e
+bash "$tmp/ops/check-ip-privacy.sh" --cached >/dev/null 2>&1
+privacy_status=$?
+set -e
+if ((privacy_status == 0)); then
+	printf 'IP privacy checker accepted a Caddy/policy Cloudflare list mismatch\n' >&2
+	exit 1
+fi
+printf 'trusted_proxies static %s\n' "$cloudflare_networks" >"$tmp/config/Caddyfile"
+git -C "$tmp" add config/Caddyfile
+
+# An unreviewed public address is still rejected inside the cluster policy.
+printf 'EDGE_INGRESS_CLOUDFLARE_RANGES=%s,%s/32\n' "$policy_networks" "$(printf '%s.%s.%s.%s' 9 9 9 9)" >"$tmp/config/cluster/policy.env"
+git -C "$tmp" add config/cluster/policy.env
+set +e
+bash "$tmp/ops/check-ip-privacy.sh" --cached >/dev/null 2>&1
+privacy_status=$?
+set -e
+if ((privacy_status == 0)); then
+	printf 'IP privacy checker accepted an unreviewed public address in the cluster policy\n' >&2
+	exit 1
+fi
+git -C "$tmp" rm --cached -q config/cluster/policy.env config/Caddyfile
+rm -f "$tmp/config/cluster/policy.env" "$tmp/config/Caddyfile"
 
 printf 'IP privacy tests passed\n'
