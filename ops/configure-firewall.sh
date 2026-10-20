@@ -357,12 +357,17 @@ reconcile_app_egress_profiles() {
 		done < <(docker ps --filter "label=com.docker.compose.project=$project" --format '{{.Names}}' 2>/dev/null | sed -n '1,4p' || true)
 	done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null || true)
 	while iptables -C DOCKER-USER -j "$EGRESS_CHAIN" 2>/dev/null; do iptables -D DOCKER-USER -j "$EGRESS_CHAIN"; done
+	while iptables -C INPUT -j "$EGRESS_CHAIN" 2>/dev/null; do iptables -D INPUT -j "$EGRESS_CHAIN"; done
 	if [[ "$applied" -eq 0 ]]; then
 		iptables -F "$EGRESS_CHAIN" 2>/dev/null || true
 		iptables -X "$EGRESS_CHAIN" 2>/dev/null || true
 		return 0
 	fi
 	iptables -I DOCKER-USER 1 -j "$EGRESS_CHAIN"
+	# Destinations that belong to this node itself are delivered locally and never
+	# traverse FORWARD, so the same chain has to be consulted from INPUT too.
+	# Only the guarded containers' own addresses match, so nothing else is affected.
+	iptables -I INPUT 1 -j "$EGRESS_CHAIN"
 	printf 'application egress profiles applied to %s container address(es)\n' "$applied"
 }
 # The role split below returns early for the Leader, so role-independent

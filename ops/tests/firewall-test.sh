@@ -265,6 +265,8 @@ grep -Fqx 'iptables -A LLM_HUB_LITE_EGRESS -s 172.20.0.5 -d 172.16.0.0/12 -j REJ
 grep -Fqx 'iptables -A LLM_HUB_LITE_EGRESS -s 172.20.0.5 -d 192.168.0.0/16 -j REJECT' "$FIREWALL_LOG"
 grep -Fqx 'iptables -A LLM_HUB_LITE_EGRESS -s 172.20.0.5 -j RETURN' "$FIREWALL_LOG"
 grep -Fqx 'iptables -I DOCKER-USER 1 -j LLM_HUB_LITE_EGRESS' "$FIREWALL_LOG"
+# Locally delivered destinations bypass FORWARD, so INPUT must consult the chain.
+grep -Fqx 'iptables -I INPUT 1 -j LLM_HUB_LITE_EGRESS' "$FIREWALL_LOG"
 if grep -Fq '999.1.1.1' "$FIREWALL_LOG"; then
 	fail_firewall 'egress profile accepted an invalid allow entry'
 fi
@@ -279,7 +281,8 @@ unset FIREWALL_DOCKER_CONTAINERS FIREWALL_DOCKER_ADDRESS
 run_firewall >/dev/null
 grep -Fqx 'iptables -F LLM_HUB_LITE_EGRESS' "$FIREWALL_LOG"
 grep -Fqx 'iptables -X LLM_HUB_LITE_EGRESS' "$FIREWALL_LOG"
-if grep -Fqx 'iptables -I DOCKER-USER 1 -j LLM_HUB_LITE_EGRESS' "$FIREWALL_LOG"; then
+if grep -Fqx 'iptables -I DOCKER-USER 1 -j LLM_HUB_LITE_EGRESS' "$FIREWALL_LOG" ||
+	grep -Fqx 'iptables -I INPUT 1 -j LLM_HUB_LITE_EGRESS' "$FIREWALL_LOG"; then
 	fail_firewall 'egress chain stayed reachable with no profile declared'
 fi
 
