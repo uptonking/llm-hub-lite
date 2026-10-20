@@ -203,7 +203,7 @@ EDGE_INGRESS_DIRECT_SOURCES=198.51.100.30,203.0.113.40,$unreviewed_ip/33,not-an-
 EOF
 cat >"$tmp/cluster-edge.env" <<EOF
 LEADER_NODE_ID=leader
-EDGE_INGRESS_CLOUDFLARE_RANGES=$cf_range_one,$cf_range_two
+EDGE_INGRESS_CLOUDFLARE_RANGES=$cf_range_one,$cf_range_two,2400:cb00::/32,2c0f:f248::/32
 EOF
 cat >"$tmp/config/node.leader.edge" <<'EOF'
 NODE_ID=leader
@@ -218,6 +218,10 @@ EDGE_INGRESS_SOURCES_FILE="$tmp/edge-ingress-sources.env" FIREWALL_UFW_STATUS="$
 	DEPLOY_CONFIG_FILE="$tmp/platform.edge.env" bash "$repo_root/ops/configure-firewall.sh" >/dev/null
 # Docker bypasses ufw's INPUT rules by DNAT, so the same allowlist has to be
 # present in DOCKER-USER.
+# IPv6 sources belong in the UFW policy only; the IPv4 chain must not receive them.
+if grep -Fq 'iptables -A LLM_HUB_LITE_DOCKER' "$FIREWALL_LOG" && grep -Fq '2400:cb00::/32' "$FIREWALL_LOG"; then
+	fail_firewall 'the IPv4 published-port chain received an IPv6 allowlist entry'
+fi
 grep -Fqx "iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s $cf_range_one -p tcp --dport 443 -j RETURN" "$FIREWALL_LOG"
 grep -Fqx "iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s $cf_range_one -p udp --dport 443 -j RETURN" "$FIREWALL_LOG"
 grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp --dport 80 -j RETURN' "$FIREWALL_LOG"

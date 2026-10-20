@@ -310,8 +310,13 @@ reconcile_leader_docker_ingress() {
 	iptables -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 	# ACME http-01 renewals need a publicly reachable port 80.
 	iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p tcp --dport 80 -j RETURN
+	# This chain is IPv4 only: Docker publishes Caddy by an IPv4 DNAT and the
+	# platform serves no AAAA records, so IPv6 entries stay in the UFW policy and
+	# are skipped here rather than handed to iptables, which would abort the build
+	# and leave DOCKER-USER detached.
 	while IFS= read -r source; do
 		[[ -n "$source" ]] || continue
+		valid_ipv4 "${source%%/*}" || continue
 		iptables -A "$chain" -i "$PUBLIC_INTERFACE" -s "$source" -p tcp --dport 443 -j RETURN
 		iptables -A "$chain" -i "$PUBLIC_INTERFACE" -s "$source" -p udp --dport 443 -j RETURN
 	done <<<"$LEADER_EDGE_SOURCES"
