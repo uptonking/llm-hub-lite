@@ -219,7 +219,7 @@ EDGE_INGRESS_SOURCES_FILE="$tmp/edge-ingress-sources.env" FIREWALL_UFW_STATUS="$
 # Docker bypasses ufw's INPUT rules by DNAT, so the same allowlist has to be
 # present in DOCKER-USER.
 # IPv6 sources belong in the UFW policy only; the IPv4 chain must not receive them.
-if grep -Fq 'iptables -A LLM_HUB_LITE_DOCKER' "$FIREWALL_LOG" && grep -Fq '2400:cb00::/32' "$FIREWALL_LOG"; then
+if grep -Eq '^iptables -A LLM_HUB_LITE_DOCKER.*2400:cb00::/32' "$FIREWALL_LOG"; then
 	fail_firewall 'the IPv4 published-port chain received an IPv6 allowlist entry'
 fi
 grep -Fqx "iptables -A LLM_HUB_LITE_DOCKER -i eth0 -s $cf_range_one -p tcp --dport 443 -j RETURN" "$FIREWALL_LOG"
