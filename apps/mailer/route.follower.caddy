@@ -12,7 +12,7 @@
   }
 }
 
-{$MAILER_SITE_HOST}, autodiscover.{$MAILER_DOMAIN}, autoconfig.{$MAILER_DOMAIN} {
+{$MAILER_SITE_HOST} {
   # Direct public HTTPS ingress on Follower
   import common_proxy
   reverse_proxy mailer:8080 {
