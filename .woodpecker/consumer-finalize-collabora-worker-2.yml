@@ -18,7 +18,6 @@ depends_on:
   - consumer-stop-collabora-worker-3
   - consumer-stop-collabora-worker-4
   - consumer-stop-collabora-worker-5
-  - consumer-stop-collabora-worker-6
   - control-sync-worker-2
   - name: foundation-reconcile-worker-2
     optional: true

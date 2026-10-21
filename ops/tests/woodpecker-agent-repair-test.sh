@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091,SC2034
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -144,4 +145,77 @@ project_enabled() { return 0; }
 foundation_compose() { compose_command=("$tmp/bin/compose"); }
 recreate_project woodpecker-worker
 [[ ! -e "$tmp/agent/agent.conf" ]]
+
+# Verify verify_cluster_agents in deploy-controller.sh
+mkdir -p "$tmp/cluster_test/config/cluster/nodes" "$tmp/cluster_test/data"
+cat >"$tmp/cluster_test/config/cluster/policy.env" <<EOF
+LEADER_NODE_ID=leader
+NODE_IDS=leader,worker-1
+EOF
+cat >"$tmp/cluster_test/config/cluster/nodes/worker-1.env" <<EOF
+NODE_ID=worker-1
+NODE_STATE=active
+EOF
+sqlite3 "$tmp/cluster_test/data/woodpecker.sqlite" <<'EOF'
+create table agents (id integer primary key, name text, last_contact integer, custom_labels text);
+insert into agents values (1, 'worker-1', unixepoch('now') - 10, '{"node":"worker-1"}');
+insert into agents values (2, 'worker-ghost', unixepoch('now') - 3600, '{"node":"worker-ghost"}');
+EOF
+
+cat >"$tmp/cluster_test/node.env" <<EOF
+NODE_ID=leader
+EOF
+cat >"$tmp/cluster_test/platform.env" <<EOF
+REPO_URL=https://github.com/uptonking/llm-hub-lite
+PLATFORM_ROOT=$tmp/cluster_test
+CONTROL_ROOT=$tmp/cluster_test
+APP_ROOT=$tmp/cluster_test
+PLATFORM_LOCK_FILE=$tmp/cluster_test/platform.lock
+CONTROL_SYNC_STATE_FILE=$tmp/cluster_test/control-sync.state
+EOF
+
+(
+	REPO_ROOT="$repo_root" \
+		TARGET_DIR="$tmp/cluster_test" \
+		DEPLOY_CONFIG_FILE="$tmp/cluster_test/platform.env" \
+		CONFIG_ROOT="$tmp/cluster_test" \
+		NODE_CONFIG_FILE="$tmp/cluster_test/node.env" \
+		CONTROL_SYNC_STATE_FILE="$tmp/cluster_test/control-sync.state" \
+		PLATFORM_LOCK_FILE="$tmp/cluster_test/platform.lock" \
+		PLATFORM_ROOT="$tmp/cluster_test" \
+		WOODPECKER_DATA_ROOT="$tmp/cluster_test/data" \
+		PLATFORM_TEST_MODE=1 \
+		DEPLOY_VERIFY_AGENTS_TEST=1 \
+		DEPLOY_AGENT_WAIT_TIMEOUT=1 \
+		bash -c '
+		source "$REPO_ROOT/ops/deploy-controller.sh"
+		verify_cluster_agents "$TARGET_DIR" "sha" "old_sha"
+	'
+)
+[[ "$(sqlite3 "$tmp/cluster_test/data/woodpecker.sqlite" 'SELECT count(*) FROM agents WHERE id = 2;')" -eq 0 ]]
+[[ "$(sqlite3 "$tmp/cluster_test/data/woodpecker.sqlite" 'SELECT count(*) FROM agents WHERE id = 1;')" -eq 1 ]]
+
+sqlite3 "$tmp/cluster_test/data/woodpecker.sqlite" "UPDATE agents SET last_contact = unixepoch('now') - 3600 WHERE id = 1;"
+if (
+	REPO_ROOT="$repo_root" \
+		TARGET_DIR="$tmp/cluster_test" \
+		DEPLOY_CONFIG_FILE="$tmp/cluster_test/platform.env" \
+		CONFIG_ROOT="$tmp/cluster_test" \
+		NODE_CONFIG_FILE="$tmp/cluster_test/node.env" \
+		CONTROL_SYNC_STATE_FILE="$tmp/cluster_test/control-sync.state" \
+		PLATFORM_LOCK_FILE="$tmp/cluster_test/platform.lock" \
+		PLATFORM_ROOT="$tmp/cluster_test" \
+		WOODPECKER_DATA_ROOT="$tmp/cluster_test/data" \
+		PLATFORM_TEST_MODE=1 \
+		DEPLOY_VERIFY_AGENTS_TEST=1 \
+		DEPLOY_AGENT_WAIT_TIMEOUT=1 \
+		bash -c '
+		source "$REPO_ROOT/ops/deploy-controller.sh"
+		verify_cluster_agents "$TARGET_DIR" "sha" "old_sha"
+	' 2>/dev/null
+); then
+	printf 'verify_cluster_agents should have failed for offline follower node\n' >&2
+	exit 1
+fi
+
 printf 'Woodpecker agent repair tests passed\n'

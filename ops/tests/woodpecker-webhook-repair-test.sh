@@ -14,17 +14,34 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/llm-hub-lite-webhook.XXXXXX")"
 trap 'rm -rf -- "$tmp"' EXIT
 mkdir -p "$tmp/control/current/config/cluster" "$tmp/foundation/env" "$tmp/data" "$tmp/bin"
 printf 'NODE_ID=leader\n' >"$tmp/node.env"
-printf 'LEADER_NODE_ID=leader\n' >"$tmp/control/current/config/cluster/policy.env"
+printf 'LEADER_NODE_ID=leader\nNODE_IDS=leader,worker-1\n' >"$tmp/control/current/config/cluster/policy.env"
 printf 'PLATFORM_ROOT=%s\n' "$tmp" >"$tmp/platform.env"
 printf 'WOODPECKER_HOST=https://ci.example.test\nWOODPECKER_DATA_ROOT=%s\n' "$tmp/data" >"$tmp/foundation/env/woodpecker.env"
-sqlite3 "$tmp/data/woodpecker.sqlite" 'create table users (id integer, hash text, admin integer); insert into users values (1, "test-admin-hash", 1);'
+sqlite3 "$tmp/data/woodpecker.sqlite" <<'EOF'
+create table users (id integer, hash text, admin integer);
+insert into users values (1, 'test-admin-hash', 1);
+create table agents (id integer, name text, last_contact integer, custom_labels text);
+insert into agents values (1, 'active', unixepoch('now') - 10, '{"node":"worker-1"}');
+insert into agents values (2, 'ghost', unixepoch('now') - 3600, '{"node":"worker-ghost"}');
+create table pipelines (id integer, number integer, repo_id integer, status text, created integer);
+insert into pipelines values (1, 5, 1, 'running', unixepoch('now') - 600);
+create table workflows (id integer, pipeline_id integer, name text, state text, agent_id integer);
+insert into workflows values (1, 1, 'control-sync-worker-ghost', 'pending', 0);
+EOF
 cat >"$tmp/bin/curl" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$*" >"${CURL_ARGS_FILE:?}"
+printf '%s\n' "$*" >>"${CURL_ARGS_FILE:?}"
 printf '204\n'
 EOF
 chmod 700 "$tmp/bin/curl"
 CURL_ARGS_FILE="$tmp/curl.args" PATH="$tmp/bin:$PATH" CONFIG_ROOT="$tmp" PLATFORM_ENV="$tmp/platform.env" NODE_CONFIG_FILE="$tmp/node.env" CLUSTER_POLICY_FILE="$tmp/control/current/config/cluster/policy.env" WOODPECKER_ENV="$tmp/foundation/env/woodpecker.env" "$repair" >/dev/null
+
 grep -Fq 'api/repos/repair' "$tmp/curl.args"
+grep -Fq 'api/repos/1/pipelines/5/cancel' "$tmp/curl.args"
 grep -Eq 'Authorization: Bearer [^ ]+\.[^ ]+\.[^ ]+' "$tmp/curl.args"
+
+# Verify ghost agent was pruned but active agent was retained
+[[ "$(sqlite3 "$tmp/data/woodpecker.sqlite" 'SELECT count(*) FROM agents WHERE id = 2;')" -eq 0 ]]
+[[ "$(sqlite3 "$tmp/data/woodpecker.sqlite" 'SELECT count(*) FROM agents WHERE id = 1;')" -eq 1 ]]
+
 printf 'Woodpecker webhook repair tests passed\n'

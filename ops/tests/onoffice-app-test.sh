@@ -74,7 +74,7 @@ grep -Fq 'health_uri /healthcheck' "$app/route.leader.caddy"
 grep -Fq 'reverse_proxy {$ONOFFICE_UPSTREAM}' "$app/route.leader.caddy"
 
 # Verify origin hosts across all cluster nodes
-for node in leader worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do
 	prefix="${node/-/}"
 	grep -q "^NODE_ONOFFICE_ORIGIN_HOST=${prefix}-onoffice-origin.aichorage.de$" \
 		"$repo_root/config/cluster/nodes/$node.env"
@@ -90,8 +90,7 @@ for workflow in \
 	consumer-stop-onoffice-worker-2.yml \
 	consumer-stop-onoffice-worker-3.yml \
 	consumer-stop-onoffice-worker-4.yml \
-	consumer-stop-onoffice-worker-5.yml \
-	consumer-stop-onoffice-worker-6.yml; do
+	consumer-stop-onoffice-worker-5.yml; do
 	[[ -f "$repo_root/.woodpecker/$workflow" ]]
 done
 

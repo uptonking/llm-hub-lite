@@ -199,7 +199,7 @@ if grep -Fq 'push-audit' "$base/workflows/control-sync-leader.yml"; then
 	printf 'Leader control-sync must not depend on informational push-audit\n' >&2
 	exit 1
 fi
-for node in worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
+for node in worker-1 worker-2 worker-3 worker-4 worker-5; do
 	grep -Fq $'depends_on:\n  - control-sync-leader' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'deploy-controller.sh control-verify' "$base/workflows/control-sync-$node.yml"
 	grep -Fq 'grep -q "control-verify)" /opt/platform/control/current/ops/deploy-controller.sh' "$base/workflows/control-sync-$node.yml"

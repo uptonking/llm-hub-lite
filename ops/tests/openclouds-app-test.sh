@@ -55,7 +55,7 @@ grep -Fq 'health_uri /status.php' "$app/route.leader.caddy"
 grep -Fq 'reverse_proxy {$OPENCLOUDS_UPSTREAM}' "$app/route.leader.caddy"
 
 # Verify origin hosts across all cluster nodes
-for node in leader worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do
 	prefix="${node/-/}"
 	grep -q "^NODE_OPENCLOUDS_ORIGIN_HOST=${prefix}-openclouds-origin.aichorage.de$" \
 		"$repo_root/config/cluster/nodes/$node.env"
@@ -70,8 +70,7 @@ for workflow in \
 	consumer-stop-openclouds-worker-1.yml \
 	consumer-stop-openclouds-worker-3.yml \
 	consumer-stop-openclouds-worker-4.yml \
-	consumer-stop-openclouds-worker-5.yml \
-	consumer-stop-openclouds-worker-6.yml; do
+	consumer-stop-openclouds-worker-5.yml; do
 	[[ -f "$repo_root/.woodpecker/$workflow" ]]
 done
 

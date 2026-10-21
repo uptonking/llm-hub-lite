@@ -17,8 +17,7 @@ make_fixture() {
 	rm -f "$fixture/config/cluster/nodes/worker-3.env"
 	rm -f "$fixture/config/cluster/nodes/worker-4.env"
 	rm -f "$fixture/config/cluster/nodes/worker-5.env"
-	rm -f "$fixture/config/cluster/nodes/worker-6.env"
-	sed 's/,worker-3,worker-4,worker-5,worker-6$//' "$fixture/config/cluster/policy.env" >"$fixture/config/cluster/policy.env.tmp"
+	sed 's/,worker-3,worker-4,worker-5$//' "$fixture/config/cluster/policy.env" >"$fixture/config/cluster/policy.env.tmp"
 	mv "$fixture/config/cluster/policy.env.tmp" "$fixture/config/cluster/policy.env"
 	# The lifecycle fixture promotes a previously unknown node from joining;
 	# keep the committed worker-3 Flowy placement out of this reduced inventory.
@@ -28,8 +27,6 @@ make_fixture() {
 	mv "$fixture/config/cluster/apps/verge3.policy.tmp" "$fixture/config/cluster/apps/verge3.policy"
 	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/verge5.policy" >"$fixture/config/cluster/apps/verge5.policy.tmp"
 	mv "$fixture/config/cluster/apps/verge5.policy.tmp" "$fixture/config/cluster/apps/verge5.policy"
-	sed 's/^ENABLED=true$/ENABLED=false/' "$fixture/config/cluster/apps/verge6.policy" >"$fixture/config/cluster/apps/verge6.policy.tmp"
-	mv "$fixture/config/cluster/apps/verge6.policy.tmp" "$fixture/config/cluster/apps/verge6.policy"
 	# This reduced inventory has no worker-5, so the Ladocs consumer singleton is
 	# re-pointed like Wabase instead of its production placement.
 	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/ladocs.policy" >"$fixture/config/cluster/apps/ladocs.policy.tmp"

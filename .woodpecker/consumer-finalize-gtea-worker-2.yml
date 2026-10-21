@@ -18,7 +18,6 @@ depends_on:
   - consumer-stop-gtea-worker-3
   - consumer-stop-gtea-worker-4
   - consumer-stop-gtea-worker-5
-  - consumer-stop-gtea-worker-6
   - control-sync-worker-2
   - name: foundation-reconcile-worker-2
     optional: true

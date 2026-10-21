@@ -18,7 +18,6 @@ depends_on:
   - consumer-stop-onoffice-worker-3
   - consumer-stop-onoffice-worker-4
   - consumer-stop-onoffice-worker-5
-  - consumer-stop-onoffice-worker-6
   - control-sync-worker-1
   - name: foundation-reconcile-worker-1
     optional: true

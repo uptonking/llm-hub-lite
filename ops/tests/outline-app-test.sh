@@ -49,7 +49,7 @@ grep -Fq 'flush_interval -1' "$app/route.leader.caddy"
 grep -Fq 'reverse_proxy {$OUTLINE_UPSTREAM}' "$app/route.leader.caddy"
 
 # Verify origin hosts across all cluster nodes
-for node in leader worker-1 worker-2 worker-3 worker-4 worker-5 worker-6; do
+for node in leader worker-1 worker-2 worker-3 worker-4 worker-5; do
 	prefix="${node/-/}"
 	grep -q "^NODE_OUTLINE_ORIGIN_HOST=${prefix}-outline-origin.aichorage.de$" \
 		"$repo_root/config/cluster/nodes/$node.env"
@@ -70,8 +70,7 @@ for workflow in \
 	consumer-stop-outline-worker-1.yml \
 	consumer-stop-outline-worker-2.yml \
 	consumer-stop-outline-worker-3.yml \
-	consumer-stop-outline-worker-5.yml \
-	consumer-stop-outline-worker-6.yml; do
+	consumer-stop-outline-worker-5.yml; do
 	[[ -f "$repo_root/.woodpecker/$workflow" ]]
 done
 

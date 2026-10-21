@@ -18,7 +18,6 @@ depends_on:
   - consumer-stop-wabase-worker-2
   - consumer-stop-wabase-worker-3
   - consumer-stop-wabase-worker-5
-  - consumer-stop-wabase-worker-6
   - control-sync-worker-4
   - name: foundation-reconcile-worker-4
     optional: true

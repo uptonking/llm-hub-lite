@@ -73,3 +73,42 @@ case "$status" in
 	exit 1
 	;;
 esac
+
+# Prune ghost agents for nodes that are no longer in NODE_IDS
+if [[ -f "$POLICY_FILE" ]]; then
+	node_ids="$(env_value NODE_IDS "$POLICY_FILE")"
+	if [[ -n "$node_ids" ]]; then
+		while IFS='|' read -r a_id a_node a_contact; do
+			[[ -n "$a_id" && -n "$a_node" ]] || continue
+			if [[ ",${node_ids//[[:space:]]/}," != *",$a_node,"* ]]; then
+				if [[ -z "$a_contact" || "$a_contact" -gt 180 ]]; then
+					printf 'woodpecker-repair: removing retired agent id=%s node=%s (offline %ss)\n' "$a_id" "$a_node" "${a_contact:-unknown}"
+					sqlite3 "$db" "DELETE FROM agents WHERE id = $a_id;" || true
+				fi
+			fi
+		done < <(sqlite3 -separator '|' "$db" "SELECT id, json_extract(custom_labels, '$.node'), unixepoch('now') - max(last_contact) FROM agents GROUP BY id;" 2>/dev/null || true)
+	fi
+fi
+
+# Cancel running pipelines with workflows stuck on offline or missing agents
+while IFS='|' read -r p_num p_repo wf_name; do
+	[[ -n "$p_num" && "$p_num" =~ ^[0-9]+$ ]] || continue
+	p_repo="${p_repo:-1}"
+	printf 'woodpecker-repair: cancelling pipeline=%s step=%s stuck on offline agent\n' "$p_num" "$wf_name"
+	curl -fsS -X POST -H "Authorization: Bearer $token" \
+		"$woodpecker_host/api/repos/${p_repo}/pipelines/${p_num}/cancel" >/dev/null 2>&1 || true
+done < <(sqlite3 -separator '|' "$db" "
+	SELECT p.number, p.repo_id, w.name
+	FROM workflows w
+	JOIN pipelines p ON p.id = w.pipeline_id
+	WHERE w.state = 'pending'
+	  AND p.status IN ('running', 'pending')
+	  AND (unixepoch('now') - p.created) > 180
+	  AND (
+	    w.agent_id = 0
+	    OR w.agent_id IN (
+	      SELECT id FROM agents WHERE (unixepoch('now') - last_contact) > 180
+	    )
+	  )
+	GROUP BY p.number;
+" 2>/dev/null || true)

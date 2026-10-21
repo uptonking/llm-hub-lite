@@ -228,6 +228,58 @@ write_control_sync_state() {
 	mv -f -- "$tmp" "$CONTROL_SYNC_STATE_FILE"
 }
 
+verify_cluster_agents() {
+	local release="$1" sha="$2" old_sha="$3"
+	local policy="$release/config/cluster/policy.env"
+	local node_ids node leader db delta max_delta="${DEPLOY_AGENT_CONTACT_MAX_AGE:-180}"
+	local wait_seconds="${DEPLOY_AGENT_WAIT_TIMEOUT:-30}" elapsed=0
+	[[ "${PLATFORM_TEST_MODE:-0}" != 1 || "${DEPLOY_VERIFY_AGENTS_TEST:-0}" == 1 ]] || return 0
+	[[ -f "$policy" ]] || return 0
+	leader="$(env_value LEADER_NODE_ID "$policy")"
+	[[ -n "$leader" && "$(node_value NODE_ID)" == "$leader" ]] || return 0
+	db="${WOODPECKER_DATA_ROOT:-$PLATFORM_ROOT/woodpecker/data}/woodpecker.sqlite"
+	[[ -f "$db" ]] || return 0
+	command -v sqlite3 >/dev/null 2>&1 || return 0
+
+	node_ids="$(env_value NODE_IDS "$policy")"
+	[[ -n "$node_ids" ]] || return 0
+
+	# Clean up any ghost agents in the DB whose node is no longer in NODE_IDS
+	while IFS='|' read -r ghost_id ghost_node ghost_contact; do
+		[[ -n "$ghost_id" && -n "$ghost_node" ]] || continue
+		if ! csv_contains "$node_ids" "$ghost_node"; then
+			if [[ -z "$ghost_contact" || "$ghost_contact" -gt "$max_delta" ]]; then
+				log "pruning ghost Woodpecker agent: id=$ghost_id node=$ghost_node"
+				sqlite3 "$db" "DELETE FROM agents WHERE id = $ghost_id;" || true
+			fi
+		fi
+	done < <(sqlite3 -separator '|' "$db" "SELECT id, json_extract(custom_labels, '$.node'), unixepoch('now') - max(last_contact) FROM agents GROUP BY id;" 2>/dev/null || true)
+
+	IFS=',' read -r -a nodes <<<"$node_ids"
+	for node in "${nodes[@]}"; do
+		[[ "$node" != "$leader" ]] || continue
+		local node_env="$release/config/cluster/nodes/$node.env"
+		if [[ -f "$node_env" && "$(env_value NODE_STATE "$node_env")" != "active" ]]; then
+			continue
+		fi
+		elapsed=0
+		while :; do
+			delta="$(sqlite3 "$db" "SELECT unixepoch('now') - max(last_contact) FROM agents WHERE json_extract(custom_labels, '$.node') = '$node';" 2>/dev/null || true)"
+			if [[ -n "$delta" && "$delta" =~ ^[0-9]+$ && "$delta" -le "$max_delta" ]]; then
+				break
+			fi
+			if [[ "$elapsed" -ge "$wait_seconds" ]]; then
+				log "follower agent check failed: node=$node delta=${delta:-missing}s limit=${max_delta}s"
+				write_control_sync_state failed "$sha" "$old_sha" "node $node is unreachable (no Woodpecker agent contact for ${delta:-unknown}s)" || true
+				die "node $node is unreachable (no Woodpecker agent contact for ${delta:-unknown}s); remove node from NODE_IDS or restore agent"
+			fi
+			sleep 5
+			elapsed=$((elapsed + 5))
+		done
+		debug_log "verified follower agent: node=$node contact=${delta}s ago"
+	done
+}
+
 apply_control_sync() {
 	local sha="$1" release old_current old_sha='' stage
 	CONTROL_SYNC_ACTIVE=1
@@ -289,6 +341,7 @@ apply_control_sync() {
 			write_control_sync_state failed "$sha" "$old_sha" 'candidate validation failed'
 			die 'candidate control release validation failed'
 		fi
+		verify_cluster_agents "$release" "$sha" "$old_sha"
 	fi
 	stage="$(mktemp -d "$CONTROL_ROOT/.control-sync.XXXXXX")"
 	if ! sync_node_config "$release" "$stage/node.env"; then
@@ -1347,57 +1400,59 @@ retire_node_release() {
 	log "node retirement release installed: node=$node sha=$sha; deferred shutdown may proceed"
 }
 
-case "${1:-}" in
-deploy)
-	[[ $# -eq 2 ]] || die 'usage: deploy <sha>'
-	apply "$2" app
-	;;
-consumer-stage)
-	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-stage <sha>'
-	apply "$2" consumer-stage
-	;;
-consumer-publish)
-	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-publish <sha>'
-	apply "$2" consumer-publish
-	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" SINGLETON_ORIGIN_PRECHECKED=1 PLATFORM_DEPLOYMENT_VALIDATED=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-publish "$CONSUMER_APP_ID"
-	;;
-direct-publish)
-	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: DIRECT_APP_ID=<id> deploy-controller direct-publish <sha>'
-	apply "$2" direct-publish
-	[[ "$(env_value ENABLED "$CONTROL_ROOT/current/config/cluster/apps/$CONSUMER_APP_ID.policy")" == true ]] || die "direct publication is disabled by policy: $CONSUMER_APP_ID"
-	[[ "$(env_value INGRESS_MODE "$CONTROL_ROOT/current/apps/$CONSUMER_APP_ID/manifest.env")" == direct ]] || die "application is not a direct service: $CONSUMER_APP_ID"
-	PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" direct-smoke "$CONSUMER_APP_ID"
-	;;
-consumer-stop)
-	[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-stop <sha>'
-	apply "$2" consumer-stop
-	SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_DEPLOYMENT_VALIDATED=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-stop "$CONSUMER_APP_ID"
-	;;
-foundation-upgrade)
-	[[ $# -eq 2 ]] || die 'usage: deploy-controller foundation-upgrade <sha>'
-	apply "$2" foundation
-	;;
-cluster-reconcile)
-	[[ $# -eq 2 ]] || die 'usage: deploy-controller cluster-reconcile <sha>'
-	apply "$2" cluster-reconcile
-	;;
-app-upgrade)
-	[[ $# -eq 2 ]] || die 'usage: deploy-controller app-upgrade <sha>'
-	apply "$2" app-upgrade
-	;;
-node-retire)
-	[[ $# -eq 2 ]] || die 'usage: deploy-controller node-retire <sha>'
-	retire_node_release "$2"
-	;;
-control-sync)
-	[[ $# -eq 2 ]] || die 'usage: deploy-controller control-sync <sha>'
-	apply_control_sync "$2"
-	;;
-control-verify)
-	[[ $# -eq 2 ]] || die 'usage: deploy-controller control-verify <sha>'
-	apply_control_verify "$2"
-	;;
-rollback) rollback "${2:-previous}" ;;
-status) printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\ncontrol_sync_state=%s\n' "$(readlink "$CURRENT" 2>/dev/null || true)" "$(readlink "$PREVIOUS" 2>/dev/null || true)" "$(readlink "$APP_CURRENT" 2>/dev/null || true)" "$(readlink "$APP_PREVIOUS" 2>/dev/null || true)" "$(tr '\n' ' ' <"$CONTROL_SYNC_STATE_FILE" 2>/dev/null | cut -c1-240)" ;;
-*) die 'usage: deploy-controller {deploy|control-sync|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback|status} <sha>' ;;
-esac
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	case "${1:-}" in
+	deploy)
+		[[ $# -eq 2 ]] || die 'usage: deploy <sha>'
+		apply "$2" app
+		;;
+	consumer-stage)
+		[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-stage <sha>'
+		apply "$2" consumer-stage
+		;;
+	consumer-publish)
+		[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-publish <sha>'
+		apply "$2" consumer-publish
+		SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" SINGLETON_ORIGIN_PRECHECKED=1 PLATFORM_DEPLOYMENT_VALIDATED=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-publish "$CONSUMER_APP_ID"
+		;;
+	direct-publish)
+		[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: DIRECT_APP_ID=<id> deploy-controller direct-publish <sha>'
+		apply "$2" direct-publish
+		[[ "$(env_value ENABLED "$CONTROL_ROOT/current/config/cluster/apps/$CONSUMER_APP_ID.policy")" == true ]] || die "direct publication is disabled by policy: $CONSUMER_APP_ID"
+		[[ "$(env_value INGRESS_MODE "$CONTROL_ROOT/current/apps/$CONSUMER_APP_ID/manifest.env")" == direct ]] || die "application is not a direct service: $CONSUMER_APP_ID"
+		PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" direct-smoke "$CONSUMER_APP_ID"
+		;;
+	consumer-stop)
+		[[ $# -eq 2 && -n "${CONSUMER_APP_ID:-}" ]] || die 'usage: CONSUMER_APP_ID=<id> deploy-controller consumer-stop <sha>'
+		apply "$2" consumer-stop
+		SINGLETON_RELEASE_SHA="$2" SINGLETON_STATE_ROOT="$SINGLETON_STATE_ROOT" PLATFORM_DEPLOYMENT_VALIDATED=1 PLATFORM_LOCK_HELD=1 "$PLATFORMCTL_SCRIPT" consumer-stop "$CONSUMER_APP_ID"
+		;;
+	foundation-upgrade)
+		[[ $# -eq 2 ]] || die 'usage: deploy-controller foundation-upgrade <sha>'
+		apply "$2" foundation
+		;;
+	cluster-reconcile)
+		[[ $# -eq 2 ]] || die 'usage: deploy-controller cluster-reconcile <sha>'
+		apply "$2" cluster-reconcile
+		;;
+	app-upgrade)
+		[[ $# -eq 2 ]] || die 'usage: deploy-controller app-upgrade <sha>'
+		apply "$2" app-upgrade
+		;;
+	node-retire)
+		[[ $# -eq 2 ]] || die 'usage: deploy-controller node-retire <sha>'
+		retire_node_release "$2"
+		;;
+	control-sync)
+		[[ $# -eq 2 ]] || die 'usage: deploy-controller control-sync <sha>'
+		apply_control_sync "$2"
+		;;
+	control-verify)
+		[[ $# -eq 2 ]] || die 'usage: deploy-controller control-verify <sha>'
+		apply_control_verify "$2"
+		;;
+	rollback) rollback "${2:-previous}" ;;
+	status) printf 'control_current=%s\ncontrol_previous=%s\nservice_current=%s\nservice_previous=%s\ncontrol_sync_state=%s\n' "$(readlink "$CURRENT" 2>/dev/null || true)" "$(readlink "$PREVIOUS" 2>/dev/null || true)" "$(readlink "$APP_CURRENT" 2>/dev/null || true)" "$(readlink "$APP_PREVIOUS" 2>/dev/null || true)" "$(tr '\n' ' ' <"$CONTROL_SYNC_STATE_FILE" 2>/dev/null | cut -c1-240)" ;;
+	*) die 'usage: deploy-controller {deploy|control-sync|consumer-stage|consumer-publish|consumer-stop|foundation-upgrade|cluster-reconcile|app-upgrade|node-retire|rollback|status} <sha>' ;;
+	esac
+fi
