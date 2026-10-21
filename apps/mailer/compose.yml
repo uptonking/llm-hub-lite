@@ -14,11 +14,11 @@ services:
       com.aichorage.component: app-mailer
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     ports:
-      - "25:25"
-      - "465:465"
-      - "587:587"
-      - "993:993"
-      - "4190:4190"
+      - "25:25/tcp"
+      - "465:465/tcp"
+      - "587:587/tcp"
+      - "993:993/tcp"
+      - "4190:4190/tcp"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       MAILER_ADMIN_PASSWORD: ${MAILER_ADMIN_PASSWORD:?MAILER_ADMIN_PASSWORD must be set}

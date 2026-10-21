@@ -31,11 +31,11 @@ grep -Fq '"@type": "RocksDb"' "$app/config.json.tmpl"
 grep -Fq '"path": "/var/lib/stalwart/data"' "$app/config.json.tmpl"
 
 # Verify published ports
-grep -Fq '"25:25"' "$app/compose.yml"
-grep -Fq '"465:465"' "$app/compose.yml"
-grep -Fq '"587:587"' "$app/compose.yml"
-grep -Fq '"993:993"' "$app/compose.yml"
-grep -Fq '"4190:4190"' "$app/compose.yml"
+grep -Fq '"25:25/tcp"' "$app/compose.yml"
+grep -Fq '"465:465/tcp"' "$app/compose.yml"
+grep -Fq '"587:587/tcp"' "$app/compose.yml"
+grep -Fq '"993:993/tcp"' "$app/compose.yml"
+grep -Fq '"4190:4190/tcp"' "$app/compose.yml"
 
 # Verify Caddy reverse proxies
 grep -Fq 'reverse_proxy mailer:8080' "$app/route.follower.caddy"
