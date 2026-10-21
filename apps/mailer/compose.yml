@@ -1,0 +1,50 @@
+name: app-mailer
+services:
+  mailer:
+    image: ${MAILER_IMAGE:?MAILER_IMAGE must be digest-pinned}
+    user: "0:0"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: ${MAILER_MEMORY_LIMIT:-512m}
+    cpus: ${MAILER_CPUS:-1.0}
+    pids_limit: ${MAILER_PIDS_LIMIT:-256}
+    labels:
+      com.aichorage.platform: llm-hub-lite
+      com.aichorage.application: mailer
+      com.aichorage.component: app-mailer
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "4190:4190"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      MAILER_ADMIN_PASSWORD: ${MAILER_ADMIN_PASSWORD:?MAILER_ADMIN_PASSWORD must be set}
+      MAILER_SITE: ${MAILER_SITE:-https://mail.aichorage.de}
+      MAILER_DOMAIN: ${MAILER_DOMAIN:-aichorage.de}
+      MAILER_HOSTNAME: ${MAILER_HOSTNAME:-mail.aichorage.de}
+      MAILER_MAX_CONNECTIONS: ${MAILER_MAX_CONNECTIONS:-300}
+      MAILER_CLOUDFLARE_API_TOKEN: ${MAILER_CLOUDFLARE_API_TOKEN:-}
+    volumes:
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/mailer/data:/var/lib/stalwart/data
+      - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/mailer/config:/etc/stalwart
+      - ./config.json.tmpl:/etc/stalwart-template/config.json.tmpl:ro
+      - ./entrypoint.sh:/entrypoint.sh:ro
+    networks:
+      mailer_private:
+      platform_edge:
+        aliases: [mailer]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthz/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+networks:
+  mailer_private:
+    name: app-mailer_private
+  platform_edge:
+    name: ${PLATFORM_EDGE_NETWORK:-platform_edge}
+    external: true

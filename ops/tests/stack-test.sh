@@ -19,6 +19,11 @@ for node_file in "$repo_root"/config/cluster/nodes/*.env; do
 	grep -Fxq 'LIBRECHAT_ADMIN_SITE=http://chat-admin.localhost' "$tmp/$node/app-env/librechat.env"
 	grep -Fxq 'WABASE_SITE=http://wabase.localhost' "$tmp/$node/app-env/wabase.env"
 	grep -Fxq 'WABASE_SITE_HOST=wabase.localhost' "$tmp/$node/app-env/wabase.env"
+	grep -Fxq 'MAILER_SITE=http://mail.localhost' "$tmp/$node/app-env/mailer.env"
+	grep -Fxq 'MAILER_SITE_HOST=mail.localhost' "$tmp/$node/app-env/mailer.env"
+	if [[ "$node" == worker-3 ]]; then
+		grep -Fq 'reverse_proxy mailer:8080' "$tmp/$node/config/routes.d/mailer.caddy"
+	fi
 	if [[ "$node" == worker-4 ]]; then
 		grep -Fq 'header_up Host wabase.localhost' "$tmp/$node/config/routes.d/wabase.caddy"
 		grep -Fq 'header_up X-Forwarded-Host wabase.localhost' "$tmp/$node/config/routes.d/wabase.caddy"
@@ -29,6 +34,7 @@ grep -Fq 'header_up Host aichor.localhost:443' "$tmp/worker-2/config/routes.d/ai
 grep -Fq 'header_up X-Forwarded-Host aichor.localhost' "$tmp/worker-2/config/routes.d/aichor.caddy"
 grep -Fq 'reverse_proxy https://worker2-aichor-origin.aichorage.de' "$tmp/leader/config/routes.d/aichor.caddy"
 grep -Fq 'header_up X-Forwarded-Host aichor.localhost' "$tmp/leader/config/routes.d/aichor.caddy"
+grep -Fq 'reverse_proxy https://worker3-mail-origin.aichorage.de' "$tmp/leader/config/routes.d/mailer.caddy"
 grep -Fq 'reverse_proxy searx:8080' "$tmp/worker-2/config/routes.d/searx.caddy"
 grep -Fq 'reverse_proxy https://worker2-searx-origin.aichorage.de' "$tmp/leader/config/routes.d/searx.caddy"
 grep -Fq 'basic_auth @searx_auth_required' "$tmp/leader/config/routes.d/searx.caddy"

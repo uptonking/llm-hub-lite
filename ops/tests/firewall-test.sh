@@ -303,4 +303,17 @@ if grep -Fqx 'iptables -I DOCKER-USER 1 -j LLM_HUB_LITE_EGRESS' "$FIREWALL_LOG" 
 	fail_firewall 'egress chain stayed reachable with no profile declared'
 fi
 
+# Verify direct-and-proxy apps configure direct listeners
+cat >"$tmp/control/current/apps/verge4/manifest.env" <<'EOF'
+APP_ID=verge4
+INGRESS_MODE=direct-and-proxy
+POLICY_FILE=cluster/apps/verge4.policy
+DIRECT_LISTENERS=udp:443:443
+DIRECT_PORT_RANGES=udp:20000:30000:443
+EOF
+: >"$FIREWALL_LOG"
+run_firewall >/dev/null
+grep -Fqx 'ufw allow 443/udp comment Direct verge4' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p udp --dport 443 -j RETURN' "$FIREWALL_LOG"
+
 printf 'firewall tests passed\n'

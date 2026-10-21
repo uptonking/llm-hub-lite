@@ -1,0 +1,4 @@
+# Singleton placement is intentionally policy-driven and can be moved to any
+# active follower by changing NODES and regenerating workflows.
+ENABLED=true
+NODES=worker-3

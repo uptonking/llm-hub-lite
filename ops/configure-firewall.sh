@@ -457,7 +457,7 @@ iptables -A "$chain" -i "$PUBLIC_INTERFACE" -s "$LEADER_PUBLIC_IP" -p udp --dpor
 direct_allowlist="$(value DIRECT_PORT_ALLOWLIST "$CLUSTER_POLICY_FILE")"
 while IFS= read -r manifest; do
 	[[ -f "$manifest" ]] || continue
-	[[ "$(value INGRESS_MODE "$manifest")" == direct ]] || continue
+	case "$(value INGRESS_MODE "$manifest")" in direct | direct-and-proxy) ;; *) continue ;; esac
 	app="$(value APP_ID "$manifest")"
 	policy_rel="$(value POLICY_FILE "$manifest")"
 	[[ "$(value ENABLED "$CONTROL_ROOT/current/config/$policy_rel")" == true ]] || continue

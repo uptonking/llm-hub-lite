@@ -40,6 +40,8 @@ make_fixture() {
 	mv "$fixture/config/cluster/apps/wabase.policy.tmp" "$fixture/config/cluster/apps/wabase.policy"
 	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/outline.policy" >"$fixture/config/cluster/apps/outline.policy.tmp"
 	mv "$fixture/config/cluster/apps/outline.policy.tmp" "$fixture/config/cluster/apps/outline.policy"
+	sed 's/^NODES=.*/NODES=worker-2/' "$fixture/config/cluster/apps/mailer.policy" >"$fixture/config/cluster/apps/mailer.policy.tmp"
+	mv "$fixture/config/cluster/apps/mailer.policy.tmp" "$fixture/config/cluster/apps/mailer.policy"
 	printf '%s\n' "$fixture"
 }
 run_add() {
@@ -76,6 +78,7 @@ grep -Fxq 'NODE_WABASE_ORIGIN_HOST=worker3-wabase-origin.example.test' "$fixture
 grep -Fxq 'NODE_WAPDF_ORIGIN_HOST=worker3-wapdf-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NODE_AICHOR_ORIGIN_HOST=worker3-aichor-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NODE_SEARX_ORIGIN_HOST=worker3-searx-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
+grep -Fxq 'NODE_MAILER_ORIGIN_HOST=worker3-mail-origin.example.test' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'WOODPECKER_AGENT_LABELS=node=worker-3,deployment=true,target=production,repo=uptonking/llm-hub-lite' "$fixture/config/cluster/nodes/worker-3.env"
 grep -Fxq 'NEW_API_NODE_TYPE=slave' "$fixture/config/cluster/nodes/worker-3.env"
 # Joining nodes receive only the bootstrap/control-sync workflow. Foundation

@@ -1,0 +1,26 @@
+{$NODE_MAILER_ORIGIN_HOST} {
+  # Private Leader-to-follower origin.
+  tls internal
+  import common_proxy
+  reverse_proxy mailer:8080 {
+    flush_interval -1
+    header_up Host {$MAILER_SITE_HOST}
+    header_up X-Forwarded-Host {$MAILER_SITE_HOST}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+}
+
+{$MAILER_SITE_HOST}, autodiscover.{$MAILER_DOMAIN}, autoconfig.{$MAILER_DOMAIN} {
+  # Direct public HTTPS ingress on Follower
+  import common_proxy
+  reverse_proxy mailer:8080 {
+    flush_interval -1
+    header_up Host {host}
+    header_up X-Forwarded-Host {host}
+    header_up X-Forwarded-Proto https
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+}
