@@ -61,6 +61,7 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - Cursorapi (the default singleton target)
     - CPAMP (CPA-Manager-Plus Full Mode) singleton
     - Auther (Authelia OIDC) singleton
+    - Club (Apache Answer) singleton, SQLite-backed forum at `club.aichorage.de`
     - LibreChat (retained on worker-2 only; disabled on worker-1)
     - Aichor1 and Relaichor1 retained but disabled by policy
 - Follower worker-2:
@@ -89,7 +90,10 @@ directly to the Leader; collectors use it for HTTPS ingestion. The DNS-only
 origins using the `worker1-` prefix point to Worker 1, while the stable-ID
 `worker2-` origin records point to Worker 2. The
 `worker4-wabase-origin.<domain>` record points to Worker 4, while
-`wabase.<domain>` points to the Leader. Pigeon origin records are not
+`wabase.<domain>` points to the Leader. The `club` domain points to the Leader
+and `worker1-club-origin.<domain>` points to Worker 1; repointing Club at
+another Follower only requires that Follower's DNS-only `workerN-club-origin`
+record plus a `NODES=` policy change. Pigeon origin records are not
 required while it is disabled; create the selected Follower's DNS-only origin
 before opting it in. The `leader` stable ID is the public Leader and therefore
 does not need a private origin record for ingress.

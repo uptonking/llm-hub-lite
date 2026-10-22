@@ -205,6 +205,7 @@ case "$*" in
   *app-ladocs*) printf 'postgresql\nredis\nyhub-valkey\nminio\nladocs-backend\nyhub\ny-provider\nladocs-frontend\n';;
   *app-paperlex*) printf 'paperlex\npaperlex-redis\n';;
   *app-filer*) printf 'filer\n';;
+  *app-club*) printf 'club\n';;
   *app-openclouds*) printf 'openclouds\n';;
   *app-collabora*) printf 'collabora\n';;
   *app-onoffice*) printf 'onoffice\n';;

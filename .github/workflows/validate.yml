@@ -87,6 +87,10 @@ jobs:
       WABASE_BOOT_KEY: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
       PIGEON_SECRET_KEY: ci-pigeon-secret-key
       PIGEON_LOGIN_PASSWORD: ci-pigeon-login-password
+      MAILER_ADMIN_PASSWORD: 0123456789abcdef0123456789abcdef
+      MAILER_CLOUDFLARE_API_TOKEN: ci-cloudflare-token-value
+      CLUB_SITE: https://club.example.invalid
+      CLUB_ADMIN_PASSWORD: 0123456789abcdef0123456789abcdef
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

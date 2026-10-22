@@ -331,7 +331,7 @@ follower_summary="$(SUMMARY_FUNCTION="$summary_function" SUMMARY_HELPERS="$summa
 	print_bootstrap_summary
 ')"
 grep -Fq 'Foundation: beszel-worker, caddy, observer-collector, woodpecker-worker' <<<"$follower_summary"
-grep -Fq 'Consumers: Aichorouter, Auther (Authelia OIDC), CPAMP, CPAPI, Cursor API Proxy' <<<"$follower_summary"
+grep -Fq 'Consumers: Aichorouter, Auther (Authelia OIDC), Club (Apache Answer), CPAMP, CPAPI, Cursor API Proxy' <<<"$follower_summary"
 grep -Fq 'Aichor1 (Paseo) (disabled by policy)' <<<"$follower_summary"
 grep -Fq 'LibreChat (not on this node)' <<<"$follower_summary"
 grep -Fq 'Relaichor1 (Paseo Relay Go) (disabled by policy)' <<<"$follower_summary"

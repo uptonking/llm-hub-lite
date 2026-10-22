@@ -1,0 +1,23 @@
+{$CLUB_SITE} {
+  import common_proxy
+  reverse_proxy {$CLUB_UPSTREAM} {
+    transport http {
+      tls_insecure_skip_verify
+    }
+    flush_interval -1
+    health_uri /answer/api/v1/siteinfo
+    health_interval 15s
+    health_timeout 5s
+    health_fails 3
+    health_passes 1
+    header_up Host {http.reverse_proxy.upstream.hostport}
+    header_up X-Forwarded-Host {$CLUB_SITE_HOST}
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-For {remote_host}
+    import forward_verified_client_ip
+  }
+  handle_errors {
+    @upstream_unavailable expression `{http.error.status_code} >= 500`
+    respond @upstream_unavailable "club unavailable" 503
+  }
+}
