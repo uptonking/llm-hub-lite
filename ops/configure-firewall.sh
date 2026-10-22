@@ -455,6 +455,7 @@ iptables -A "$chain" -i "$PUBLIC_INTERFACE" -s "$LEADER_PUBLIC_IP" -p udp --dpor
 # cluster policy allowlist is reviewed in Git and prevents an application from
 # opening an arbitrary Docker-published port on a follower.
 direct_allowlist="$(value DIRECT_PORT_ALLOWLIST "$CLUSTER_POLICY_FILE")"
+has_direct_proxy=0
 while IFS= read -r manifest; do
 	[[ -f "$manifest" ]] || continue
 	case "$(value INGRESS_MODE "$manifest")" in direct | direct-and-proxy) ;; *) continue ;; esac
@@ -463,6 +464,7 @@ while IFS= read -r manifest; do
 	[[ "$(value ENABLED "$CONTROL_ROOT/current/config/$policy_rel")" == true ]] || continue
 	nodes="$(value NODES "$CONTROL_ROOT/current/config/$policy_rel")"
 	[[ ",$nodes," == *",$node_id,"* ]] || continue
+	[[ "$(value INGRESS_MODE "$manifest")" == direct-and-proxy ]] && has_direct_proxy=1
 	forward_target="$(value DIRECT_FORWARD_TARGET "$manifest")"
 	forward_ip='' forward_port=''
 	if [[ -n "$forward_target" ]]; then
@@ -557,6 +559,12 @@ while IFS= read -r manifest; do
 		iptables -t nat -C PREROUTING "${hop_args[@]}" 2>/dev/null || iptables -t nat -I PREROUTING 1 "${hop_args[@]}"
 	done <<<"$(value DIRECT_PORT_RANGES "$manifest" | tr ',' '\n')"
 done < <(find "$CONTROL_ROOT/current/apps" -mindepth 2 -maxdepth 2 -type f -name manifest.env -print 2>/dev/null)
+if [[ "$has_direct_proxy" -eq 1 ]]; then
+	iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p tcp --dport 80 -j RETURN
+	iptables -A "$chain" -i "$PUBLIC_INTERFACE" -p tcp --dport 443 -j RETURN
+	ufw allow 80/tcp comment 'Direct HTTP' >/dev/null
+	ufw allow 443/tcp comment 'Direct HTTPS' >/dev/null
+fi
 # Default-deny Docker-published ingress on the public interface. Exceptions
 # above cover the Leader proxy and explicitly allowlisted direct listeners;
 # container egress is unaffected because these rules are interface-scoped.

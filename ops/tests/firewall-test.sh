@@ -315,5 +315,7 @@ EOF
 run_firewall >/dev/null
 grep -Fqx 'ufw allow 443/udp comment Direct verge4' "$FIREWALL_LOG"
 grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p udp --dport 443 -j RETURN' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp --dport 80 -j RETURN' "$FIREWALL_LOG"
+grep -Fqx 'iptables -A LLM_HUB_LITE_DOCKER -i eth0 -p tcp --dport 443 -j RETURN' "$FIREWALL_LOG"
 
 printf 'firewall tests passed\n'
