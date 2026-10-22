@@ -30,6 +30,7 @@ services:
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/mailer/data:/var/lib/stalwart/data
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/mailer/config:/etc/stalwart
+      - ${CADDY_CERTIFICATES_ROOT:-/opt/platform/caddy/data/caddy/certificates}:/etc/caddy-certificates:ro
       - ./config.json.tmpl:/etc/stalwart-template/config.json.tmpl:ro
       - ./entrypoint.sh:/entrypoint.sh:ro
     networks:

@@ -24,7 +24,12 @@ grep -Fq 'mem_limit: ${MAILER_MEMORY_LIMIT:-512m}' "$app/compose.yml"
 grep -Fq 'cpus: ${MAILER_CPUS:-1.0}' "$app/compose.yml"
 # shellcheck disable=SC2016
 grep -Fq 'pids_limit: ${MAILER_PIDS_LIMIT:-256}' "$app/compose.yml"
+# shellcheck disable=SC2016
+grep -Fq '${CADDY_CERTIFICATES_ROOT:-/opt/platform/caddy/data/caddy/certificates}:/etc/caddy-certificates:ro' "$app/compose.yml"
 [[ -x "$app/entrypoint.sh" ]]
+grep -Fq 'sync_certs' "$app/entrypoint.sh"
+grep -Fq 'x:Domain/set' "$app/entrypoint.sh"
+grep -Fq 'x:Certificate/set' "$app/entrypoint.sh"
 
 # Verify RocksDB template
 grep -Fq '"@type": "RocksDb"' "$app/config.json.tmpl"
