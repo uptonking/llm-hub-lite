@@ -26,6 +26,7 @@ services:
       ADMIN_PASSWORD: ${CLUB_ADMIN_PASSWORD:?CLUB_ADMIN_PASSWORD must be set}
       ADMIN_EMAIL: ${CLUB_ADMIN_EMAIL:-admin@aichorage.de}
       EXTERNAL_CONTENT_DISPLAY: ask_before_display
+      CLUB_REQUIRE_EMAIL_VERIFICATION: ${CLUB_REQUIRE_EMAIL_VERIFICATION:-false}
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/club:/data
       - ./entrypoint.sh:/entrypoint.sh:ro

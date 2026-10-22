@@ -38,6 +38,62 @@ if ! schema_ready; then
 	wait "$init_pid" 2>/dev/null || true
 	echo "club: schema initialised in ${waited}s"
 fi
+sqlite() { /usr/bin/sqlite3 /data/sqlite3/answer.db "$1"; }
+
+# Answer seeds require_email_verification=true and, with no SMTP relay
+# configured, the activation mail is never delivered: "smtp host is empty, skip
+# send email". The account is created anyway with mail_status=2 and rank=0, and
+# MustAuth then rejects every authenticated request, so the forum cannot be used
+# at all. Keep the setting aligned with CLUB_REQUIRE_EMAIL_VERIFICATION and
+# repair accounts that were already stranded by it.
+apply_registration_policy() {
+	case "${CLUB_REQUIRE_EMAIL_VERIFICATION:-false}" in
+	true | TRUE | True | 1 | yes | Yes | on | On) want=1 ;;
+	*) want=0 ;;
+	esac
+	cache_stale=0
+	current="$(sqlite "select json_extract(content,'$.require_email_verification') from site_info where type='login';")"
+	if [ "$current" != "$want" ]; then
+		json_value=false
+		if [ "$want" -eq 1 ]; then
+			json_value=true
+		fi
+		sqlite "update site_info set content = json_set(content, '$.require_email_verification', json('$json_value')) where type = 'login';"
+		current="$(sqlite "select json_extract(content,'$.require_email_verification') from site_info where type='login';")"
+		if [ "$current" != "$want" ]; then
+			echo "club: could not set require_email_verification to $json_value" >&2
+			exit 1
+		fi
+		echo "club: require_email_verification set to $json_value"
+		cache_stale=1
+	fi
+	if [ "$want" -eq 0 ]; then
+		# Answer activates a user by awarding the "user.activated" reputation and
+		# an activity record. Replaying that turns previously unusable accounts
+		# into ordinary members instead of leaving them half-provisioned.
+		stranded="$(sqlite 'select count(*) from user where mail_status = 2 and rank = 0;')"
+		case "$stranded" in
+		'' | 0) ;;
+		*)
+			sqlite "create temp table club_stranded as select id from user where mail_status = 2 and rank = 0;
+insert into activity (created_at, updated_at, user_id, trigger_user_id, object_id, original_object_id, activity_type, cancelled, rank, has_rank, revision_id)
+select datetime('now'), datetime('now'), u.id, 0, 0, 0, (select cast(id as integer) from config where key = 'user.activated'), 0, (select cast(value as integer) from config where key = 'user.activated'), 1, 0
+from user u join club_stranded s on s.id = u.id
+where not exists (select 1 from activity a where a.user_id = u.id and a.activity_type = (select cast(id as integer) from config where key = 'user.activated'));
+update user set rank = rank + (select cast(value as integer) from config where key = 'user.activated') where id in (select id from club_stranded);
+update user set mail_status = 1 where id in (select id from club_stranded);
+drop table club_stranded;"
+			echo "club: activated $stranded previously stranded account(s)"
+			cache_stale=1
+			;;
+		esac
+	fi
+	# Site info and login tokens both live in the gob-backed cache.
+	if [ "$cache_stale" -eq 1 ]; then
+		rm -f /data/cache/cache.db /data/cache/cache.db-shm /data/cache/cache.db-wal
+	fi
+}
+
 if ! timeout 300 /usr/bin/answer upgrade; then
 	echo "club: answer upgrade failed" >&2
 	exit 1
@@ -50,4 +106,5 @@ case "$rows" in
 	;;
 esac
 echo "club: schema version rows=$rows"
+apply_registration_policy
 exec /usr/bin/answer run -C /data/

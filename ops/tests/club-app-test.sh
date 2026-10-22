@@ -36,6 +36,14 @@ grep -Fq 'select count(*) from version;' "$app/entrypoint.sh"
 grep -Fq "\${SITE_URL:?SITE_URL must be set}" "$app/entrypoint.sh"
 grep -Fq "\${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}" "$app/entrypoint.sh"
 
+# Answer ships require_email_verification=true, but club has no SMTP relay, so the
+# activation mail is never delivered and new accounts stay permanently inactive.
+grep -q '^CLUB_REQUIRE_EMAIL_VERIFICATION=false$' "$app/config.env"
+grep -Fq 'CLUB_REQUIRE_EMAIL_VERIFICATION' "$app/manifest.env"
+grep -Fq 'apply_registration_policy' "$app/entrypoint.sh"
+grep -Fq "json_set(content, '\$.require_email_verification', json('\$json_value'))" "$app/entrypoint.sh"
+grep -Fq 'from user where mail_status = 2 and rank = 0' "$app/entrypoint.sh"
+
 # Never let the installer fallback pass the container health check.
 grep -Fq 'http://127.0.0.1:80/answer/api/v1/siteinfo' "$app/compose.yml"
 grep -Fq 'health_uri /answer/api/v1/siteinfo' "$app/route.leader.caddy"
