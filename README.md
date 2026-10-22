@@ -61,7 +61,10 @@ See the concise operator runbook: [first-deployment.md](docs/first-deployment.md
     - Cursorapi (the default singleton target)
     - CPAMP (CPA-Manager-Plus Full Mode) singleton
     - Auther (Authelia OIDC) singleton
-    - Club (Apache Answer) singleton, SQLite-backed forum at `club.aichorage.de`
+    - Club (Apache Answer) singleton, SQLite-backed forum at `club.aichorage.de`:
+      sign-up closed (accounts come from the admin panel), e-mail verification off
+      because there is no SMTP relay, tag creation open to every member, and a
+      starter tag set seeded on boot so a question can be posted immediately
     - LibreChat (retained on worker-2 only; disabled on worker-1)
     - Aichor1 and Relaichor1 retained but disabled by policy
 - Follower worker-2:

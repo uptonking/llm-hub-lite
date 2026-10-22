@@ -27,6 +27,10 @@ services:
       ADMIN_EMAIL: ${CLUB_ADMIN_EMAIL:-admin@aichorage.de}
       EXTERNAL_CONTENT_DISPLAY: ask_before_display
       CLUB_REQUIRE_EMAIL_VERIFICATION: ${CLUB_REQUIRE_EMAIL_VERIFICATION:-false}
+      CLUB_ALLOW_NEW_REGISTRATIONS: ${CLUB_ALLOW_NEW_REGISTRATIONS:-false}
+      CLUB_TAG_ADD_MIN_RANK: ${CLUB_TAG_ADD_MIN_RANK:-1}
+      CLUB_REQUIRED_TAG: ${CLUB_REQUIRED_TAG:-false}
+      CLUB_BUILTIN_TAGS: ${CLUB_BUILTIN_TAGS:-}
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/club:/data
       - ./entrypoint.sh:/entrypoint.sh:ro

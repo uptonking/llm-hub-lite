@@ -41,8 +41,42 @@ grep -Fq "\${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}" "$app/entrypoint.sh"
 grep -q '^CLUB_REQUIRE_EMAIL_VERIFICATION=false$' "$app/config.env"
 grep -Fq 'CLUB_REQUIRE_EMAIL_VERIFICATION' "$app/manifest.env"
 grep -Fq 'apply_registration_policy' "$app/entrypoint.sh"
-grep -Fq "json_set(content, '\$.require_email_verification', json('\$json_value'))" "$app/entrypoint.sh"
+grep -Fq 'set_site_flag login .require_email_verification' "$app/entrypoint.sh"
 grep -Fq 'from user where mail_status = 2 and rank = 0' "$app/entrypoint.sh"
+
+# Club is a personal site: sign-up stays closed while existing accounts keep
+# logging in with their password.
+grep -q '^CLUB_ALLOW_NEW_REGISTRATIONS=false$' "$app/config.env"
+grep -Fq 'CLUB_ALLOW_NEW_REGISTRATIONS' "$app/manifest.env"
+grep -Fq 'CLUB_ALLOW_NEW_REGISTRATIONS' "$app/compose.yml"
+grep -Fq 'set_site_flag login .allow_new_registrations' "$app/entrypoint.sh"
+
+# Answer asks 750 reputation to create a tag while the posting rules require at
+# least one tag per question, so a fresh member cannot do either.
+grep -q '^CLUB_TAG_ADD_MIN_RANK=1$' "$app/config.env"
+grep -Fq 'CLUB_TAG_ADD_MIN_RANK' "$app/manifest.env"
+grep -Fq 'CLUB_TAG_ADD_MIN_RANK' "$app/compose.yml"
+grep -Fq 'apply_privileges_policy' "$app/entrypoint.sh"
+grep -Fq 'set_config_value rank.tag.add' "$app/entrypoint.sh"
+grep -Fq 'rank.answer.invite_someone_to_answer' "$app/entrypoint.sh"
+grep -Fq 'privilege.rank_invite_someone_to_answer_label' "$app/entrypoint.sh"
+# The admin panel only reports the enforced thresholds when the values are
+# stored as the custom privilege level.
+grep -Fq '\"level\":99' "$app/entrypoint.sh"
+
+# A new forum has no tags at all, so the mandatory tag cannot be supplied.
+grep -q '^CLUB_REQUIRED_TAG=' "$app/config.env"
+grep -q '^CLUB_BUILTIN_TAGS=' "$app/config.env"
+grep -Fq 'CLUB_BUILTIN_TAGS' "$app/manifest.env"
+grep -Fq 'CLUB_BUILTIN_TAGS' "$app/compose.yml"
+grep -Fq 'apply_tag_policy' "$app/entrypoint.sh"
+grep -Fq 'apply_tag_settings_policy' "$app/entrypoint.sh"
+grep -Fq 'insert into uniqid (uniqid_type) values (3);' "$app/entrypoint.sh"
+# Tags are addressed by the composed 1003-prefixed object id, and Answer reads
+# the recommend flag from the tag row rather than from site info.
+grep -Fq "'1003' || substr('0000000000000'" "$app/entrypoint.sh"
+grep -Fq 'set recommend = 1 where slug_name' "$app/entrypoint.sh"
+grep -Fq 'set_site_flag tags .required_tag' "$app/entrypoint.sh"
 
 # Never let the installer fallback pass the container health check.
 grep -Fq 'http://127.0.0.1:80/answer/api/v1/siteinfo' "$app/compose.yml"
