@@ -61,6 +61,14 @@ export STALWART_RECOVERY_MODE_PORT="8080"
 				curl -s -H "Content-Type: application/json" -H "Authorization: $AUTH_HEADER" -d "$CERT_CREATE" http://127.0.0.1:8080/jmap/ >/dev/null 2>&1 || true
 			fi
 		fi
+
+		# Ensure submission listener (port 587) exists
+		LISTENER_QUERY='{"using":["urn:ietf:params:jmap:core","urn:stalwart:jmap"],"methodCalls":[["x:NetworkListener/get",{"accountId":"d333333"},"0"]]}'
+		LRESP=$(curl -s -H "Content-Type: application/json" -H "Authorization: $AUTH_HEADER" -d "$LISTENER_QUERY" http://127.0.0.1:8080/jmap/ || true)
+		if ! printf '%s' "$LRESP" | grep -q '"name":"submission"'; then
+			LISTENER_CREATE=$(printf '{"using":["urn:ietf:params:jmap:core","urn:stalwart:jmap"],"methodCalls":[["x:NetworkListener/set",{"accountId":"d333333","create":{"sub587":{"name":"submission","protocol":"smtp","bind":{"[::]:587":true},"useTls":true,"tlsImplicit":false,"maxConnections":%d}}},"0"]]}' "${MAILER_MAX_CONNECTIONS:-300}")
+			curl -s -H "Content-Type: application/json" -H "Authorization: $AUTH_HEADER" -d "$LISTENER_CREATE" http://127.0.0.1:8080/jmap/ >/dev/null 2>&1 || true
+		fi
 	fi
 
 	# Periodic certificate sync

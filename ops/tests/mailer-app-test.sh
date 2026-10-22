@@ -14,7 +14,7 @@ grep -q '^ENABLED=true$' "$repo_root/config/cluster/apps/mailer.policy"
 grep -q '^NODES=worker-3$' "$repo_root/config/cluster/apps/mailer.policy"
 
 # Verify direct listeners
-grep -q '^DIRECT_LISTENERS=tcp:25:25,tcp:465:465,tcp:587:587,tcp:993:993,tcp:4190:4190$' "$app/manifest.env"
+grep -q '^DIRECT_LISTENERS=tcp:25:25,tcp:80:80,tcp:443:443,tcp:465:465,tcp:587:587,tcp:993:993,tcp:4190:4190$' "$app/manifest.env"
 
 # Verify Compose limits and constraints
 grep -Fq 'user: "0:0"' "$app/compose.yml"
@@ -30,6 +30,7 @@ grep -Fq '${CADDY_CERTIFICATES_ROOT:-/opt/platform/caddy/data/caddy/certificates
 grep -Fq 'sync_certs' "$app/entrypoint.sh"
 grep -Fq 'x:Domain/set' "$app/entrypoint.sh"
 grep -Fq 'x:Certificate/set' "$app/entrypoint.sh"
+grep -Fq 'x:NetworkListener/set' "$app/entrypoint.sh"
 
 # Verify RocksDB template
 grep -Fq '"@type": "RocksDb"' "$app/config.json.tmpl"
