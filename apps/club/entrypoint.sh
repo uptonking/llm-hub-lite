@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
-: "${CLUB_SITE:?CLUB_SITE must be set}"
-: "${CLUB_ADMIN_PASSWORD:?CLUB_ADMIN_PASSWORD must be set}"
+: "${SITE_URL:?SITE_URL must be set}"
+: "${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}"
 mkdir -p /data/sqlite3 /data/cache /data/uploads /data/i18n
 schema_ready() {
 	[ -f /data/conf/config.yaml ] || return 1

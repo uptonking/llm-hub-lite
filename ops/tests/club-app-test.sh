@@ -31,6 +31,10 @@ grep -Fq 'answer init &' "$app/entrypoint.sh"
 grep -Fq 'answer upgrade' "$app/entrypoint.sh"
 grep -Fq 'exec /usr/bin/answer run -C /data/' "$app/entrypoint.sh"
 grep -Fq 'select count(*) from version;' "$app/entrypoint.sh"
+# The entrypoint may only require variables Compose actually passes into the
+# container; CLUB_SITE is interpolated at render time and is not present at runtime.
+grep -Fq "\${SITE_URL:?SITE_URL must be set}" "$app/entrypoint.sh"
+grep -Fq "\${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}" "$app/entrypoint.sh"
 
 # Never let the installer fallback pass the container health check.
 grep -Fq 'http://127.0.0.1:80/answer/api/v1/siteinfo' "$app/compose.yml"
