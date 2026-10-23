@@ -1,3 +1,22 @@
+# OnlyOffice DocumentServer, published at https://onoffice.aichorage.de on worker-1.
+#
+# This host is NOT unused. Filer (worker-2) previews and edits documents here: it
+# sets ONOFFICE_SITE=https://onoffice.aichorage.de and shares
+# FILEBROWSER_ONLYOFFICE_SECRET with this container's JWT_SECRET. The editor flow is
+# therefore:
+#
+#   browser -> filer.aichorage.de -> onoffice.aichorage.de -> filer (document bytes)
+#
+# The last hop leaves worker-2 and comes back through Cloudflare, so any edge rate
+# limit that throttles cluster node addresses will break document editing.
+#
+# Accepted risks, tolerable only because the edge blocks scanner and probe traffic
+# (see docs/edge-protection.md):
+#   - USE_UNAUTHORIZED_STORAGE=true: the editor path needs no auth, so anyone who can
+#     reach it can ask it to load a document from a URL they choose.
+#   - ALLOW_PRIVATE_IP_ADDRESS=true: SSRF-adjacent; this container has no
+#     EGRESS_PROFILE, so it can reach the private network.
+# Revisit both if onoffice ever serves users outside the filer workflow.
 name: app-onoffice
 services:
   onoffice:

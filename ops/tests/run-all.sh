@@ -23,6 +23,7 @@ fast)
 		paperlex-app-test filer-app-test outline-app-test openclouds-app-test collabora-app-test
 		onoffice-app-test gtea-app-test mailer-app-test club-app-test relaichor-release-test woodpecker-agent-repair-test
 		woodpecker-webhook-repair-test woodpecker-plan-test bootstrap-policy-test
+		service-stats-test
 	)
 	;;
 full)
@@ -37,6 +38,7 @@ full)
 		cursorapi-release-test relaichor-app-test relaichor1-app-test paperlex-app-test
 		filer-app-test outline-app-test openclouds-app-test collabora-app-test onoffice-app-test
 		gtea-app-test mailer-app-test club-app-test relaichor-release-test enroll-beszel-test firewall-test git-auth-test
+		service-stats-test
 		ip-privacy-test observer-ingest-test observer-log-proxy-test observer-vector-test
 		platform-submit-test restore-test secret-validation-test woodpecker-agent-repair-test
 		woodpecker-webhook-repair-test woodpecker-plan-test
