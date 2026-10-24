@@ -53,6 +53,8 @@ services:
       NODE_OPTIONS: ${FLOWY_NODE_OPTIONS:---max-old-space-size=768}
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/flowy:/data
+      - ./entrypoint.sh:/usr/src/app/flowy-entrypoint.sh:ro
+    entrypoint: ["/bin/bash", "/usr/src/app/flowy-entrypoint.sh"]
     networks: [flowy_private, platform_edge]
     healthcheck:
       # Activepieces ships curl, but not wget. Keep the probe dependency-free
