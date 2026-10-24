@@ -33,6 +33,20 @@ fi
 APP_SCRIPT="packages/server/api/dist/src/bootstrap.js"
 WORKER_SCRIPT="packages/server/worker/dist/src/bootstrap.js"
 
+case "$AP_CONTAINER_TYPE" in
+APP)
+	exec node --enable-source-maps "$APP_SCRIPT"
+	;;
+WORKER)
+	exec node --enable-source-maps "$WORKER_SCRIPT"
+	;;
+WORKER_AND_APP) ;;
+*)
+	echo "Unknown AP_CONTAINER_TYPE: $AP_CONTAINER_TYPE" >&2
+	exit 1
+	;;
+esac
+
 AP_CONTAINER_TYPE=APP node --enable-source-maps "$APP_SCRIPT" &
 app_pid=$!
 node --enable-source-maps "$WORKER_SCRIPT" &
