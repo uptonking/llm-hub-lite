@@ -94,7 +94,7 @@ path, host_filter, json_out, window = sys.argv[1], sys.argv[2], sys.argv[3] == "
 SCANNER_MARKERS = (
     "tlm-audit", "censys", "internetmeasurement", "zgrab", "ivre-masscan",
     "metabase-cve", "nuclei", "sqlmap", "nikto", "expanse", "shodan",
-    "masscan", "internet-measurement",
+    "masscan", "internet-measurement", "wpbot", "okhttp/3.", "palo alto networks",
 )
 SCANNER_LABEL = {
     "tlm-audit": "secret-harvesting scanner (.env/.git/aws probes)",
@@ -104,7 +104,22 @@ SCANNER_LABEL = {
     "ivre-masscan": "port scanner",
     "metabase-cve": "opportunistic CVE probe",
     "nuclei": "template scanner",
+    "wpbot": "WordPress crawler bot",
+    "okhttp/3.": "legacy OkHttp scanner/probe",
+    "palo alto networks": "Cortex-Xpanse reconnaissance scanner",
 }
+
+PROBE_PREFIXES = (
+    "/.git", "/.env", "/.docker", "/.aws", "/.claude", "/.cursor", "/.kube",
+    "/.s3cfg", "/.netrc", "/.npmrc", "/.pypirc", "/.boto", "/.amplifyrc",
+    "/wp-includes", "/wp-admin", "/wp-content",
+)
+PROBE_KEYWORDS = (
+    "serviceaccountcredentials", "credentials.json", ".secret",
+    "wlwmanifest.xml", "xmlrpc.php",
+    "/api/user/ismustmobile", "/api/landing/check", "/h5/newt.html",
+)
+
 # Hosts whose public traffic is not the whole story: an internal consumer depends
 # on them, so a quiet public host is not an unused one.
 DEPENDENTS = {
@@ -129,6 +144,31 @@ def scanner_marker(user_agent):
         if marker in low:
             return marker
     return None
+
+
+def probe_marker(uri):
+    if not uri:
+        return None
+    low = uri.lower()
+    for prefix in PROBE_PREFIXES:
+        if low.startswith(prefix):
+            return "probe:" + prefix.lstrip("/")
+    for kw in PROBE_KEYWORDS:
+        if kw in low:
+            return "probe:" + kw.strip("/")
+    if low.endswith(".php") and low != "/status.php":
+        return "probe:unauthorized-php"
+    if "/." in low and not low.startswith("/.well-known/"):
+        return "probe:hidden-file"
+    return None
+
+
+def describe_marker(marker):
+    if marker in SCANNER_LABEL:
+        return SCANNER_LABEL[marker]
+    if marker.startswith("probe:"):
+        return "suspicious probe target (%s)" % marker[len("probe:"):]
+    return "automated probe/scanner"
 
 
 def status_class(status):
@@ -171,7 +211,7 @@ with open(path, "r", errors="replace") as handle:
         entry["ua"][agent[:80]] += 1
         entry["ip"][header_value(request, "cf-connecting-ip")] += 1
         entry["paths"][(request.get("uri") or "-")[:80]] += 1
-        marker = scanner_marker(agent)
+        marker = scanner_marker(agent) or probe_marker(request.get("uri"))
         if marker:
             entry["scanner"] += 1
             entry["markers"][marker] += 1
@@ -239,9 +279,8 @@ for host, info in sorted(report["hosts"].items(), key=lambda kv: -kv[1]["request
         host, info["risk"], info["scanner_requests"], info["scanner_share"] * 100,
         info["rejected_share"] * 100, info["aborted_share"] * 100, kinds))
     for marker in sorted(info["scanner_kinds"]):
-        label = SCANNER_LABEL.get(marker)
-        if label:
-            print("      %-18s %s" % (marker, label))
+        label = describe_marker(marker)
+        print("      %-18s %s" % (marker, label))
     if info["internal_dependents"]:
         print("      internal dependents: %s" % info["internal_dependents"])
         if info["requests"] and info["scanner_share"] >= 0.5:

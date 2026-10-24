@@ -22,6 +22,8 @@ cat >"$fixture" <<'EOF'
 {"duration":0.04,"request":{"host":"auther.aichorage.de","uri":"/.well-known/openid-configuration","headers":{"User-Agent":["Mozilla/5.0"],"CF-Connecting-IP":["198.51.100.7"]}}}
 this is not json and must be skipped
 {"duration":0.05,"status":200,"request":{"host":"status.aichorage.de","uri":"/api/beszel","headers":{"User-Agent":["Mozilla/5.0"],"CF-Connecting-IP":["198.51.100.7"]}}}
+{"duration":0.01,"status":404,"request":{"host":"outline.aichorage.de","uri":"/serviceAccountCredentials.json","headers":{"User-Agent":["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"],"CF-Connecting-IP":["198.51.100.99"]}}}
+{"duration":0.01,"status":404,"request":{"host":"ladocs.aichorage.de","uri":"/api/user/ismustmobile","headers":{"User-Agent":["okhttp/3.14.9"],"CF-Connecting-IP":["198.51.100.88"]}}}
 EOF
 
 text="$(CADDY_LOG_FILE="$fixture" "$script" --since 24h)"
@@ -51,7 +53,9 @@ check_re() {
 # Scanner traffic dominates collabora, and the probe paths are attributed to it.
 check_re "collabora flagged high risk" "$text" "collabora\.aichorage\.de[[:space:]]+high"
 check "scanner UA recognised" "$text" "tlm-audit"
-check "malformed line skipped" "$text" "records=6"
+check "path probe recognized for spoofed UA" "$text" "probe:serviceaccountcredentials"
+check "legacy okhttp scanner recognized" "$text" "okhttp/3."
+check "malformed line skipped" "$text" "records=8"
 
 # The internal dependency must be surfaced so a quiet public host is not retired.
 check "onoffice dependency warning" "$text" "internal dependents: filer"
