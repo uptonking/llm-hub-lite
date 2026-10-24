@@ -79,6 +79,7 @@ LOW_MEMORY_SWAP_ENABLED="${LOW_MEMORY_SWAP_ENABLED:-true}"
 LOW_MEMORY_SWAPFILE="${LOW_MEMORY_SWAPFILE:-/swapfile}"
 LOW_MEMORY_SWAP_SIZE="${LOW_MEMORY_SWAP_SIZE:-1G}"
 LOW_MEMORY_SWAP_SWAPPINESS="${LOW_MEMORY_SWAP_SWAPPINESS:-10}"
+LOW_MEMORY_VFS_CACHE_PRESSURE="${LOW_MEMORY_VFS_CACHE_PRESSURE:-50}"
 edge_network="${PLATFORM_EDGE_NETWORK:-platform_edge}"
 SSH_PORT="${SSH_PORT:-}"
 BOOTSTRAP_SYSTEMD_WAIT_SECONDS="${BOOTSTRAP_SYSTEMD_WAIT_SECONDS:-8}"
@@ -671,7 +672,7 @@ configure_low_memory_swap() {
 	swapon "$LOW_MEMORY_SWAPFILE"
 	grep -Fq "$LOW_MEMORY_SWAPFILE none swap" /etc/fstab 2>/dev/null || printf '%s none swap sw,nofail 0 0\n' "$LOW_MEMORY_SWAPFILE" >>/etc/fstab
 	install -d -m 755 /etc/sysctl.d
-	printf 'vm.swappiness=%s\n' "$LOW_MEMORY_SWAP_SWAPPINESS" >/etc/sysctl.d/99-llm-hub-lite-memory.conf
+	printf 'vm.swappiness=%s\nvm.vfs_cache_pressure=%s\n' "$LOW_MEMORY_SWAP_SWAPPINESS" "${LOW_MEMORY_VFS_CACHE_PRESSURE:-50}" >/etc/sysctl.d/99-llm-hub-lite-memory.conf
 	sysctl -p /etc/sysctl.d/99-llm-hub-lite-memory.conf >/dev/null
 	modprobe tcp_bbr >/dev/null 2>&1 || true
 	cat >/etc/sysctl.d/99-llm-hub-lite-network.conf <<'EOF'
