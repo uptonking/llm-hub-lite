@@ -31,6 +31,7 @@ services:
       MAILER_DOMAIN: ${MAILER_DOMAIN:-aichorage.de}
       MAILER_HOSTNAME: ${MAILER_HOSTNAME:-mail.aichorage.de}
       MAILER_MAX_CONNECTIONS: ${MAILER_MAX_CONNECTIONS:-300}
+      MAILER_PROXY_NETWORK: ${MAILER_PROXY_NETWORK:-172.16.0.0/12}
       MAILER_CLOUDFLARE_API_TOKEN: ${MAILER_CLOUDFLARE_API_TOKEN:-}
     volumes:
       - ${DATA_ROOT:-/opt/apps/llm-hub-lite/shared/data/prod}/mailer/data:/var/lib/stalwart/data

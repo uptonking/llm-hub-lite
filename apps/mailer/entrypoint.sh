@@ -32,6 +32,61 @@ export STALWART_HOSTNAME="${MAILER_HOSTNAME:-mail.aichorage.de}"
 export STALWART_PUBLIC_URL="${MAILER_SITE:-https://mail.aichorage.de}"
 export STALWART_RECOVERY_MODE_PORT="8080"
 
+# The follower Caddy proxies both the Leader origin probes and the public
+# direct ingress, so every proxied connection reaches Stalwart from the
+# proxy's own address. Stalwart's auto-ban (exploit-path scanning, auth
+# failures) keys on that connection address, which once banned Caddy
+# itself with a never-expiring entry and took the web panel down. An
+# AllowedIp mask covering the container networks exempts the proxy from
+# every ban path while real client and scanner addresses stay subject
+# to them. Bans against private addresses can only ever be the proxy
+# itself, so they are dropped on every boot as well.
+PROXY_NETWORK="${MAILER_PROXY_NETWORK:-172.16.0.0/12}"
+jmap_call() {
+	curl -s --max-time 20 -H "Content-Type: application/json" -H "Authorization: $AUTH_HEADER" -d "$1" http://127.0.0.1:8080/jmap/ 2>/dev/null || true
+}
+is_private_address() {
+	case "$1" in
+	10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+ensure_proxy_protection() {
+	response="" addr="" id="" destroy_ids=""
+	AUTH_HEADER="Basic $(printf 'admin:%s' "$MAILER_ADMIN_PASSWORD" | base64 | tr -d '\n')"
+
+	# Allowlist the proxy network so the proxy address can never be banned.
+	response="$(jmap_call '{"using":["urn:ietf:params:jmap:core","urn:stalwart:jmap"],"methodCalls":[["x:AllowedIp/query",{"accountId":"d333333"},"0"],["x:AllowedIp/get",{"accountId":"d333333","#ids":{"resultOf":"0","name":"x:AllowedIp/query","path":"/ids"},"properties":["id","address"]},"1"]]}')"
+	printf '%s' "$response" | grep -q "\"address\":\"$PROXY_NETWORK\"" ||
+		jmap_call "{\"using\":[\"urn:ietf:params:jmap:core\",\"urn:stalwart:jmap\"],\"methodCalls\":[[\"x:AllowedIp/set\",{\"accountId\":\"d333333\",\"create\":{\"proxy-net\":{\"address\":\"$PROXY_NETWORK\",\"reason\":\"platform proxy network (follower Caddy)\"}}},\"0\"]]}" >/dev/null
+
+	# Destroy any ban recorded against a private address (self-inflicted).
+	response="$(jmap_call '{"using":["urn:ietf:params:jmap:core","urn:stalwart:jmap"],"methodCalls":[["x:BlockedIp/query",{"accountId":"d333333"},"0"],["x:BlockedIp/get",{"accountId":"d333333","#ids":{"resultOf":"0","name":"x:BlockedIp/query","path":"/ids"},"properties":["id","address"]},"1"]]}')"
+	destroy_ids=""
+	printf '%s' "$response" | grep -o '{[^{}]*}' | while IFS= read -r entry; do
+		addr="$(printf '%s' "$entry" | sed -n 's/.*"address":"\([^"]*\)".*/\1/p')"
+		id="$(printf '%s' "$entry" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+		[ -n "$addr" ] && [ -n "$id" ] || continue
+		if is_private_address "$addr"; then
+			printf '%s\n' "$id"
+		fi
+	done >"/tmp/mailer-private-bans.$$"
+	while IFS= read -r id; do
+		[ -n "$id" ] || continue
+		destroy_ids="$destroy_ids,\"$id\""
+	done <"/tmp/mailer-private-bans.$$"
+	rm -f "/tmp/mailer-private-bans.$$"
+	if [ -n "$destroy_ids" ]; then
+		destroy_ids="${destroy_ids#,}"
+		jmap_call "{\"using\":[\"urn:ietf:params:jmap:core\",\"urn:stalwart:jmap\"],\"methodCalls\":[[\"x:BlockedIp/set\",{\"accountId\":\"d333333\",\"destroy\":[$destroy_ids]},\"0\"]]}" >/dev/null
+	fi
+
+	# Success requires the allow entry to be present; ban cleanup is
+	# best-effort and idempotent.
+	response="$(jmap_call '{"using":["urn:ietf:params:jmap:core","urn:stalwart:jmap"],"methodCalls":[["x:AllowedIp/query",{"accountId":"d333333"},"0"],["x:AllowedIp/get",{"accountId":"d333333","#ids":{"resultOf":"0","name":"x:AllowedIp/query","path":"/ids"},"properties":["id","address"]},"1"]]}')"
+	printf '%s' "$response" | grep -q "\"address\":\"$PROXY_NETWORK\""
+}
+
 # Background worker for periodic certificate sync and initial domain bootstrap
 (
 	for _ in $(seq 1 30); do
@@ -43,7 +98,6 @@ export STALWART_RECOVERY_MODE_PORT="8080"
 
 	if curl -fsS http://127.0.0.1:8080/healthz/ready >/dev/null 2>&1; then
 		AUTH_HEADER="Basic $(printf 'admin:%s' "$MAILER_ADMIN_PASSWORD" | base64 | tr -d '\n')"
-
 		# Ensure domain exists
 		DOMAIN_QUERY='{"using":["urn:ietf:params:jmap:core","urn:stalwart:jmap"],"methodCalls":[["x:Domain/query",{"accountId":"d333333"},"0"]]}'
 		RESP=$(curl -s -H "Content-Type: application/json" -H "Authorization: $AUTH_HEADER" -d "$DOMAIN_QUERY" http://127.0.0.1:8080/jmap/ || true)
@@ -70,6 +124,16 @@ export STALWART_RECOVERY_MODE_PORT="8080"
 			curl -s -H "Content-Type: application/json" -H "Authorization: $AUTH_HEADER" -d "$LISTENER_CREATE" http://127.0.0.1:8080/jmap/ >/dev/null 2>&1 || true
 		fi
 	fi
+
+	# Apply the proxy protections even when the one-shot bootstrap above
+	# missed its window: RocksDB recovery can keep JMAP unavailable for
+	# many minutes after a restart, so retry until the allow entry sticks.
+	for _ in $(seq 1 60); do
+		if ensure_proxy_protection; then
+			break
+		fi
+		sleep 30
+	done
 
 	# Periodic certificate sync
 	while true; do
