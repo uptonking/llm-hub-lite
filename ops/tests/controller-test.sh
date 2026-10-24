@@ -278,10 +278,10 @@ if grep -Fq 'wget -q -O - http://127.0.0.1:80/api/v1/health' "$repo_root/apps/fl
 	printf 'Flowy healthcheck must use an image-provided HTTP client\n' >&2
 	exit 1
 fi
-grep -q '^FLOWY_MEMORY_LIMIT=1500m$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_MEMORY_LIMIT=1800m$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_CPUS=0.95$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_LOG_LEVEL=warn$' "$repo_root/apps/flowy/config.env"
-grep -q '^FLOWY_REUSE_SANDBOX=false$' "$repo_root/apps/flowy/config.env"
+grep -q '^FLOWY_REUSE_SANDBOX=true$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_NODE_OPTIONS=--max-old-space-size=768$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_FILE_STORAGE_LOCATION=S3$' "$repo_root/apps/flowy/config.env"
 grep -q '^FLOWY_TELEMETRY_ENABLED=false$' "$repo_root/apps/flowy/config.env"
