@@ -15,6 +15,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-postgresql
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     environment:
       PGDATA: /var/lib/postgresql/data/pgdata
       POSTGRES_DB: docs
@@ -45,6 +50,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-redis
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     command:
       - redis-server
       - --maxmemory
@@ -74,6 +84,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-yhub-valkey
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     command:
       - valkey-server
       - --maxmemory
@@ -104,6 +119,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-minio
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     environment:
       MINIO_ROOT_USER: ${LADOCS_MINIO_ROOT_USER:-ladocs-admin}
       MINIO_ROOT_PASSWORD: ${LADOCS_MINIO_ROOT_PASSWORD:?LADOCS_MINIO_ROOT_PASSWORD must be set}
@@ -137,6 +157,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-backend
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     environment:
       DJANGO_SETTINGS_MODULE: impress.settings
       DJANGO_CONFIGURATION: Production
@@ -195,9 +220,14 @@ services:
         condition: service_healthy
     networks: [ladocs_private]
     healthcheck:
-      test: ["CMD", "python", "manage.py", "check"]
-      interval: 20s
-      timeout: 60s
+      # manage.py check loads the whole Django app (~10s CPU, pegging the
+      # container's cpu cap every interval on the 2-core node). A plain HTTP
+      # round-trip answers the same liveness question in ~0.2s. Redirects to
+      # the login page are expected without a session: any status below 500
+      # proves uvicorn and the Django middleware are serving.
+      test: ["CMD", "python", "-c", "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=10); c.request('GET','/api/v1.0/config/',headers={'Host':'ladocs-backend'}); r=c.getresponse(); r.read(); sys.exit(0 if r.status<500 else 1)"]
+      interval: 30s
+      timeout: 15s
       retries: 10
       start_period: 180s
   # The collaboration server. Its wrapper entrypoint signs its own RSA keypair
@@ -213,6 +243,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-yhub
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     environment:
       PORT: "3002"
       REDIS: redis://yhub-valkey:6379
@@ -253,6 +288,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-y-provider
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     environment:
       Y_PROVIDER_API_KEY: ${LADOCS_Y_PROVIDER_API_KEY:?LADOCS_Y_PROVIDER_API_KEY must be set}
       COLLABORATION_BACKEND_BASE_URL: ${LADOCS_SITE:?LADOCS_SITE must be set}
@@ -285,6 +325,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: ladocs
       com.aichorage.component: app-ladocs-frontend
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     environment:
       BACKEND_HOST: ladocs-backend
       FRONTEND_HOST: ladocs-frontend

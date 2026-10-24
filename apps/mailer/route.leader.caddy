@@ -6,7 +6,7 @@
     }
     fail_duration 30s
     health_uri /healthz/live
-    health_interval 15s
+    health_interval 30s
     health_timeout 5s
     health_fails 3
     health_passes 1

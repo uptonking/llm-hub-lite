@@ -12,6 +12,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: flowy
       com.aichorage.component: app-flowy
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       AP_CONTAINER_TYPE: WORKER_AND_APP

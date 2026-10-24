@@ -12,6 +12,11 @@ services:
       com.aichorage.platform: llm-hub-lite
       com.aichorage.application: mailer
       com.aichorage.component: app-mailer
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     ports:
       - "25:25/tcp"
