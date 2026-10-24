@@ -2291,8 +2291,38 @@ health_scope() {
 	done <<<"$([[ "$scope" == foundation ]] && projects_foundation || projects_apps)"
 	return "$failed"
 }
+sync_systemd_units() {
+	# Heal drifted platform units (e.g. a hand-edited timer interval) by
+	# re-installing the committed ops/systemd copies from the current control
+	# release. Only a rewritten file triggers a daemon-reload. Bootstrap is the
+	# only other installer, so a release tree is always the source of truth.
+	local source_dir="$CONTROL_ROOT/current/ops/systemd" unit name changed=0
+	[[ -d /run/systemd/system ]] || return 0
+	command -v systemctl >/dev/null 2>&1 || return 0
+	[[ -d "$source_dir" ]] || return 0
+	for unit in "$source_dir"/*; do
+		[[ -f "$unit" ]] || continue
+		name="$(basename "$unit")"
+		if [[ ! -f "/etc/systemd/system/$name" ]] || ! cmp -s "$unit" "/etc/systemd/system/$name"; then
+			install -o root -g root -m 644 "$unit" /etc/systemd/system/ || continue
+			changed=1
+			printf 'platformctl: reinstalled drifted systemd unit: %s\n' "$name"
+		fi
+	done
+	if ((changed == 1)); then
+		systemctl daemon-reload || printf 'platformctl: daemon-reload failed after unit sync\n' >&2
+		# Unit conditions are only evaluated when a unit starts, so a
+		# condition-guarded timer that began retrying before its guard file
+		# appeared keeps waking every minute until it is restarted. This is
+		# only ever the enrollment retry timer; restarting it re-evaluates
+		# its ConditionPathExists and stops it once enrollment is complete.
+		systemctl try-restart platform-beszel-enroll.timer 2>/dev/null || true
+	fi
+	return 0
+}
 health() {
 	local failed=0
+	sync_systemd_units
 	health_scope foundation || failed=1
 	health_scope consumers || failed=1
 	return "$failed"
@@ -3614,7 +3644,7 @@ if [[ "${PLATFORMCTL_LIBRARY:-0}" != 1 ]]; then
 	case "$op" in validate) [[ "${2:-}" == --check ]] && VALIDATE_CHECK=1 validate || validate ;; prune-app-endpoints) cleanup_stale_app_endpoint_env ;; status) [[ "${2:-}" == --json ]] && printf '{"node":"%s","role":"%s","state":"%s"}\n' "$(node_id)" "$(node_role)" "$(node_state)" || {
 		printf 'node=%s role=%s state=%s\n' "$(node_id)" "$(node_role)" "$(node_state)"
 		health
-	} ;; health) health ;; recover) recover "${2:-}" ;; retire-node) retire_node ;; ensure-network) ensure_network ;; start) [[ "${2:-all}" == all ]] && start_all_projects || start_project "$2" ;; sync) sync "${2:-all}" ;; stop) [[ "${2:-all}" == all ]] && stop_all_projects || stop_project "$2" ;; restart | recreate) if [[ "${2:-all}" == all ]]; then reconcile_all_projects "$op"; else [[ "$op" == restart ]] && restart_project "$2" || recreate_project "$2"; fi ;; singleton-switch)
+	} ;; health) health ;; sync-systemd-units) sync_systemd_units ;; recover) recover "${2:-}" ;; retire-node) retire_node ;; ensure-network) ensure_network ;; start) [[ "${2:-all}" == all ]] && start_all_projects || start_project "$2" ;; sync) sync "${2:-all}" ;; stop) [[ "${2:-all}" == all ]] && stop_all_projects || stop_project "$2" ;; restart | recreate) if [[ "${2:-all}" == all ]]; then reconcile_all_projects "$op"; else [[ "$op" == restart ]] && restart_project "$2" || recreate_project "$2"; fi ;; singleton-switch)
 		[[ -n "${2:-}" ]] || die 'usage: platformctl singleton-switch <app-id>'
 		singleton_switch "$2"
 		;;
@@ -3661,6 +3691,6 @@ if [[ "${PLATFORMCTL_LIBRARY:-0}" != 1 ]]; then
 	validate-observer) validate_observer_env ;;
 	observer-smoke) observer_smoke ;;
 	observer-collector-status) observer_collector_status ;;
-	diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|validate-observer|prune-app-endpoints|status|health|diagnose|recover|retire-node|ensure-network|start|sync|restart|recreate|stop|consumer-origin-smoke|consumer-publish|consumer-stop|direct-smoke|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|observer-collector-status|maintenance|reload|backup|restore}' ;; esac
+	diagnose) diagnose "${2:-all}" ;; maintenance) maintenance "${2:-status}" "${3:-}" ;; reload) reload_caddy ;; backup) exec "${BACKUP_SCRIPT:-/usr/local/bin/backup-platform}" "${2:-snapshot}" "${3:-manual}" ;; restore) exec "${RESTORE_SCRIPT:-/usr/local/bin/restore-platform}" "${2:-extract}" "${3:-latest}" "${4:-}" ;; *) die 'usage: platformctl {validate|validate-observer|prune-app-endpoints|status|health|sync-systemd-units|diagnose|recover|retire-node|ensure-network|start|sync|restart|recreate|stop|consumer-origin-smoke|consumer-publish|consumer-stop|direct-smoke|singleton-prepare|singleton-origin-smoke|singleton-switch|singleton-stop|smoke|observer-smoke|observer-collector-status|maintenance|reload|backup|restore}' ;; esac
 	if ((read_only_lock == 1)); then release_read_lock; fi
 fi
