@@ -95,6 +95,7 @@ SCANNER_MARKERS = (
     "tlm-audit", "censys", "internetmeasurement", "zgrab", "ivre-masscan",
     "metabase-cve", "nuclei", "sqlmap", "nikto", "expanse", "shodan",
     "masscan", "internet-measurement", "wpbot", "okhttp/3.", "palo alto networks",
+    "fasthttp", "nginx-ssl early hints",
 )
 SCANNER_LABEL = {
     "tlm-audit": "secret-harvesting scanner (.env/.git/aws probes)",
@@ -107,16 +108,21 @@ SCANNER_LABEL = {
     "wpbot": "WordPress crawler bot",
     "okhttp/3.": "legacy OkHttp scanner/probe",
     "palo alto networks": "Cortex-Xpanse reconnaissance scanner",
+    "fasthttp": "fasthttp probe/crawler",
+    "nginx-ssl early hints": "early hints scanner",
 }
 
 PROBE_PREFIXES = (
     "/.git", "/.env", "/.docker", "/.aws", "/.claude", "/.cursor", "/.kube",
     "/.s3cfg", "/.netrc", "/.npmrc", "/.pypirc", "/.boto", "/.amplifyrc",
+    "/.terraform", "/appxz", "/user-panel", "/wap", "/h5",
     "/wp-includes", "/wp-admin", "/wp-content",
 )
 PROBE_KEYWORDS = (
     "serviceaccountcredentials", "credentials.json", ".secret",
-    "wlwmanifest.xml", "xmlrpc.php",
+    "terraform.tf", "service-account", "firebase", "gcp-credentials",
+    "wlwmanifest.xml", "xmlrpc.php", "wp-config",
+    "/wordpress/", "livewire", "/api/init", "/api/common/country",
     "/api/user/ismustmobile", "/api/landing/check", "/h5/newt.html",
 )
 

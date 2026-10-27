@@ -24,6 +24,8 @@ this is not json and must be skipped
 {"duration":0.05,"status":200,"request":{"host":"status.aichorage.de","uri":"/api/beszel","headers":{"User-Agent":["Mozilla/5.0"],"CF-Connecting-IP":["198.51.100.7"]}}}
 {"duration":0.01,"status":404,"request":{"host":"outline.aichorage.de","uri":"/serviceAccountCredentials.json","headers":{"User-Agent":["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"],"CF-Connecting-IP":["198.51.100.99"]}}}
 {"duration":0.01,"status":404,"request":{"host":"ladocs.aichorage.de","uri":"/api/user/ismustmobile","headers":{"User-Agent":["okhttp/3.14.9"],"CF-Connecting-IP":["198.51.100.88"]}}}
+{"duration":0.01,"status":401,"request":{"host":"searx.aichorage.de","uri":"/terraform.tfvars","headers":{"User-Agent":["Mozilla/5.0"],"CF-Connecting-IP":["198.51.100.77"]}}}
+{"duration":0.01,"status":403,"request":{"host":"openclouds.aichorage.de","uri":"/appxz/index.html","headers":{"User-Agent":["fasthttp"],"CF-Connecting-IP":["198.51.100.66"]}}}
 EOF
 
 text="$(CADDY_LOG_FILE="$fixture" "$script" --since 24h)"
@@ -54,8 +56,10 @@ check_re() {
 check_re "collabora flagged high risk" "$text" "collabora\.aichorage\.de[[:space:]]+high"
 check "scanner UA recognised" "$text" "tlm-audit"
 check "path probe recognized for spoofed UA" "$text" "probe:serviceaccountcredentials"
+check "terraform probe recognized" "$text" "probe:terraform.tf"
 check "legacy okhttp scanner recognized" "$text" "okhttp/3."
-check "malformed line skipped" "$text" "records=8"
+check "fasthttp crawler recognized" "$text" "fasthttp"
+check "malformed line skipped" "$text" "records=10"
 
 # The internal dependency must be surfaced so a quiet public host is not retired.
 check "onoffice dependency warning" "$text" "internal dependents: filer"
