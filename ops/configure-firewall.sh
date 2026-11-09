@@ -423,6 +423,7 @@ if [[ "$NODE_ROLE" == leader ]]; then
 fi
 ufw allow 443/tcp comment 'HTTPS' >/dev/null
 ufw allow 443/udp comment 'HTTP/3' >/dev/null
+ufw allow 8443/tcp comment 'Direct verge2-vless' >/dev/null
 valid_ipv4 "$LEADER_PUBLIC_IP" || {
 	printf 'configure-firewall: valid runtime LEADER_PUBLIC_IP is required for followers\n' >&2
 	exit 1
